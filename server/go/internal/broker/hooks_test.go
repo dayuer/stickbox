@@ -144,3 +144,31 @@ func TestIdentityDroppedOnDisconnect(t *testing.T) {
 		t.Error("断开后身份没清掉")
 	}
 }
+
+// USB 事件计数随心跳上报（API 文档 3.6 的 usb 字段）。
+//
+// 多出来的字段不能让整条心跳解析失败——老固件不带它，新固件带，
+// 两种都得能收。
+func TestRouteStatusAcceptsUSBField(t *testing.T) {
+	r := &fakeRouter{}
+	payload := []byte(`{"dev":"aaa","job":"","state":"ready","bytes":0,` +
+		`"serial":"PA","usb":{"att":3,"det":2,"err":"release=ESP_ERR_INVALID_STATE close=ESP_ERR_INVALID_STATE"}}`)
+	routeStatus(r, "printer/aaa/status", payload)
+
+	if len(r.got) != 1 {
+		t.Fatalf("带 usb 字段的心跳没被投递，投了 %d 条", len(r.got))
+	}
+	if r.got[0].msg.Serial != "PA" {
+		t.Errorf("serial = %q，usb 字段不该影响其它字段的解析", r.got[0].msg.Serial)
+	}
+}
+
+// 老固件不带 usb 字段，照样要能收。
+func TestRouteStatusWithoutUSBField(t *testing.T) {
+	r := &fakeRouter{}
+	routeStatus(r, "printer/aaa/status",
+		[]byte(`{"dev":"aaa","job":"","state":"ready","bytes":0,"serial":"PA"}`))
+	if len(r.got) != 1 {
+		t.Fatal("不带 usb 字段的心跳应当照常投递")
+	}
+}

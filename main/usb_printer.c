@@ -50,6 +50,24 @@ static uint8_t                  s_itf, s_ep, s_ep_in;
 static uint8_t                  s_itf_proto;   /* 1=单向 2=双向 3=1284.4 */
 static uint16_t                 s_mps, s_mps_in;
 static volatile bool            s_connected;
+/* IN 端点读取的暂停闸。拔出清理和作业传输都要先把它停下来。 */
+static volatile bool            s_in_paused, s_in_idle;
+
+/* ── USB 事件计数，随心跳上报（API 文档 3.6 的 usb 字段）──
+ *
+ * 加它是因为「拔掉能认出来、插回去就一直是未连接、只有重启能恢复」这个
+ * 故障在设备上没有任何可见输出：LCD 只会停在「已拔出」，而串口在 host
+ * 模式下读不到。计数和最近一次错误码走心跳出去，不插调试线也能看见。 */
+static volatile uint32_t s_usb_att, s_usb_det;   /* 枚举成功 / 拔出 次数 */
+static char              s_usb_err[48];          /* 最近一次清理失败的原因 */
+
+void usb_printer_events(uint32_t *att, uint32_t *det, const char **err)
+{
+    if (att) *att = s_usb_att;
+    if (det) *det = s_usb_det;
+    if (err) *err = s_usb_err;
+}
+
 static volatile bool            s_asleep;   /* 由 USTATUS 推送更新 */
 static usb_prn_status_t         s_st;       /* 打印机自报状态，见 .h */
 static int      s_base_code;                /* 同一包里的基础状态，非 Printing */
@@ -286,14 +304,54 @@ static void enum_task(void *a)
     while (xQueueReceive(s_evt_q, &addr, portMAX_DELAY) == pdTRUE) {
         if (addr == 0) {                       /* 拔出 */
             s_connected = false;
+            s_usb_det++;
             gpio_set_level(PIN_LED_GREEN, 0);
-            if (s_dev) { usb_host_interface_release(s_client, s_dev, s_itf);
-                         usb_host_device_close(s_client, s_dev); s_dev = NULL; }
+
+            /* 先把 IN 读停下来再释放接口。
+             *
+             * 这一步以前没有，是「插回去再也认不出来」的根因：status_reader_task
+             * 可能正有一笔传输在飞，此时 usb_host_interface_release 返回
+             * ESP_ERR_INVALID_STATE，接着 device_close 也失败——而两个返回值
+             * 都被丢掉了，代码照样把 s_dev 置空。句柄一丢，那台设备在 host
+             * 栈里永远不会被释放，端口也就再不会产生 NEW_DEV 事件。
+             * 表现就是拔掉认得出、插回去一直未连接，只有重启能恢复。 */
+            s_in_paused = true;
+            for (int i = 0; i < 100 && !s_in_idle; i++) vTaskDelay(pdMS_TO_TICKS(20));
+            if (!s_in_idle)
+                ESP_LOGW(TAG, "IN 读没能在 2 秒内停下，仍继续释放");
+
+            if (s_dev) {
+                esp_err_t er = usb_host_interface_release(s_client, s_dev, s_itf);
+                esp_err_t ec = usb_host_device_close(s_client, s_dev);
+                if (er != ESP_OK || ec != ESP_OK) {
+                    /* 关不掉就别把句柄丢了——留着下次还能再试，
+                     * 也让这条错误随心跳报出去，不用插调试线就能看见。 */
+                    snprintf(s_usb_err, sizeof s_usb_err, "release=%s close=%s",
+                             esp_err_to_name(er), esp_err_to_name(ec));
+                    ESP_LOGE(TAG, "拔出清理失败：%s——设备句柄未释放，"
+                                  "插回去可能认不出来", s_usb_err);
+                } else {
+                    s_usb_err[0] = 0;
+                    s_dev = NULL;
+                }
+            }
+            s_in_paused = false;
+
             s_serial[0] = 0;      /* 规则 10：拔掉后 serial 必须立刻变空串 */
             oneshot_clear();
-            ESP_LOGW(TAG, "打印机已拔出");
+            ESP_LOGW(TAG, "打印机已拔出（枚举 %u 次，拔出 %u 次）",
+                     (unsigned)s_usb_att, (unsigned)s_usb_det);
             lcd_ui_prn("已拔出");
             continue;
+        }
+
+        /* 上一次拔出没关干净，先补一刀再谈新设备。 */
+        if (s_dev) {
+            esp_err_t er = usb_host_interface_release(s_client, s_dev, s_itf);
+            esp_err_t ec = usb_host_device_close(s_client, s_dev);
+            ESP_LOGW(TAG, "补做上次的清理：release=%s close=%s",
+                     esp_err_to_name(er), esp_err_to_name(ec));
+            if (ec == ESP_OK) { s_dev = NULL; s_usb_err[0] = 0; }
         }
         if (s_connected) continue;
         usb_device_handle_t dev;
@@ -309,6 +367,7 @@ static void enum_task(void *a)
         s_dev = dev; s_itf = itf; s_ep = ep; s_mps = mps; s_alt = alt;
         s_ep_in = ep_in; s_mps_in = mps_in;
         s_connected = true;
+        s_usb_att++;
         gpio_set_level(PIN_LED_GREEN, 1);
         const usb_device_desc_t *dd;
         usb_host_get_device_descriptor(dev, &dd);
@@ -390,7 +449,7 @@ static void enum_task(void *a)
 /* 打印机是双向接口(7/1/2)：不排空 bulk IN，它的回传缓冲满了就整台停摆。
  * 顺带把回传内容打出来——打印机的报错就写在里面。 */
 static SemaphoreHandle_t s_in_done;
-static volatile bool s_in_paused, s_in_idle;
+
 static volatile usb_transfer_status_t s_in_status;
 static void in_cb(usb_transfer_t *t){ s_in_status = t->status; xSemaphoreGive(s_in_done); }
 

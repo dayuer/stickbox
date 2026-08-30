@@ -257,6 +257,7 @@ App 登录 → POST /api/auth/sms → POST /api/auth/verify → 拿到 session t
 | `serial` | string | **是（插着打印机时）** | 当前插着的打印机序列号。没插打印机时空串 |
 | `prn` | object | 否 | 打印机面板状态，原样转给 App |
 | `probe` | string | 否 | 探针回包（响应 `cmd` 时才带） |
+| `usb` | object | 否 | USB 事件计数，见下 |
 | `skipped_ops` | array | 否 | 本固件不认识、已跳过的 profile 原语名。服务端据此知道该机型的档案用了新原语而这台设备还没跟上 |
 | `profile_rev` | int | 否 | 当前生效档案的 `rev`。对不上说明下发没到位 |
 
@@ -279,6 +280,29 @@ App 登录 → POST /api/auth/sms → POST /api/auth/verify → 拿到 session t
 `done` / `failed` 时 `job` 字段**必须**填对应作业 ID，否则服务端不知道
 是哪一件结束了，会一直等到 180 秒超时才重传。`failed` 时可带 `err` 字段
 （字符串，≤200 字节）说明原因，会存进作业记录。
+
+#### `usb` —— USB 事件计数
+
+```json
+"usb": {"att": 3, "det": 2, "err": "release=ESP_ERR_INVALID_STATE close=ESP_ERR_INVALID_STATE"}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `att` | 枚举成功的累计次数 |
+| `det` | 拔出的累计次数 |
+| `err` | 最近一次拔出清理失败的原因。清理正常时**不出现这个字段** |
+
+**为什么要报这个。** 有一类故障在设备上完全没有可见输出：拔掉打印机能认出来，
+插回去却一直是「未连接」，只有重启才恢复。LCD 只会停在「已拔出」，而 USB 切进
+host 模式之后串口读不到日志——现场没有任何线索。
+
+根因是拔出时 `usb_host_interface_release` / `usb_host_device_close` 失败
+（IN 端点上还有传输在飞），句柄没释放，那台设备在 host 栈里永远不会被回收，
+端口也就再不会产生枚举事件。这两个返回值一旦被丢掉，故障就是静默的。
+
+服务端拿到 `err` 非空就该立刻告警。`det > att` 也是信号：拔出次数多于枚举成功
+次数，说明有一次插回去没认出来。
 
 ### 3.7 心跳节奏（这条是硬要求）
 

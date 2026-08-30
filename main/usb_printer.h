@@ -47,6 +47,13 @@ esp_err_t usb_printer_describe(char *out, size_t cap);
  * 心跳必须带它（API 文档 3.6 / 规则 10）。 */
 const char *usb_printer_serial(void);
 
+/* USB 事件计数与最近一次清理失败的原因，随心跳上报。
+ *
+ * 「拔掉能认出来、插回去一直未连接」那个故障在设备上没有任何可见输出：
+ * LCD 停在「已拔出」，而 host 模式下串口读不到。这几个数走心跳出去，
+ * 不插调试线也能看见。任一参数可传 NULL。 */
+void usb_printer_events(uint32_t *att, uint32_t *det, const char **err);
+
 /* 服务端下发新档案后重算生效值（打印机已枚举时立即生效，不必等插拔）。 */
 void usb_printer_reselect_profile(void);
 

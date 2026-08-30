@@ -153,7 +153,9 @@ static void report_err(const char *job, const char *state, uint32_t bytes,
 {
     usb_prn_status_t st;
     usb_printer_status(&st);
-    char p[400];
+    /* 480：基础字段约 260 + err 最多 208 + usb 约 100。留一点余量。
+       snprintf 会截断而不是溢出，但截断出来的是半截 JSON，服务端解析不了。 */
+    char p[560];
     int n = snprintf(p, sizeof p,
         "{\"dev\":\"%s\",\"job\":\"%s\",\"state\":\"%s\",\"bytes\":%u,\"heap\":%u,"
         /* serial 是换机场景的关键：服务端靠它决定派哪些作业。
@@ -171,6 +173,26 @@ static void report_err(const char *job, const char *state, uint32_t bytes,
         char esc[208];
         jesc(esc, sizeof esc, err);
         n += snprintf(p + n, sizeof p - n, ",\"err\":\"%s\"", esc);
+    }
+
+    /* USB 事件计数（API 文档 3.6 的 usb 字段）。
+     *
+     * att/det 是枚举成功与拔出的累计次数，err 是最近一次拔出清理失败的原因。
+     * 加它是因为「拔掉能认出来、插回去一直未连接」这类故障在设备上没有任何
+     * 可见输出——LCD 停在「已拔出」，而 host 模式下串口读不到。有了这三个数，
+     * 服务端日志里就能看出是「反复插拔」还是「一次拔出之后再没枚举成功」。 */
+    {
+        uint32_t att = 0, det = 0;
+        const char *uerr = NULL;
+        usb_printer_events(&att, &det, &uerr);
+        n += snprintf(p + n, sizeof p - n, ",\"usb\":{\"att\":%u,\"det\":%u",
+                      (unsigned)att, (unsigned)det);
+        if (uerr && *uerr) {
+            char esc[96];
+            jesc(esc, sizeof esc, uerr);
+            n += snprintf(p + n, sizeof p - n, ",\"err\":\"%s\"", esc);
+        }
+        n += snprintf(p + n, sizeof p - n, "}");
     }
     /* 当前生效档案的版本号。服务端拿它核对下发到没到位——对不上就说明
      * 那份 retain 消息没送达，或者被 serial 校验挡掉了。 */
