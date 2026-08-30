@@ -111,7 +111,10 @@ func (a *API) handleTestStart(w http.ResponseWriter, r *http.Request, id auth.Id
 
 	serial := a.attachedSerial(dev)
 	if serial == "" {
-		fail(w, 404, "not found", "设备上没插打印机，测不了")
+		// 409 而不是 404：设备和测试都存在，只是当前状态做不了这件事。
+		// 404 会被 App 翻译成「找不到对应的记录」，用户就去怀疑测试本身，
+		// 而不是去把 USB 线插上。
+		fail(w, 409, "no printer", "设备上没插打印机，测不了。插上再来。")
 		return
 	}
 
