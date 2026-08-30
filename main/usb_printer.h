@@ -47,12 +47,26 @@ esp_err_t usb_printer_describe(char *out, size_t cap);
  * 心跳必须带它（API 文档 3.6 / 规则 10）。 */
 const char *usb_printer_serial(void);
 
-/* USB 事件计数与最近一次清理失败的原因，随心跳上报。
+/* USB 事件计数，随心跳上报（API 文档 3.6 的 usb 字段）。
  *
  * 「拔掉能认出来、插回去一直未连接」那个故障在设备上没有任何可见输出：
  * LCD 停在「已拔出」，而 host 模式下串口读不到。这几个数走心跳出去，
- * 不插调试线也能看见。任一参数可传 NULL。 */
-void usb_printer_events(uint32_t *att, uint32_t *det, const char **err);
+ * 不插调试线也能看见。
+ *
+ * att 停着不动时，evt_new 能分清是哪一种：
+ *   evt_new 也不动 → USB 栈根本没再报新设备（端口没回收，或没供电）
+ *   evt_new 在涨   → 事件来了但 enum_task 处理失败（open/claim 那几步）
+ *   evt_drop 非 0  → 事件队列满，事件被丢了 */
+typedef struct {
+    uint32_t att;       /* 枚举成功次数 */
+    uint32_t det;       /* 拔出次数 */
+    uint32_t evt_new;   /* 收到 NEW_DEV 事件次数 */
+    uint32_t evt_gone;  /* 收到 DEV_GONE 事件次数 */
+    uint32_t evt_drop;  /* 因队列满丢弃的事件次数 */
+    const char *err;    /* 最近一次拔出清理失败的原因，正常时是空串 */
+} usb_evt_counts_t;
+
+void usb_printer_events(usb_evt_counts_t *out);
 
 /* 服务端下发新档案后重算生效值（打印机已枚举时立即生效，不必等插拔）。 */
 void usb_printer_reselect_profile(void);

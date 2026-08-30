@@ -137,11 +137,7 @@ type statusPayload struct {
 	Prn    json.RawMessage `json:"prn"`
 	// USB 事件计数（API 文档 3.6 的 usb 字段）。设备侧那个「拔掉能认出来、
 	// 插回去一直未连接」的故障在设备上没有任何可见输出，只能靠它诊断。
-	USB *struct {
-		Att uint32 `json:"att"`
-		Det uint32 `json:"det"`
-		Err string `json:"err"`
-	} `json:"usb"`
+	USB json.RawMessage `json:"usb"`
 }
 
 // routeStatus 把一条 status 消息翻译成 actor 消息。
@@ -161,19 +157,29 @@ func routeStatus(r Router, topic string, payload []byte) {
 		return
 	}
 
-	// USB 清理失败要立刻叫出来：句柄没释放的话，打印机插回去也不会被枚举，
-	// 而设备上唯一的表现是 LCD 停在「已拔出」。这条日志是唯一的线索。
-	if p.USB != nil && p.USB.Err != "" {
-		slog.Error("设备 USB 清理失败——插回打印机可能认不出来",
-			"dev", dev, "err", p.USB.Err, "att", p.USB.Att, "det", p.USB.Det)
-	} else if p.USB != nil && p.USB.Det > 0 && p.USB.Att < p.USB.Det {
-		// 拔出次数多于枚举成功次数：有一次插回去没认出来。
-		slog.Warn("设备有一次插回后未枚举成功",
-			"dev", dev, "att", p.USB.Att, "det", p.USB.Det)
+	// USB 计数原样带给 actor，/api/status 会把它摊出来。
+	//
+	// 只在异常时打日志是不够的：那类故障在设备上没有任何可见输出，
+	// 排查时需要的是「现在的计数是多少」，而不是「出事那一刻打了条日志」。
+	if len(p.USB) > 0 {
+		var u struct {
+			Att uint32 `json:"att"`
+			Det uint32 `json:"det"`
+			Err string `json:"err"`
+		}
+		if json.Unmarshal(p.USB, &u) == nil {
+			if u.Err != "" {
+				slog.Error("设备 USB 清理失败——插回打印机可能认不出来",
+					"dev", dev, "err", u.Err, "att", u.Att, "det", u.Det)
+			} else if u.Det > 0 && u.Att < u.Det {
+				slog.Warn("设备有一次插回后未枚举成功",
+					"dev", dev, "att", u.Att, "det", u.Det)
+			}
+		}
 	}
 
 	m := device.Msg{Serial: p.Serial, Printer: p.Prn, JobID: p.Job,
-		Bytes: p.Bytes, Err: p.Err}
+		Bytes: p.Bytes, Err: p.Err, USB: p.USB}
 	switch p.State {
 	case "done":
 		m.Kind = device.KindJobDone

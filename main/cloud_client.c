@@ -182,14 +182,16 @@ static void report_err(const char *job, const char *state, uint32_t bytes,
      * 可见输出——LCD 停在「已拔出」，而 host 模式下串口读不到。有了这三个数，
      * 服务端日志里就能看出是「反复插拔」还是「一次拔出之后再没枚举成功」。 */
     {
-        uint32_t att = 0, det = 0;
-        const char *uerr = NULL;
-        usb_printer_events(&att, &det, &uerr);
-        n += snprintf(p + n, sizeof p - n, ",\"usb\":{\"att\":%u,\"det\":%u",
-                      (unsigned)att, (unsigned)det);
-        if (uerr && *uerr) {
+        usb_evt_counts_t u = { 0 };
+        usb_printer_events(&u);
+        n += snprintf(p + n, sizeof p - n,
+                      ",\"usb\":{\"att\":%u,\"det\":%u,\"evt_new\":%u,"
+                      "\"evt_gone\":%u,\"evt_drop\":%u",
+                      (unsigned)u.att, (unsigned)u.det, (unsigned)u.evt_new,
+                      (unsigned)u.evt_gone, (unsigned)u.evt_drop);
+        if (u.err && *u.err) {
             char esc[96];
-            jesc(esc, sizeof esc, uerr);
+            jesc(esc, sizeof esc, u.err);
             n += snprintf(p + n, sizeof p - n, ",\"err\":\"%s\"", esc);
         }
         n += snprintf(p + n, sizeof p - n, "}");

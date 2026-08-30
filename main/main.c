@@ -82,7 +82,7 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *d = data;
         ESP_LOGW(TAG, "Wi-Fi 断开 reason=%d rssi=%d，重连", d->reason, d->rssi);
-        lcd_ui_wifi("重连中");
+        lcd_ui_wifi("Wi-Fi 重连中");
         /* 从未连上过且连错 12 次：多半是换了路由器或改了密码，回配网模式 */
         static int fails;
         if (!s_ip[0] && ++fails >= 12) {
@@ -95,7 +95,8 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
         ip_event_got_ip_t *e = data;
         snprintf(s_ip, sizeof s_ip, IPSTR, IP2STR(&e->ip_info.ip));
         ESP_LOGI(TAG, "拿到 IP: %s", s_ip);
-        lcd_ui_wifi(s_ip);
+        lcd_ui_ip(s_ip);                    /* 第 3 行 */
+        lcd_ui_wifi("Wi-Fi 已连，等云端");   /* 第 2 行只说云端，别被 IP 占掉 */
         xEventGroupSetBits(s_evt, EVT_GOT_IP);
     }
 }

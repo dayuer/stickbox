@@ -59,13 +59,20 @@ static volatile bool            s_in_paused, s_in_idle;
  * 故障在设备上没有任何可见输出：LCD 只会停在「已拔出」，而串口在 host
  * 模式下读不到。计数和最近一次错误码走心跳出去，不插调试线也能看见。 */
 static volatile uint32_t s_usb_att, s_usb_det;   /* 枚举成功 / 拔出 次数 */
+/* 事件回调收到的次数，以及因为队列满被丢掉的次数。
+ * att 停着不动时，靠 evt 能分清是「事件没来」还是「来了但没处理成」。 */
+static volatile uint32_t s_usb_evt_new, s_usb_evt_gone, s_usb_evt_drop;
 static char              s_usb_err[48];          /* 最近一次清理失败的原因 */
 
-void usb_printer_events(uint32_t *att, uint32_t *det, const char **err)
+void usb_printer_events(usb_evt_counts_t *out)
 {
-    if (att) *att = s_usb_att;
-    if (det) *det = s_usb_det;
-    if (err) *err = s_usb_err;
+    if (!out) return;
+    out->att  = s_usb_att;
+    out->det  = s_usb_det;
+    out->evt_new  = s_usb_evt_new;
+    out->evt_gone = s_usb_evt_gone;
+    out->evt_drop = s_usb_evt_drop;
+    out->err = s_usb_err;
 }
 
 static volatile bool            s_asleep;   /* 由 USTATUS 推送更新 */
@@ -258,8 +265,19 @@ static void xfer_cb(usb_transfer_t *t){ s_status = t->status; xSemaphoreGive(s_x
 static void client_cb(const usb_host_client_event_msg_t *m, void *arg)
 {
     uint8_t v;
-    if (m->event == USB_HOST_CLIENT_EVENT_NEW_DEV) { v = m->new_dev.address; xQueueSend(s_evt_q, &v, 0); }
-    else if (m->event == USB_HOST_CLIENT_EVENT_DEV_GONE) { v = 0; xQueueSend(s_evt_q, &v, 0); }
+    if (m->event == USB_HOST_CLIENT_EVENT_NEW_DEV) {
+        v = m->new_dev.address;
+        s_usb_evt_new++;
+    } else if (m->event == USB_HOST_CLIENT_EVENT_DEV_GONE) {
+        v = 0;
+        s_usb_evt_gone++;
+    } else {
+        return;
+    }
+    /* 返回值以前被丢掉：队列满就静默丢事件，而丢掉的如果是 NEW_DEV，
+     * 打印机就永远认不出来了——现场没有任何线索。这里是中断上下文，
+     * 不能阻塞，所以只能记一笔计数报出去。 */
+    if (xQueueSend(s_evt_q, &v, 0) != pdTRUE) s_usb_evt_drop++;
 }
 
 static bool find_endpoints(const usb_config_desc_t *cfg, uint8_t *itf, uint8_t *alt,
@@ -341,7 +359,7 @@ static void enum_task(void *a)
             oneshot_clear();
             ESP_LOGW(TAG, "打印机已拔出（枚举 %u 次，拔出 %u 次）",
                      (unsigned)s_usb_att, (unsigned)s_usb_det);
-            lcd_ui_prn("已拔出");
+            lcd_ui_prn("已拔出");   /* 名字那一行留着，用户还知道刚才接的是什么 */
             continue;
         }
 
@@ -406,7 +424,10 @@ static void enum_task(void *a)
             s_ep_in = 0;
         }
 
-        lcd_ui_prn(s_model[0] ? s_model : "打印机已连接");
+        /* 第 4 行是名字、第 5 行是状态——分开之后，型号在拔插时不会被
+           「已拔出」冲掉，用户始终看得见这台桥上接的是什么。 */
+        lcd_ui_prn_name(s_model[0] ? s_model : "未知型号");
+        lcd_ui_prn("已连接");
 
         /* 开启异步状态上报：之后打印机会主动推 Ready/Power Save/Printing，
          * 这是唯一可靠的休眠判据。

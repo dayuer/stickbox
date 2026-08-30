@@ -30,14 +30,23 @@ LV_FONT_DECLARE(font_cn_16);
 #define BRIGHT_IDLE       12     /* 空闲时亮度 %。设 0 就是全黑息屏 */
 
 static lv_obj_t *s_root;         /* 所有内容的容器，像素偏移就是挪它 */
-static lv_obj_t *s_lbl_title, *s_lbl_wifi, *s_lbl_prn, *s_lbl_job, *s_lbl_log;
+/* 六行版面（自上而下）：
+ *   1 StickBox          —— 产品名，固定不动
+ *   2 云端连接状况
+ *   3 本地 IP
+ *   4 打印机名字
+ *   5 打印机连接状态
+ *   6 心跳
+ * 作业与日志接在下面。心跳从标题行挪下来了：标题固定不变，一眼能认出这是哪台。 */
+static lv_obj_t *s_lbl_title, *s_lbl_cloud, *s_lbl_ip, *s_lbl_prn_name,
+                *s_lbl_prn, *s_lbl_beat, *s_lbl_job, *s_lbl_log;
 static char s_log_lines[4][48];
 
 /* 屏幕更新一律走队列，由专门的任务渲染。
  * 原因：LVGL 渲染中文很吃栈，之前直接在网络任务（当时是 ipp_conn，4.6K 栈）里调，
  * 发完 UEL 那一刻栈溢出把整机干重启了——coredump 实锤。 */
 typedef struct { uint8_t kind; char txt[44]; } ui_msg_t;
-enum { UI_WIFI, UI_PRN, UI_JOB, UI_LOG, UI_BEAT };
+enum { UI_WIFI, UI_PRN, UI_JOB, UI_LOG, UI_BEAT, UI_IP, UI_PRN_NAME };
 static QueueHandle_t s_q;
 
 static void set_text(lv_obj_t *lbl, const char *prefix, const char *txt);
@@ -86,18 +95,18 @@ static void refresh_title(void)
 {
     char buf[48];
     if (!s_beat_us) {
-        snprintf(buf, sizeof buf, "云打印桥  心跳 --");
+        snprintf(buf, sizeof buf, "心跳: --");
     } else {
         int age = (int)((esp_timer_get_time() - s_beat_us) / 1000000);
         if (age > BEAT_STALE_S)
-            snprintf(buf, sizeof buf, "云打印桥  心跳停 %ds", age);
+            snprintf(buf, sizeof buf, "心跳: 停了 %ds", age);
         else
-            snprintf(buf, sizeof buf, "云打印桥  心跳 %lu  %ds",
+            snprintf(buf, sizeof buf, "心跳: %lu  %ds前",
                      (unsigned long)s_beat_n, age);
     }
     bsp_display_lock(0);
-    lv_label_set_text(s_lbl_title, buf);
-    lv_obj_set_style_text_color(s_lbl_title,
+    lv_label_set_text(s_lbl_beat, buf);
+    lv_obj_set_style_text_color(s_lbl_beat,
         (s_beat_us && (esp_timer_get_time() - s_beat_us) / 1000000 > BEAT_STALE_S)
             ? lv_color_hex(0xff6060)          /* 心跳停了变红 */
             : lv_color_hex(0x00d0ff), 0);
@@ -124,8 +133,10 @@ static void ui_task(void *a)
                 set_brightness(true);         /* 有新状态就点亮 */
             }
             switch (m.kind) {
-            case UI_WIFI: set_text(s_lbl_wifi, "云端: ",   m.txt); break;
-            case UI_PRN:  set_text(s_lbl_prn,  "打印机: ", m.txt); break;
+            case UI_WIFI:     set_text(s_lbl_cloud,    "云端: ",  m.txt); break;
+            case UI_IP:       set_text(s_lbl_ip,       "IP: ",    m.txt); break;
+            case UI_PRN_NAME: set_text(s_lbl_prn_name, "",        m.txt); break;
+            case UI_PRN:      set_text(s_lbl_prn,      "状态: ",  m.txt); break;
             case UI_JOB:  set_text(s_lbl_job,  "作业: ",   m.txt); break;
             case UI_LOG:  do_log(m.txt); break;
             case UI_BEAT: s_beat_n++; s_beat_us = esp_timer_get_time();
@@ -170,19 +181,26 @@ void lcd_ui_init(void)
     lv_obj_clear_flag(s_root, LV_OBJ_FLAG_SCROLLABLE);
 
     const lv_font_t *cjk = &font_cn_16;
-    mk_label(&s_lbl_title, 2,  lv_color_hex(0x00d0ff), cjk);
-    mk_label(&s_lbl_wifi,  26, lv_color_hex(0xffffff), cjk);
-    mk_label(&s_lbl_prn,   48, lv_color_hex(0xffffff), cjk);
-    mk_label(&s_lbl_job,   70, lv_color_hex(0xa0ffa0), cjk);
-    mk_label(&s_lbl_log,   96, lv_color_hex(0x808080), cjk);
+    /* 行距 22px。六行到 y=112，作业和日志接在后面。 */
+    mk_label(&s_lbl_title,    2,   lv_color_hex(0xffffff), cjk);
+    mk_label(&s_lbl_cloud,    24,  lv_color_hex(0xffffff), cjk);
+    mk_label(&s_lbl_ip,       46,  lv_color_hex(0xa0a0a0), cjk);
+    mk_label(&s_lbl_prn_name, 68,  lv_color_hex(0xffffff), cjk);
+    mk_label(&s_lbl_prn,      90,  lv_color_hex(0xffffff), cjk);
+    mk_label(&s_lbl_beat,     112, lv_color_hex(0x00d0ff), cjk);
+    mk_label(&s_lbl_job,      136, lv_color_hex(0xa0ffa0), cjk);
+    mk_label(&s_lbl_log,      160, lv_color_hex(0x808080), cjk);
     /* 日志区是多行，用 WRAP 不用跑马灯——横向滚动会让多行日志没法读 */
     lv_label_set_long_mode(s_lbl_log, LV_LABEL_LONG_MODE_WRAP);
-    lv_obj_set_height(s_lbl_log, 112);
-    lv_label_set_text(s_lbl_title, "云打印桥  心跳 --");
-    lv_label_set_text(s_lbl_wifi,  "云端: 连接中");
-    lv_label_set_text(s_lbl_prn,   "打印机: 等待");
-    lv_label_set_text(s_lbl_job,   "作业: 无");
-    lv_label_set_text(s_lbl_log,   "");
+    lv_obj_set_height(s_lbl_log, 48);
+    lv_label_set_text(s_lbl_title,    "StickBox");
+    lv_label_set_text(s_lbl_cloud,    "云端: 连接中");
+    lv_label_set_text(s_lbl_ip,       "IP: --");
+    lv_label_set_text(s_lbl_prn_name, "打印机: --");
+    lv_label_set_text(s_lbl_prn,      "状态: 等待");
+    lv_label_set_text(s_lbl_beat,     "心跳: --");
+    lv_label_set_text(s_lbl_job,      "作业: 无");
+    lv_label_set_text(s_lbl_log,      "");
     bsp_display_unlock();
     s_ready = true;
     s_last_activity_us = esp_timer_get_time();
@@ -208,7 +226,9 @@ static void post(uint8_t kind, const char *t)
     xQueueSend(s_q, &m, 0);          /* 满了就丢，绝不阻塞调用方 */
 }
 
-void lcd_ui_wifi(const char *t) { post(UI_WIFI, t); }   /* 现在显示云端连接状态 */
+void lcd_ui_wifi(const char *t) { post(UI_WIFI, t); }   /* 第 2 行：云端连接状态 */
+void lcd_ui_ip(const char *t)   { post(UI_IP, t); }     /* 第 3 行：本地 IP */
+void lcd_ui_prn_name(const char *t) { post(UI_PRN_NAME, t); }  /* 第 4 行：打印机名字 */
 void lcd_ui_prn(const char *t)  { post(UI_PRN,  t); }
 void lcd_ui_job(const char *t)  { post(UI_JOB,  t); }
 

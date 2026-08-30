@@ -50,6 +50,7 @@ type Actor struct {
 	lastSeen time.Time
 	serial   string // 当前插着的打印机；空串 = 没插
 	printer  []byte
+	usb      []byte // 最近一次心跳里的 usb 字段原文
 
 	box    chan Msg
 	ticker <-chan time.Time
@@ -152,6 +153,9 @@ func (a *Actor) handle(m Msg) {
 		if m.Printer != nil {
 			a.printer = m.Printer
 		}
+		if m.USB != nil {
+			a.usb = m.USB
+		}
 		a.setSerial(m.Serial)
 
 	case KindDownloading:
@@ -186,7 +190,7 @@ func (a *Actor) handle(m Msg) {
 		// 只是叫醒，状态更新在下面统一做
 	}
 	a.dispatchOne()
-	a.snap.set(a.serial, a.printer)
+	a.snap.set(a.serial, a.printer, a.usb)
 }
 
 // setSerial 处理换打印机。

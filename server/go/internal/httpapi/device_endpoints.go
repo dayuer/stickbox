@@ -178,6 +178,11 @@ func (a *API) handleStatus(w http.ResponseWriter, r *http.Request, id auth.Ident
 		} else {
 			d["prn"] = nil
 		}
+		// USB 事件计数（文档 3.6）。摊在这里是为了随时能查——
+		// 「插回去认不出来」那类故障只在设备上表现为一片安静。
+		if u := act.USB(); len(u) > 0 {
+			d["usb"] = json.RawMessage(u)
+		}
 		out["device"] = d
 	} else {
 		out["device"] = map[string]any{"dev": dev, "online": false, "prn": nil}
