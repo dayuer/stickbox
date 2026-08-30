@@ -64,10 +64,15 @@ CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
 # DYNAMIC_BUFFER 让 TLS 在空闲时把收发缓冲还回去（16KB+4KB 一条）。
 # MQTT 那条连接 99% 的时间在空闲，正好是取件时最该让出来的那部分。
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
-CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
 
-# ⚠ 但 CA 证书不能跟着一起释放。
-# 它默认跟随 DYNAMIC_FREE_CONFIG_DATA 打开，而释放之后 ssl 对象再次握手
-# 必须重新注册 CA——MQTT 断线重连正是「同一个对象再次握手」。真出问题
-# 是设备永久连不上云端，比省这 1~2KB 严重得多。
-CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT=n
+# ⚠ DYNAMIC_FREE_CONFIG_DATA 绝对不能开——真机上试过，代价是设备彻底掉线。
+#
+# 它在握手结束后释放 mbedtls 配置里的私钥与 DHM 数据。而 esp-mqtt 从头到尾
+# 复用同一份配置：**第一次握手成功，之后每一次重连都失败**。现象是服务端
+# 8883 上一片 `read connection: EOF`，设备按 2s→60s 退避一直撞，永远连不回来。
+#
+# 这个形态特别容易误判成「固件没起来」——它其实起来了，还发了一次 ident、
+# 拿到了怪癖档案，只是再也回不来。判别方法：看服务端日志里第一次连接之后
+# 有没有成功的心跳。
+#
+# CA 证书那个开关（DYNAMIC_FREE_CA_CERT）是它的下游依赖，它关着就无从谈起。

@@ -694,13 +694,43 @@ void cloud_profile_restore(void)
     free(buf); free(sc);
 }
 
+/* 密钥被拒之后隔多久再试一次。
+ *
+ * 不能永远不试：密钥问题多半在服务端修好（重新绑定、重新签发、解除吊销），
+ * 而设备这头不会知道。原来的做法是彻底停掉，结果是「服务端已经好了，设备
+ * 还得有人去拔一次电」——用户根本不知道要拔电。
+ *
+ * 也不能按常规退避去试：错的密钥每次都要服务端跑一遍 argon2（几十毫秒、
+ * 64MB），全网设备一起撞会把服务端压垮（API 文档第 6 节规则 5）。
+ *
+ * 半小时一次是这两头的折中：服务端一天最多被一台坏设备敲 48 次，可以忽略；
+ * 用户那头最坏等半小时自愈，比「永远不好」强得多。 */
+#define AUTH_RETRY_US (30ULL * 60 * 1000 * 1000)
+
+static esp_timer_handle_t s_auth_retry;
+
 /* 认证被拒后真正把客户端停掉。必须在 MQTT 任务之外调用，见调用处注释。 */
 static void auth_stop_cb(void *arg)
 {
     if (s_mqtt) {
         esp_mqtt_client_stop(s_mqtt);
-        ESP_LOGW(TAG, "MQTT 客户端已停止，不再重连");
+        ESP_LOGW(TAG, "MQTT 客户端已停止，%d 分钟后再试一次",
+                 (int)(AUTH_RETRY_US / 60000000ULL));
     }
+}
+
+/* 半小时后重新起一次。密钥要是在服务端修好了，设备自己就能回来。 */
+static void auth_retry_cb(void *arg)
+{
+    if (!s_mqtt) return;
+    ESP_LOGI(TAG, "重试云端认证");
+    lcd_ui_wifi("云端重试中");
+    /* 先把「已停」的标记清掉，否则 CONNACK 再被拒时 MQTT_EVENT_ERROR
+     * 那段的 `if (!s_auth_failed)` 不成立，就不会再排下一次重试——
+     * 只自愈一次，之后又回到永远不试。 */
+    s_auth_failed = false;
+    s_backoff_ms = BACKOFF_MIN_MS;
+    esp_mqtt_client_start(s_mqtt);
 }
 
 static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -812,6 +842,19 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
                 };
                 if (esp_timer_create(&a, &t) == ESP_OK)
                     esp_timer_start_once(t, 100 * 1000);   /* 100ms 后 */
+
+                /* 排一次远期重试。定时器只建一次，之后反复复用——
+                 * 每次被拒都新建一个的话，坏密钥的设备会一直漏定时器。 */
+                if (!s_auth_retry) {
+                    const esp_timer_create_args_t ra = {
+                        .callback = auth_retry_cb, .name = "mqtt_auth_retry",
+                    };
+                    esp_timer_create(&ra, &s_auth_retry);
+                }
+                if (s_auth_retry) {
+                    esp_timer_stop(s_auth_retry);
+                    esp_timer_start_once(s_auth_retry, AUTH_RETRY_US);
+                }
             }
         } else {
             ESP_LOGE(TAG, "MQTT 错误 type=%d",
