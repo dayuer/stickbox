@@ -2,13 +2,19 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
+	"github.com/dayuer/stickbox/server/go/internal/device"
 	"github.com/dayuer/stickbox/server/go/internal/profile"
+	"github.com/dayuer/stickbox/server/go/internal/raster"
 	"github.com/dayuer/stickbox/server/go/internal/store"
 )
 
@@ -143,6 +149,19 @@ func (a *API) handleTestStart(w http.ResponseWriter, r *http.Request, id auth.Id
 		return
 	}
 
+	// 把测试页排进队列。
+	//
+	// 文档 4.9 原本让 App 生成并上传测试页。改成服务端生成，理由是：
+	// 「服务端不渲染」那条约束针对的是用户文档（没有 CUPS、没有字体、
+	// 文档在手机上），而校准页是固定图案——没有字体、没有用户内容，
+	// 而且服务端就是 render-profile 的出处，最清楚该用什么像素尺寸。
+	// 让 App 生成的话，尺寸要跨一次网络往返才对得上，还要求两个平台的
+	// 原生光栅器都就绪。
+	if err := a.enqueueTestPages(dev, serial, def, run.RunID); err != nil {
+		fail(w, 500, "server error", err.Error())
+		return
+	}
+
 	okBase, hint := a.baselineOK(dev, serial)
 	resp := map[string]any{
 		"run_id":      run.RunID,
@@ -155,6 +174,68 @@ func (a *API) handleTestStart(w http.ResponseWriter, r *http.Request, id auth.Id
 		resp["hint"] = hint
 	}
 	writeJSON(w, 200, resp)
+}
+
+// enqueueTestPages 生成并入队这一轮要打的几页。
+//
+// 走的是和普通作业完全一样的路径（落盘 + InsertJob + 叫醒 actor），
+// 只是多带一个 TestRun——派发时那一轮的一次性 quirk 覆盖会跟着下去。
+// 不走同一条路的话，测的就不是真实链路了。
+func (a *API) enqueueTestPages(dev, serial string, def profile.TestDef, runID string) error {
+	caps, _, ok := a.loadIdentCaps(dev)
+	if !ok {
+		return errors.New("该设备尚未上报机型档案，生成不了测试页")
+	}
+	rp, err := raster.ParseCaps(caps)
+	if err != nil {
+		return err
+	}
+	// 用 A4；没有 A4 就随便挑一个有的。测试页尺寸不影响结论，
+	// 但必须和 render-profile 一致，否则会被自己的入口校验拦下。
+	size, okSize := rp.Pages["a4"]
+	if !okSize {
+		for _, v := range rp.Pages {
+			size, okSize = v, true
+			break
+		}
+	}
+	if !okSize {
+		return errors.New("能力串里没有可用的纸张尺寸")
+	}
+
+	kind := raster.KindMark
+	if def.ID == profile.TestMargins {
+		kind = raster.KindMargins
+	}
+	page := raster.TestPage(size.W, size.H, rp.DPI, kind)
+	if len(page) == 0 {
+		return errors.New("测试页生成失败")
+	}
+	// 自己生成的也要过自己的入口校验——过不了说明生成器坏了，
+	// 而症状会是用户点「开始测试」收到一个来自服务端自己的 400。
+	if _, err := raster.Verify(raster.FormatURF, page); err != nil {
+		return err
+	}
+
+	for i := 0; i < def.JobsNeeded; i++ {
+		jid := newJobID()
+		path := filepath.Join(a.cfg.JobsDir(), jid+".urf")
+		if err := os.WriteFile(path, page, 0o644); err != nil {
+			return err
+		}
+		if err := a.store.InsertJob(store.Job{
+			ID: jid, Dev: dev, Serial: serial,
+			Name:  fmt.Sprintf("适配测试 %s 第%d页", def.Name, i+1),
+			Size:  int64(len(page)),
+			State: store.StateQueued, TestRun: runID,
+		}); err != nil {
+			os.Remove(path)
+			return err
+		}
+	}
+	// 叫醒 actor。设备不在线或插着别的打印机时，作业留在队列里等着。
+	a.devMsg(dev, device.Msg{Kind: device.KindWake})
+	return nil
 }
 
 // answerReq 是 4.10 的请求体。
