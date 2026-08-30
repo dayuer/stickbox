@@ -14,7 +14,7 @@ type nopPub struct {
 	n  int
 }
 
-func (p *nopPub) PublishJob(dev, job string, size int64) error {
+func (p *nopPub) PublishJob(dev, job string, size int64, hooks []byte) error {
 	p.mu.Lock()
 	p.n++
 	p.mu.Unlock()

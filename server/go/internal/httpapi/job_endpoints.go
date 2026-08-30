@@ -70,6 +70,24 @@ func (a *API) handlePrint(w http.ResponseWriter, r *http.Request, id auth.Identi
 		return
 	}
 
+	// X-Test-Run 把这一件标成某轮适配测试的一部分，派发时会带上那一轮的
+	// 一次性 quirk 覆盖（文档 4.9）。校验它确实属于这台设备、而且还开着——
+	// 不校验的话，别人的 run_id 就能让你的打印机按一个陌生变体打印。
+	testRun := ""
+	if rid := r.Header.Get("X-Test-Run"); rid != "" {
+		run, ok, err := a.store.GetTestRun(rid)
+		if err != nil {
+			fail(w, 500, "server error", "")
+			return
+		}
+		if !ok || run.Dev != dev || run.Verdict != "" {
+			fail(w, 400, "bad request",
+				"X-Test-Run 不是这台设备上一轮还开着的测试")
+			return
+		}
+		testRun = rid
+	}
+
 	jid := newJobID()
 	path := filepath.Join(a.cfg.JobsDir(), jid+".urf")
 	f, err := os.Create(path)
@@ -93,6 +111,7 @@ func (a *API) handlePrint(w http.ResponseWriter, r *http.Request, id auth.Identi
 	if err := a.store.InsertJob(store.Job{
 		ID: jid, Dev: dev, Name: r.Header.Get("X-Filename"),
 		Size: int64(written), State: store.StateQueued, Serial: serial,
+		TestRun: testRun,
 	}); err != nil {
 		os.Remove(path)
 		fail(w, 500, "server error", "")

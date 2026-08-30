@@ -5,14 +5,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/profile"
 	"github.com/dayuer/stickbox/server/go/internal/raster"
 )
-
-var reDev = regexp.MustCompile(`^[0-9a-f]{12}$`)
 
 // handleEnroll 为一台桥签发 device 密钥。
 //
@@ -27,7 +24,16 @@ func (a *API) handleEnroll(w http.ResponseWriter, r *http.Request, id auth.Ident
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	if !reDev.MatchString(in.Dev) {
+	// dev 可选。
+	//
+	// 不带 dev 时签发一把**待认领**的密钥：App 在还没连上设备热点的时候就能
+	// 拿到它，连一次热点写进去就完事。设备首次连 MQTT 时用自己的 dev 做
+	// username，服务端从那里学到 MAC 并完成绑定——服务端本来就能知道，
+	// 让 App 先去问设备要是多余的，而那一步正是「配网要连两次热点」的根源。
+	//
+	// 带 dev 时是老路径：立刻绑定，抢绑冲突当场就能报 409。App 如果已经
+	// 读到过 dev（比如连上热点之后重配），带上它能更早发现冲突。
+	if in.Dev != "" && !auth.ValidDev(in.Dev) {
 		fail(w, 400, "bad dev", "dev 必须是 12 位小写十六进制的 MAC")
 		return
 	}
@@ -36,6 +42,9 @@ func (a *API) handleEnroll(w http.ResponseWriter, r *http.Request, id auth.Ident
 	if err != nil {
 		fail(w, 500, "server error", "")
 		return
+	}
+	if in.Dev == "" {
+		bound = false // 待认领的密钥没有「重置」一说
 	}
 	// 抢绑防护：服务端无法验证 App 是否真的物理接触了设备，
 	// 不设防的话任何人拿别人的 MAC 就能重置别人的设备。

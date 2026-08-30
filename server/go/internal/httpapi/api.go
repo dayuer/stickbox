@@ -64,6 +64,9 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/device/{dev}/render-profile", a.requireApp(a.handleRenderProfile))
 	mux.Handle("GET /api/device/{dev}/printers", a.requireApp(a.handlePrinters))
 	mux.Handle("GET /api/device/{dev}/printer", a.requireApp(a.handlePrinter))
+	mux.Handle("GET /api/device/{dev}/tests", a.requireApp(a.handleTests))
+	mux.Handle("POST /api/device/{dev}/tests/{test}/start", a.requireApp(a.handleTestStart))
+	mux.Handle("POST /api/tests/{run_id}/answer", a.requireApp(a.handleTestAnswer))
 
 	// device 角色
 	mux.Handle("GET /api/job/{id}/data", a.requireDevice(a.handleJobData))

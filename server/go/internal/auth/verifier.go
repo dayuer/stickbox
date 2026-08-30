@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
+	"regexp"
 	"sync"
 	"time"
 
@@ -25,6 +26,13 @@ type Identity struct {
 }
 
 var ErrDenied = errors.New("auth: 拒绝")
+
+// devRe 是设备 ID 的形状：STA MAC 去掉冒号的小写十六进制，12 个字符
+// （docs/API-cloud-print.md 第 0 节）。
+var devRe = regexp.MustCompile(`^[0-9a-f]{12}$`)
+
+// ValidDev 判断这个字符串是不是合法的设备 ID。
+func ValidDev(s string) bool { return devRe.MatchString(s) }
 
 // KeyStore 是 auth 对 store 的窄依赖，测试里用假实现替换。
 type KeyStore interface {

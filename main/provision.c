@@ -249,9 +249,21 @@ static esp_err_t h_connect(httpd_req_t *r)
 
 static esp_err_t h_status(httpd_req_t *r)
 {
-    char out[128];
-    snprintf(out, sizeof out, "{\"st\":%d,\"ip\":\"%s\",\"e\":\"%s\"}",
-             s_test_state, s_test_ip, s_test_err);
+    /* dev 是 STA MAC 去掉冒号的小写十六进制，与云端协议里的 {dev} 完全一致
+       （API 文档第 0 节）。App 拿它去 POST /api/device/enroll 换设备密钥——
+       没有这个字段配网就走不通。
+
+       注意用 ESP_MAC_WIFI_STA，不是热点用的那个 SOFTAP MAC：两者不同，
+       所以 SSID 后缀也推不出 dev。 */
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+
+    char out[192];
+    snprintf(out, sizeof out,
+             "{\"st\":%d,\"ip\":\"%s\",\"e\":\"%s\","
+             "\"dev\":\"%02x%02x%02x%02x%02x%02x\"}",
+             s_test_state, s_test_ip, s_test_err,
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_send(r, out, HTTPD_RESP_USE_STRLEN);
 }

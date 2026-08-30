@@ -27,9 +27,26 @@ CREATE TABLE IF NOT EXISTS jobs(
   err     TEXT NOT NULL DEFAULT '',
   serial  TEXT NOT NULL DEFAULT '',
   created INTEGER NOT NULL DEFAULT 0,
-  updated INTEGER NOT NULL DEFAULT 0
+  updated INTEGER NOT NULL DEFAULT 0,
+  test_run TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS jobs_dev_state ON jobs(dev, serial, state, created);
+
+-- 适配测试的一轮。App 拿 run_id 去 POST /api/print（带 X-Test-Run），
+-- 服务端据此给那几件作业下发一次性的 quirk 覆盖（API 文档 4.9）。
+CREATE TABLE IF NOT EXISTS test_runs(
+  run_id      TEXT PRIMARY KEY,
+  dev         TEXT NOT NULL,
+  serial      TEXT NOT NULL DEFAULT '',
+  test        TEXT NOT NULL,
+  variant     TEXT NOT NULL DEFAULT '{}',
+  jobs_needed INTEGER NOT NULL DEFAULT 1,
+  created     INTEGER NOT NULL DEFAULT 0,
+  -- 结论。空串表示这一轮还开着——同一台设备同时只允许一轮（409）。
+  verdict     TEXT NOT NULL DEFAULT '',
+  answered    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS test_runs_dev ON test_runs(dev, verdict);
 
 CREATE TABLE IF NOT EXISTS devices(
   key_id    TEXT PRIMARY KEY,
@@ -117,6 +134,7 @@ func Open(path string) (*Store, error) {
 	db.Exec(`ALTER TABLE jobs ADD COLUMN err TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE jobs ADD COLUMN serial TEXT NOT NULL DEFAULT ''`)
 	db.Exec(`ALTER TABLE devices ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`)
+	db.Exec(`ALTER TABLE jobs ADD COLUMN test_run TEXT NOT NULL DEFAULT ''`)
 	return &Store{db: db}, nil
 }
 

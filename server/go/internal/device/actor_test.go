@@ -14,7 +14,7 @@ type published struct {
 
 type fakePub struct{ sent []published }
 
-func (f *fakePub) PublishJob(dev, job string, size int64) error {
+func (f *fakePub) PublishJob(dev, job string, size int64, hooks []byte) error {
 	f.sent = append(f.sent, published{dev, job, size})
 	return nil
 }

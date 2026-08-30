@@ -106,7 +106,7 @@ func startServerWithDevLogin(t *testing.T, devPhone, devCode string) *env {
 	t.Cleanup(reg.Shutdown)
 
 	mqttAddr := freeAddr(t)
-	br, err := broker.New(mqttAddr, reloader.Config(), v, mem, reg)
+	br, err := broker.New(mqttAddr, reloader.Config(), v, mem, reg, st)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,8 +136,8 @@ func startServerWithDevLogin(t *testing.T, devPhone, devCode string) *env {
 
 type publisherShim struct{ b *broker.Broker }
 
-func (p *publisherShim) PublishJob(dev, job string, size int64) error {
-	return p.b.PublishJob(dev, job, size)
+func (p *publisherShim) PublishJob(dev, job string, size int64, hooks []byte) error {
+	return p.b.PublishJob(dev, job, size, hooks)
 }
 
 func freeAddr(t *testing.T) string {

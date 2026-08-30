@@ -17,11 +17,18 @@ type Router interface {
 	Send(dev string, m device.Msg)
 }
 
+// Claimer 是 broker 对 store 的窄依赖：把待认领的密钥绑到设备上。
+type Claimer interface {
+	ClaimKey(keyID, dev string) (bool, error)
+	OwnerOfDevice(dev string) (string, bool, error)
+}
+
 type Hook struct {
 	mqtt.HookBase
 	v      *auth.Verifier
 	mem    *Membership
 	router Router
+	claim  Claimer
 	// ids 记录每个连接校验通过的身份，ACL 判定时直接取，不重复跑 argon2。
 	ids *idTable
 }
@@ -43,6 +50,17 @@ func (h *Hook) OnConnectAuthenticate(cl *mqtt.Client, pk packets.Packet) bool {
 		slog.Warn("MQTT 认证失败", "username", user, "remote", cl.Net.Remote)
 		return false
 	}
+
+	// 待认领的密钥：App 在还没连上设备热点时就签发了它，那时候还不知道 MAC。
+	// 设备现在自己报上来了——username 就是它的 dev。
+	if id.Role == auth.RoleDevice && id.Dev == "" {
+		claimed, ok := h.claimKey(id, user)
+		if !ok {
+			return false
+		}
+		id = claimed
+	}
+
 	// device 角色的 username 必须等于它自己的 dev——防止拿 A 的密钥冒充 B 连接。
 	if id.Role == auth.RoleDevice && id.Dev != user {
 		slog.Warn("MQTT username 与密钥不符", "username", user, "key_dev", id.Dev)
@@ -50,6 +68,45 @@ func (h *Hook) OnConnectAuthenticate(cl *mqtt.Client, pk packets.Packet) bool {
 	}
 	h.ids.put(cl, id)
 	return true
+}
+
+// claimKey 把一把待认领的密钥绑到设备自报的 dev 上。
+//
+// 抢绑防护从 enroll 挪到了这里：App 不带 dev 签发密钥时，服务端那一刻还
+// 不知道要绑哪台，所以只能在设备真的连上来时才判。判据不变——这台设备
+// 已经属于别人就拒绝，不然任何人把自己的密钥写进别人的设备就能顶掉绑定。
+func (h *Hook) claimKey(id auth.Identity, dev string) (auth.Identity, bool) {
+	if !auth.ValidDev(dev) {
+		slog.Warn("待认领密钥的 username 不是合法 dev", "username", dev)
+		return id, false
+	}
+	if h.claim == nil {
+		slog.Error("没有 Claimer，待认领的密钥无法绑定", "key_id", id.KeyID)
+		return id, false
+	}
+	if owner, bound, err := h.claim.OwnerOfDevice(dev); err != nil {
+		slog.Error("查设备归属失败", "dev", dev, "err", err)
+		return id, false
+	} else if bound && owner != id.UserID {
+		slog.Warn("拒绝认领：设备属于其他账号", "dev", dev)
+		return id, false
+	}
+	ok, err := h.claim.ClaimKey(id.KeyID, dev)
+	if err != nil {
+		slog.Error("认领密钥失败", "dev", dev, "err", err)
+		return id, false
+	}
+	if !ok {
+		// 已经被别的设备抢先认领了。并发保护在 SQL 的 dev='' 条件里。
+		slog.Warn("密钥已被认领，拒绝", "dev", dev, "key_id", id.KeyID)
+		return id, false
+	}
+	// 缓存里那份 Identity 的 Dev 还是空的，不清掉后面的 ACL 会全部拒绝。
+	h.v.Invalidate(id.KeyID)
+	h.mem.Invalidate(id.UserID)
+	id.Dev = dev
+	slog.Info("设备已认领密钥", "dev", dev, "user", id.UserID)
+	return id, true
 }
 
 func (h *Hook) OnACLCheck(cl *mqtt.Client, topic string, write bool) bool {

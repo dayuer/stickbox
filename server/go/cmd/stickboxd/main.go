@@ -96,10 +96,11 @@ func serve(cfg *config.Config) error {
 		// 判离线 120 秒：设备保证状态一变 2 秒内推、没变也 30 秒一拍，
 		// 连丢四拍才判离线（SERVER-REQUIREMENTS 2.1）。
 		JobTimeout: 180 * time.Second, IdleTimeout: 120 * time.Second,
+		HooksFor: testRunHooks(st),
 	})
 	defer reg.Shutdown()
 
-	br, err := broker.New(cfg.MQTTAddr, reloader.Config(), v, mem, reg)
+	br, err := broker.New(cfg.MQTTAddr, reloader.Config(), v, mem, reg, st)
 	if err != nil {
 		return err
 	}
@@ -162,11 +163,27 @@ type publisherShim struct{ b *broker.Broker }
 
 func (p *publisherShim) set(b *broker.Broker) { p.b = b }
 
-func (p *publisherShim) PublishJob(dev, job string, size int64) error {
+func (p *publisherShim) PublishJob(dev, job string, size int64, hooks []byte) error {
 	if p.b == nil {
 		return errors.New("broker 尚未就绪")
 	}
-	return p.b.PublishJob(dev, job, size)
+	return p.b.PublishJob(dev, job, size, hooks)
+}
+
+// testRunHooks 把一轮适配测试的 run_id 换成随作业下发的一次性钩子覆盖
+// （API 文档 3.4 / 4.9）。
+//
+// 只读 store，不依赖 httpapi——registry 在 httpapi 之前构造。
+// 查不到就返回 nil，那件作业按普通作业派：宁可少一个变体（测试判 unclear），
+// 也不要因为查库失败把作业卡在队列里。
+func testRunHooks(st *store.Store) func(string) []byte {
+	return func(runID string) []byte {
+		run, ok, err := st.GetTestRun(runID)
+		if err != nil || !ok || run.Variant == "" {
+			return nil
+		}
+		return []byte(run.Variant)
+	}
 }
 
 func newSender(cfg *config.Config) (auth.Sender, error) {

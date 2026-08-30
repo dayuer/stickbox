@@ -58,7 +58,7 @@ type Broker struct {
 	mem *Membership
 }
 
-func New(addr string, tlsCfg *tls.Config, v *auth.Verifier, mem *Membership, r Router) (*Broker, error) {
+func New(addr string, tlsCfg *tls.Config, v *auth.Verifier, mem *Membership, r Router, claim Claimer) (*Broker, error) {
 	srv := mqtt.New(&mqtt.Options{
 		// 服务端要能直接 Publish 派发信令，这个开关是前提；
 		// 不开的话 Publish 返回「please set Options.InlineClient=true」，
@@ -69,7 +69,7 @@ func New(addr string, tlsCfg *tls.Config, v *auth.Verifier, mem *Membership, r R
 			Level: slog.LevelWarn,
 		})),
 	})
-	h := &Hook{v: v, mem: mem, router: r, ids: newIDTable()}
+	h := &Hook{v: v, mem: mem, router: r, claim: claim, ids: newIDTable()}
 	if err := srv.AddHook(h, nil); err != nil {
 		return nil, err
 	}
@@ -86,8 +86,16 @@ func (b *Broker) Serve() error { return b.srv.Serve() }
 func (b *Broker) Close() error { return b.srv.Close() }
 
 // PublishJob 实现 device.Publisher。信令只有几十字节。
-func (b *Broker) PublishJob(dev, jobID string, size int64) error {
-	payload, err := json.Marshal(map[string]any{"id": jobID, "size": size})
+//
+// hooks 非空时带上本次作业的一次性钩子覆盖（API 文档 3.4）。它只对这一件
+// 生效、绝不写 NVS，作业结束即销毁——失败也要销毁，否则用户测一次就打不了
+// 印了。销毁是固件那侧的责任，服务端只管这一件带、下一件不带。
+func (b *Broker) PublishJob(dev, jobID string, size int64, hooks []byte) error {
+	m := map[string]any{"id": jobID, "size": size}
+	if len(hooks) > 0 {
+		m["hooks"] = json.RawMessage(hooks)
+	}
+	payload, err := json.Marshal(m)
 	if err != nil {
 		return err
 	}

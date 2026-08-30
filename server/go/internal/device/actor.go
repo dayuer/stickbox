@@ -18,7 +18,8 @@ import (
 
 // Publisher 是 actor 对 MQTT 的窄依赖。
 type Publisher interface {
-	PublishJob(dev, jobID string, size int64) error
+	// hooks 非空时随作业信令一起下发本次的一次性钩子覆盖（API 文档 3.4）。
+	PublishJob(dev, jobID string, size int64, hooks []byte) error
 }
 
 // Store 是 actor 对持久层的窄依赖。
@@ -33,6 +34,9 @@ type Options struct {
 	JobTimeout  time.Duration // 传输无进展多久退回队列，默认 180s
 	IdleTimeout time.Duration // 多久没心跳就退出，默认 120s
 	Now         func() time.Time
+	// HooksFor 把一轮适配测试的 run_id 换成随作业下发的一次性钩子覆盖。
+	// nil 表示不支持测试变体，所有作业都按档案走。
+	HooksFor func(runID string) []byte
 }
 
 type Actor struct {
@@ -54,6 +58,10 @@ type Actor struct {
 	jobTimeout  time.Duration
 	idleTimeout time.Duration
 	now         func() time.Time
+
+	// hooksFor 把一轮适配测试的 run_id 换成要随作业下发的一次性钩子覆盖。
+	// 为 nil 时所有作业都按档案走——测试变体是可选能力，缺了不该让派发停摆。
+	hooksFor func(runID string) []byte
 
 	// snapshot 是给外部读的只读快照。actor 自己写，HTTP 侧读。
 	snap *snapshot
@@ -80,6 +88,7 @@ func New(dev string, st Store, pub Publisher, o Options) *Actor {
 		now:         o.Now,
 		lastSeen:    o.Now(),
 		snap:        newSnapshot(),
+		hooksFor:    o.HooksFor,
 	}
 }
 
@@ -218,7 +227,13 @@ func (a *Actor) dispatchOne() {
 	if !ok {
 		return
 	}
-	if err := a.pub.PublishJob(a.dev, j.ID, j.Size); err != nil {
+	// 适配测试的作业要带上那一轮的一次性覆盖。查不到就当普通作业派——
+	// 宁可少一个变体（测试判 unclear），也不要因为查库失败把作业卡住。
+	var hooks []byte
+	if j.TestRun != "" && a.hooksFor != nil {
+		hooks = a.hooksFor(j.TestRun)
+	}
+	if err := a.pub.PublishJob(a.dev, j.ID, j.Size, hooks); err != nil {
 		slog.Error("派发失败", "dev", a.dev, "job", j.ID, "err", err)
 		return // 作业留在 queued，下次 tick 重试
 	}

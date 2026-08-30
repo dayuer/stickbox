@@ -29,7 +29,7 @@ func (f *fakeSender) Send(ctx context.Context, phone, code string) error {
 // recPub 记下下发过的档案，测试据此断言。
 type recPub struct{ profiles map[string][]byte }
 
-func (p *recPub) PublishJob(dev, job string, size int64) error { return nil }
+func (p *recPub) PublishJob(dev, job string, size int64, hooks []byte) error { return nil }
 
 func (p *recPub) PublishProfile(dev string, body []byte) error {
 	if p.profiles == nil {

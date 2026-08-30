@@ -22,6 +22,9 @@ type Job struct {
 	Serial  string `json:"serial"`
 	Created int64  `json:"created"`
 	Updated int64  `json:"updated"`
+	// TestRun 非空表示这件是适配测试的一部分，派发时要带上那一轮的一次性
+	// quirk 覆盖（API 文档 4.9）。不外泄给 App——它自己知道自己传了什么。
+	TestRun string `json:"-"`
 }
 
 // 作业状态机：queued → downloading → done / failed
@@ -35,7 +38,7 @@ const (
 
 func now() int64 { return time.Now().Unix() }
 
-const jobCols = `id,dev,name,size,state,bytes,err,serial,created,updated`
+const jobCols = `id,dev,name,size,state,bytes,err,serial,created,updated,test_run`
 
 func (s *Store) InsertJob(j Job) error {
 	if j.Created == 0 {
@@ -47,9 +50,9 @@ func (s *Store) InsertJob(j Job) error {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	_, err := s.db.Exec(
-		`INSERT INTO jobs(`+jobCols+`) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO jobs(`+jobCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
 		j.ID, j.Dev, j.Name, j.Size, j.State, j.Bytes, j.Err, j.Serial,
-		j.Created, j.Updated)
+		j.Created, j.Updated, j.TestRun)
 	return err
 }
 
@@ -172,7 +175,7 @@ type rowScanner interface{ Scan(...any) error }
 
 func scanJobInto(r rowScanner, j *Job) error {
 	return r.Scan(&j.ID, &j.Dev, &j.Name, &j.Size, &j.State,
-		&j.Bytes, &j.Err, &j.Serial, &j.Created, &j.Updated)
+		&j.Bytes, &j.Err, &j.Serial, &j.Created, &j.Updated, &j.TestRun)
 }
 
 func scanJob(r rowScanner) (Job, bool, error) {

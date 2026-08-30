@@ -143,6 +143,26 @@ func (s *Store) DevicesOfUser(userID string) ([]string, error) {
 }
 
 // OwnerOfDevice 是抢绑防护的基础：这台设备当前属于谁。
+// ClaimKey 把一把还没绑定设备的密钥绑到 dev 上。
+//
+// 设备首次连 MQTT 时调用：username 就是它自己的 dev，服务端从那里学到 MAC——
+// **不需要 App 先去问设备要**。让 App 去读 MAC 正是当初逼出「配网要连两次
+// 热点」的那个多余步骤。
+//
+// 条件里的 dev=” 是并发保护：两台设备拿同一把密钥同时连，只有一台能绑上。
+func (s *Store) ClaimKey(keyID, dev string) (bool, error) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	res, err := s.db.Exec(
+		`UPDATE devices SET dev=?, last_seen=? WHERE key_id=? AND dev='' AND disabled=0`,
+		dev, now(), keyID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // DeviceMeta 是一台设备在 devices 表里的展示信息。
 //
 // name 和 bound 取自那把**还有效**的密钥：重新 enroll 会吊销旧密钥、插一条新的，

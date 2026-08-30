@@ -33,7 +33,8 @@ func TestEnrollIssuesDeviceKey(t *testing.T) {
 func TestEnrollRejectsBadDev(t *testing.T) {
 	h, dep := newTestAPI(t)
 	token := login(t, h, dep, "13800008888")
-	for _, dev := range []string{"", "XYZ", "F412FA87C9E0", "f412fa87c9e"} {
+	// 空串不在里面：不带 dev 是合法的，表示签发一把待认领的密钥。
+	for _, dev := range []string{"XYZ", "F412FA87C9E0", "f412fa87c9e", "f412fa87c9e0f"} {
 		rr := post(h, "/api/device/enroll", `{"dev":"`+dev+`"}`, bearer(token))
 		if rr.Code != 400 {
 			t.Errorf("dev=%q → %d，期望 400", dev, rr.Code)
@@ -210,5 +211,47 @@ func TestStatusScopedToOwnDevice(t *testing.T) {
 		"Authorization": "Bearer " + token, "X-Device": "aaaaaaaaaaaa"})
 	if rr.Code != 403 {
 		t.Errorf("查别人的设备 = %d，期望 403", rr.Code)
+	}
+}
+
+// 不带 dev 时签发一把待认领的密钥。
+//
+// 这是为了让 App 在**还没连上设备热点**的时候就能拿到密钥：连一次热点写
+// 进去就完事，不用先读 MAC 再断开去申请。服务端本来就能从设备自报的
+// username 学到 MAC，让 App 先去问设备要是多余的。
+func TestEnrollWithoutDevIssuesUnclaimedKey(t *testing.T) {
+	h, dep := newTestAPI(t)
+	token := login(t, h, dep, "13800008888")
+
+	rr := post(h, "/api/device/enroll", `{"name":"还没连上的设备"}`, bearer(token))
+	if rr.Code != 200 {
+		t.Fatalf("不带 dev 的 enroll = %d %s", rr.Code, rr.Body)
+	}
+	var out struct {
+		DeviceKey string `json:"device_key"`
+		Dev       string `json:"dev"`
+		Reset     bool   `json:"reset"`
+	}
+	json.Unmarshal(rr.Body.Bytes(), &out)
+	if out.DeviceKey == "" {
+		t.Fatal("没签发密钥")
+	}
+	if out.Dev != "" {
+		t.Errorf("待认领的密钥不该带 dev，拿到 %q", out.Dev)
+	}
+	if out.Reset {
+		t.Error("待认领的密钥没有「重置」一说")
+	}
+
+	// 密钥本身可用，但还没绑定设备——绑定发生在设备首次连 MQTT 时。
+	id, err := dep.v.Verify(out.DeviceKey)
+	if err != nil {
+		t.Fatalf("签发的密钥不可用：%v", err)
+	}
+	if id.Dev != "" {
+		t.Errorf("此时不该有 dev，拿到 %q", id.Dev)
+	}
+	if string(id.Role) != "device" {
+		t.Errorf("角色 = %q，期望 device", id.Role)
 	}
 }
