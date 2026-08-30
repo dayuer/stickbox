@@ -138,6 +138,9 @@ type statusPayload struct {
 	// USB 事件计数（API 文档 3.6 的 usb 字段）。设备侧那个「拔掉能认出来、
 	// 插回去一直未连接」的故障在设备上没有任何可见输出，只能靠它诊断。
 	USB json.RawMessage `json:"usb"`
+	// Heap 是设备的空闲堆字节数。设备一直在报，之前被丢掉了——结果堆耗尽
+	// 引起的 TLS 握手失败在服务端只表现为「证书错」，查不出真因。
+	Heap uint32 `json:"heap"`
 }
 
 // routeStatus 把一条 status 消息翻译成 actor 消息。
@@ -179,7 +182,7 @@ func routeStatus(r Router, topic string, payload []byte) {
 	}
 
 	m := device.Msg{Serial: p.Serial, Printer: p.Prn, JobID: p.Job,
-		Bytes: p.Bytes, Err: p.Err, USB: p.USB}
+		Bytes: p.Bytes, Err: p.Err, USB: p.USB, Heap: p.Heap}
 	switch p.State {
 	case "done":
 		m.Kind = device.KindJobDone

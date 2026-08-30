@@ -183,6 +183,12 @@ func (a *API) handleStatus(w http.ResponseWriter, r *http.Request, id auth.Ident
 		if u := act.USB(); len(u) > 0 {
 			d["usb"] = json.RawMessage(u)
 		}
+		// 空闲堆。设备只有几十 KB 可用，一条 TLS 连接的缓冲就占十几 KB，
+		// 堆一紧握手就以「证书错」的形态失败——不摊在这里，现场只能靠
+		// 串口才能看出真因，而用户现场的板子串口够不着。
+		if hp := act.Heap(); hp > 0 {
+			d["heap"] = hp
+		}
 		out["device"] = d
 	} else {
 		out["device"] = map[string]any{"dev": dev, "online": false, "prn": nil}

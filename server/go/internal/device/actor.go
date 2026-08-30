@@ -51,6 +51,7 @@ type Actor struct {
 	serial   string // 当前插着的打印机；空串 = 没插
 	printer  []byte
 	usb      []byte // 最近一次心跳里的 usb 字段原文
+	heap     uint32 // 最近一次心跳里的空闲堆字节数，0 表示设备没报过
 
 	box    chan Msg
 	ticker <-chan time.Time
@@ -156,6 +157,9 @@ func (a *Actor) handle(m Msg) {
 		if m.USB != nil {
 			a.usb = m.USB
 		}
+		if m.Heap > 0 {
+			a.heap = m.Heap
+		}
 		a.setSerial(m.Serial)
 
 	case KindDownloading:
@@ -190,7 +194,7 @@ func (a *Actor) handle(m Msg) {
 		// 只是叫醒，状态更新在下面统一做
 	}
 	a.dispatchOne()
-	a.snap.set(a.serial, a.printer, a.usb)
+	a.snap.set(a.serial, a.printer, a.usb, a.heap)
 }
 
 // setSerial 处理换打印机。

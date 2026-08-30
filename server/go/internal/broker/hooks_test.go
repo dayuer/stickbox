@@ -172,3 +172,22 @@ func TestRouteStatusWithoutUSBField(t *testing.T) {
 		t.Fatal("不带 usb 字段的心跳应当照常投递")
 	}
 }
+
+// 心跳里的 heap 要一路带到 actor。
+//
+// 这条是为一次误诊写的：设备堆耗尽时 mbedtls 分不到大数缓冲，握手失败在
+// 服务端日志里长得跟证书错误一模一样（tls: access denied / connection reset）。
+// 设备一直在报 heap，服务端却把它丢了，于是只能靠串口——而用户现场的板子
+// 串口够不着。丢掉这个字段等于把唯一的远程诊断依据丢掉。
+func TestStatusCarriesHeap(t *testing.T) {
+	r := &fakeRouter{}
+	routeStatus(r, "printer/f412fa87c9e0/status",
+		[]byte(`{"state":"idle","heap":51234,"serial":"CNB1S5N3S7"}`))
+
+	if len(r.got) != 1 {
+		t.Fatalf("发出 %d 条消息，期望 1 条", len(r.got))
+	}
+	if got := r.got[0].msg.Heap; got != 51234 {
+		t.Errorf("Heap = %d，期望 51234——丢掉它就没法远程判断堆耗尽", got)
+	}
+}
