@@ -70,6 +70,30 @@ func (s *Store) AnswerTestRun(runID, verdict string, at int64) error {
 	return err
 }
 
+// OpenRunIDs 返回这台设备上还开着的那些轮，按测试 id 索引。
+//
+// GET /tests 要用它把 run_id 一起带给 App：只报 state=running 而不给
+// run_id 的话，App 重启之后就再也没法中止那一轮——而一轮开着会挡住
+// 之后所有测试（409），用户被永久卡死且没有出路。
+func (s *Store) OpenRunIDs(dev string) (map[string]string, error) {
+	rows, err := s.db.Query(
+		`SELECT test, run_id FROM test_runs WHERE dev=? AND verdict='' ORDER BY created ASC`,
+		dev)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var test, id string
+		if err := rows.Scan(&test, &id); err != nil {
+			return nil, err
+		}
+		out[test] = id
+	}
+	return out, rows.Err()
+}
+
 // LatestVerdicts 返回这台设备每个测试最近一次的结论。
 // 还开着的那一轮 verdict 是空串，调用方据此显示 running。
 func (s *Store) LatestVerdicts(dev string) (map[string]string, error) {

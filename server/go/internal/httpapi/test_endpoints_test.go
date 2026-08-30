@@ -114,3 +114,55 @@ func TestStartTestWithoutPrinterLeavesNothingBehind(t *testing.T) {
 		t.Error("不该留下开着的一轮——下次点会撞 409 说「已有一轮在进行中」")
 	}
 }
+
+// 进行中的那一轮要把 run_id 带回来。
+//
+// 这条是为一个死锁写的：一轮开着会让之后所有测试都撞 409，而 App 重启后
+// 不知道自己开过哪一轮——只报 state=running 不给 run_id 的话，用户被永久
+// 卡住且没有任何出路，只能等运维去改库。
+func TestTestsListExposesRunIDForRunning(t *testing.T) {
+	h, dep := newTestAPI(t)
+	token := login(t, h, dep, "13800008888")
+	post(h, "/api/device/enroll", `{"dev":"f412fa87c9e0","name":"x"}`, bearer(token))
+	attachPrinter(t, dep, "f412fa87c9e0", "CNB1S5N3S7")
+
+	rr := post(h, "/api/device/f412fa87c9e0/tests/double_print/start", `{}`, bearer(token))
+	var started struct {
+		RunID string `json:"run_id"`
+	}
+	json.Unmarshal(rr.Body.Bytes(), &started)
+
+	list := get(h, "/api/device/f412fa87c9e0/tests", bearer(token))
+	var out struct {
+		Tests []struct {
+			ID    string `json:"id"`
+			State string `json:"state"`
+			RunID string `json:"run_id"`
+		} `json:"tests"`
+	}
+	json.Unmarshal(list.Body.Bytes(), &out)
+
+	for _, tt := range out.Tests {
+		switch {
+		case tt.ID == "double_print":
+			if tt.State != "running" {
+				t.Errorf("state = %q，期望 running", tt.State)
+			}
+			if tt.RunID != started.RunID {
+				t.Errorf("run_id = %q，期望 %q——拿不到它就中止不了", tt.RunID, started.RunID)
+			}
+		case tt.RunID != "":
+			t.Errorf("%s 没在跑，不该带 run_id", tt.ID)
+		}
+	}
+
+	// 中止之后要能重新开始，不能一直 409。
+	if rr := post(h, "/api/tests/"+started.RunID+"/answer",
+		`{"verdict":"aborted"}`, bearer(token)); rr.Code != 200 {
+		t.Fatalf("中止 = %d %s", rr.Code, rr.Body)
+	}
+	if rr := post(h, "/api/device/f412fa87c9e0/tests/double_print/start",
+		`{}`, bearer(token)); rr.Code != 200 {
+		t.Errorf("中止后重新开始 = %d，说明那一轮没真正关掉", rr.Code)
+	}
+}

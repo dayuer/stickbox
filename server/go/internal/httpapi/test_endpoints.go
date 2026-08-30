@@ -45,10 +45,18 @@ func (a *API) handleTests(w http.ResponseWriter, r *http.Request, id auth.Identi
 		fail(w, 500, "server error", "")
 		return
 	}
+	open, err := a.store.OpenRunIDs(dev)
+	if err != nil {
+		fail(w, 500, "server error", "")
+		return
+	}
 
 	type row struct {
 		profile.TestDef
 		State string `json:"state"`
+		// RunID 只在 state=running 时非空。
+		// 不给的话 App 重启后就没法中止那一轮，而它会挡住之后所有测试。
+		RunID string `json:"run_id,omitempty"`
 	}
 	out := []row{}
 	for _, t := range profile.Catalog() {
@@ -61,7 +69,7 @@ func (a *API) handleTests(w http.ResponseWriter, r *http.Request, id auth.Identi
 				st = profile.StateFor(v)
 			}
 		}
-		out = append(out, row{TestDef: t, State: st})
+		out = append(out, row{TestDef: t, State: st, RunID: open[t.ID]})
 	}
 	writeJSON(w, 200, map[string]any{"tests": out})
 }
