@@ -1,8 +1,8 @@
-package com.airprint.rasterkit
+package com.yaodriver.stickbox.rasterkit
 
-import com.airprint.specs.NativeRasterKitSpec
-import com.airprint.specs.NativeWifiSetupSpec
-import com.airprint.wifisetup.WifiSetupModule
+import com.yaodriver.stickbox.specs.NativeRasterKitSpec
+import com.yaodriver.stickbox.specs.NativeWifiSetupSpec
+import com.yaodriver.stickbox.wifisetup.WifiSetupModule
 import com.facebook.react.BaseReactPackage
 import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext

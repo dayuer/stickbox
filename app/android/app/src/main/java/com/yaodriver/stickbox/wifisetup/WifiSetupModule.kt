@@ -1,4 +1,4 @@
-package com.airprint.wifisetup
+package com.yaodriver.stickbox.wifisetup
 
 import android.net.ConnectivityManager
 import android.net.Network
@@ -6,7 +6,7 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiNetworkSpecifier
 import android.os.PatternMatcher
-import com.airprint.specs.NativeWifiSetupSpec
+import com.yaodriver.stickbox.specs.NativeWifiSetupSpec
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext

@@ -54,7 +54,7 @@
     "type": "modules",
     "jsSrcsDir": "src/native",
     "android": {
-      "javaPackageName": "com.airprint.specs"
+      "javaPackageName": "com.yaodriver.stickbox.specs"
     }
   }
 }

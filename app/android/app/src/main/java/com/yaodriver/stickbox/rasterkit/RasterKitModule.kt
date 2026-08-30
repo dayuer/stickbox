@@ -1,6 +1,6 @@
-package com.airprint.rasterkit
+package com.yaodriver.stickbox.rasterkit
 
-import com.airprint.specs.NativeRasterKitSpec
+import com.yaodriver.stickbox.specs.NativeRasterKitSpec
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext

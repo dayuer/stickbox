@@ -1,4 +1,4 @@
-package com.airprint.rasterkit
+package com.yaodriver.stickbox.rasterkit
 
 /**
  * shared/urf 那份 C++ 的薄封装。只做 JNI 声明，不放逻辑。

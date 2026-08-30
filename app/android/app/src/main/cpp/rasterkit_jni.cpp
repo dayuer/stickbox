@@ -44,7 +44,7 @@ std::string from_jstring(JNIEnv* env, jstring s) {
 extern "C" {
 
 JNIEXPORT jstring JNICALL
-Java_com_airprint_rasterkit_UrfNative_encoderVersion(JNIEnv* env, jclass) {
+Java_com_yaodriver_stickbox_rasterkit_UrfNative_encoderVersion(JNIEnv* env, jclass) {
   // 带上 colorspace，因为那是唯一一个填错不会报错、只会出废纸的常量。
   return to_jstring(env, "urf/1 bpp=8 colorspace=" +
                              std::to_string(urf::kColorspaceGray) +
@@ -53,7 +53,7 @@ Java_com_airprint_rasterkit_UrfNative_encoderVersion(JNIEnv* env, jclass) {
 
 /** 校验结果编码成 `ok|pages|w|h|error`。为一个内部返回值定义 JNI 结构体不值当。 */
 JNIEXPORT jstring JNICALL
-Java_com_airprint_rasterkit_UrfNative_validateForUpload(
+Java_com_yaodriver_stickbox_rasterkit_UrfNative_validateForUpload(
     JNIEnv* env, jclass, jstring jpath, jint expectW, jint expectH) {
   urf::ValidateResult r = urf::ValidateForUpload(
       from_jstring(env, jpath), static_cast<uint32_t>(expectW),
@@ -67,7 +67,7 @@ Java_com_airprint_rasterkit_UrfNative_validateForUpload(
 
 /** 打开输出文件。返回 0 表示失败，错误信息取不到——调用方按「打不开文件」处理。 */
 JNIEXPORT jlong JNICALL
-Java_com_airprint_rasterkit_UrfNative_jobOpen(JNIEnv* env, jclass, jstring jpath) {
+Java_com_yaodriver_stickbox_rasterkit_UrfNative_jobOpen(JNIEnv* env, jclass, jstring jpath) {
   try {
     return reinterpret_cast<jlong>(new Job(from_jstring(env, jpath)));
   } catch (...) {
@@ -76,7 +76,7 @@ Java_com_airprint_rasterkit_UrfNative_jobOpen(JNIEnv* env, jclass, jstring jpath
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_airprint_rasterkit_UrfNative_jobBeginPage(
+Java_com_yaodriver_stickbox_rasterkit_UrfNative_jobBeginPage(
     JNIEnv* env, jclass, jlong h, jint w, jint hgt, jint dpi) {
   Job* j = as_job(h);
   if (!j) return to_jstring(env, "作业句柄无效");
@@ -100,7 +100,7 @@ Java_com_airprint_rasterkit_UrfNative_jobBeginPage(
  * 而且每条带白拷贝一次几 MB。AndroidBitmap_lockPixels 给的是位图自己的内存。
  */
 JNIEXPORT jstring JNICALL
-Java_com_airprint_rasterkit_UrfNative_jobWriteBandBitmap(
+Java_com_yaodriver_stickbox_rasterkit_UrfNative_jobWriteBandBitmap(
     JNIEnv* env, jclass, jlong h, jobject bitmap, jint rows) {
   Job* j = as_job(h);
   if (!j) return to_jstring(env, "作业句柄无效");
@@ -142,7 +142,7 @@ Java_com_airprint_rasterkit_UrfNative_jobWriteBandBitmap(
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_airprint_rasterkit_UrfNative_jobEndPage(JNIEnv* env, jclass, jlong h) {
+Java_com_yaodriver_stickbox_rasterkit_UrfNative_jobEndPage(JNIEnv* env, jclass, jlong h) {
   Job* j = as_job(h);
   if (!j) return to_jstring(env, "作业句柄无效");
   try {
@@ -155,7 +155,7 @@ Java_com_airprint_rasterkit_UrfNative_jobEndPage(JNIEnv* env, jclass, jlong h) {
 
 /** 成功返回 `pages|bytes`，失败返回以 `!` 开头的错误信息。句柄一律释放。 */
 JNIEXPORT jstring JNICALL
-Java_com_airprint_rasterkit_UrfNative_jobFinish(JNIEnv* env, jclass, jlong h) {
+Java_com_yaodriver_stickbox_rasterkit_UrfNative_jobFinish(JNIEnv* env, jclass, jlong h) {
   std::unique_ptr<Job> j(as_job(h));
   if (!j) return to_jstring(env, "!作业句柄无效");
   try {
@@ -170,7 +170,7 @@ Java_com_airprint_rasterkit_UrfNative_jobFinish(JNIEnv* env, jclass, jlong h) {
 
 /** 取消或出错时释放句柄。产物文件由 Kotlin 侧删。 */
 JNIEXPORT void JNICALL
-Java_com_airprint_rasterkit_UrfNative_jobAbort(JNIEnv*, jclass, jlong h) {
+Java_com_yaodriver_stickbox_rasterkit_UrfNative_jobAbort(JNIEnv*, jclass, jlong h) {
   delete as_job(h);
 }
 

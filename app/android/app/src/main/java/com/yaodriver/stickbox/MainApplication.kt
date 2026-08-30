@@ -1,7 +1,7 @@
-package com.airprint
+package com.yaodriver.stickbox
 
 import android.app.Application
-import com.airprint.rasterkit.RasterKitPackage
+import com.yaodriver.stickbox.rasterkit.RasterKitPackage
 import com.facebook.react.PackageList
 import com.facebook.react.ReactApplication
 import com.facebook.react.ReactHost
