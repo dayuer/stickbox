@@ -223,6 +223,13 @@ export interface AdaptTest {
   jobs_needed: number;
   state: TestState;
   affects: string[];
+  /**
+   * 只在 state 为 running 时有值。
+   *
+   * 没有它的话，App 重启之后就没法中止那一轮——而一轮开着会让之后所有
+   * 测试都撞 409，用户被永久卡死且没有出路。
+   */
+  run_id?: string;
 }
 
 export interface TestStartResponse {

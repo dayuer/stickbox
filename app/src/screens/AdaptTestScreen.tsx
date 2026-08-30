@@ -85,11 +85,12 @@ export function AdaptTestScreen({dev}: {dev: DeviceId}) {
     }
   };
 
-  const answer = async (verdict: Verdict, detail?: Record<string, unknown>) => {
-    if (!run) return;
+  const answer = async (verdict: Verdict, detail?: Record<string, unknown>, runId?: string) => {
+    const id = runId ?? run?.run_id;
+    if (!id) return;
     setBusy(true);
     try {
-      const r = await answerTest(session.getState().config(), run.run_id, verdict, detail);
+      const r = await answerTest(session.getState().config(), id, verdict, detail);
       setError(null);
       setRun(null);
       await load();
@@ -159,19 +160,55 @@ export function AdaptTestScreen({dev}: {dev: DeviceId}) {
             <ActivityIndicator color={c.inkMuted} style={styles.loading} />
           ) : (
             tests.map(t => (
-              <Pressable
-                key={t.id}
-                accessibilityRole="button"
-                accessibilityLabel={`${t.name}，${STATE_TEXT[t.state]}`}
-                android_ripple={{color: 'transparent'}}
-                disabled={busy}
-                onPress={() => begin(t)}>
-                <Row
-                  label={STATE_TEXT[t.state]}
-                  value={`${t.name}${t.required ? '（必做）' : ''} · 打 ${t.jobs_needed} 页`}
-                  tone={t.state === 'failed' ? 'accent' : t.state === 'untested' ? 'normal' : 'muted'}
-                />
-              </Pressable>
+              <View key={t.id}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`${t.name}，${STATE_TEXT[t.state]}`}
+                  android_ripple={{color: 'transparent'}}
+                  disabled={busy || t.state === 'running'}
+                  onPress={() => begin(t)}>
+                  <Row
+                    label={STATE_TEXT[t.state]}
+                    value={`${t.name}${t.required ? '（必做）' : ''} · 打 ${t.jobs_needed} 页`}
+                    tone={
+                      t.state === 'failed' ? 'accent'
+                      : t.state === 'running' ? 'accent'
+                      : t.state === 'untested' ? 'normal'
+                      : 'muted'
+                    }
+                  />
+                </Pressable>
+                {/* 一轮开着会让之后所有测试都撞 409。App 重启后不知道自己
+                    开过哪一轮，所以出口必须由服务端把 run_id 带回来。 */}
+                {t.state === 'running' && !!t.run_id && (
+                  <View style={styles.actions}>
+                    <Text style={[type.label, styles.note, {color: c.inkMuted}]}>
+                      这一轮还开着，会挡住其它测试。纸已经打完就回到它继续；
+                      不打算测了就中止。
+                    </Text>
+                    <Button
+                      title="回到这一轮"
+                      disabled={busy}
+                      onPress={() =>
+                        setRun({
+                          run_id: t.run_id!,
+                          jobs_needed: t.jobs_needed,
+                          variant: {},
+                          baseline_ok: true,
+                          instruction: `这一轮共 ${t.jobs_needed} 页。看看实际出了几张纸。`,
+                          test: t.id,
+                        })
+                      }
+                    />
+                    <Button
+                      title="中止这一轮"
+                      variant="quiet"
+                      disabled={busy}
+                      onPress={() => answer('aborted', undefined, t.run_id)}
+                    />
+                  </View>
+                )}
+              </View>
             ))
           )}
         </Section>
