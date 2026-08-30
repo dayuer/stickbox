@@ -775,8 +775,7 @@ SoftAP 读到的 MAC。没有这个端点，App 的设备列表只能存在手�
   "device": {
     "dev": "f412fa87c9e0",
     "online": true,
-    "seen": 1756500000,
-    "state": "ready",
+    "serial": "CNB9K1P2X4",
     "prn": {"code":10001,"display":"Ready","online":true,"asleep":false,
             "paper_out":false,"error":false}
   },
@@ -790,6 +789,9 @@ SoftAP 读到的 MAC。没有这个端点，App 的设备列表只能存在手�
 
 最多返回最近 15 件作业。设备从未上线过时 `device.online` 为 `false`，
 `prn` 为 `null`。
+
+`device` 里**只保证 `dev`、`online`、`prn` 三个字段**。`serial` 是当前插着的
+打印机。曾经写过 `seen` 和 `state`，服务端并不返回它们——判在线看 `online`。
 
 ### 4.7 `GET /api/device/{dev}/printer` —— 打印机完整信息
 
@@ -805,17 +807,33 @@ SoftAP 读到的 MAC。没有这个端点，App 的设备列表只能存在手�
     "make": "HP", "model": "HP Laser MFP 136a",
     "cmd": "URF,PCL,PJL,PWGRaster",
     "urf_caps": "CP1,IS1-4-5-19,MT1-2-3-4-5-6,RS600,V1.4,W8",
-    "proto": 2,
     "first_seen": 1756400000, "last_seen": 1756500000
   },
   "profile": {
-    "uel_job_end": true, "uel_wake": false, "wake_delay_ms": 0,
-    "iface_cycle": false, "unidir": false,
+    "rev": 2,
+    "serial": "CNB9K1P2X4",
+    "src": "model",
+    "flags": {"unidir": false, "pjl_ok": true},
+    "hooks": {
+      "job_begin": [{"op": "iface_reset"}],
+      "job_end": [{"op": "send_hex", "data": "1b252d313233343558", "required": true}],
+      "wake": [{"op": "send_hex", "data": "1b252d313233343558"}, {"op": "delay_ms", "ms": 300}]
+    },
     "margins_mm": [4, 4, 4, 4],
-    "src": "model", "votes": 3, "disputed": false
+    "votes": 3, "disputed": false
   }
 }
 ```
+
+**`profile` 就是 3.7b 那份档案的形状——一份可编排的动作序列，不是参数表。**
+
+这一节曾经画成 `{"uel_job_end": true, "uel_wake": false, ...}` 那样的布尔开关
+表，那是 v1 的遗留：3.7b 把档案改成动作序列之后，这里没跟着改，文档自己前后
+矛盾了几个版本。App 照那个形状写类型，结果详情页对 `undefined` 调 `.join`
+直接崩在真机上。
+
+`margins_mm`、`votes`、`disputed` 是服务端另存的元信息，**可能不返回**。
+`printer.proto` 同理。解析时都要当可选处理。
 
 `profile.src` 告诉用户这份配置的可信度：
 
