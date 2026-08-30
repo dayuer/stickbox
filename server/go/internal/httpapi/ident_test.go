@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/dayuer/stickbox/server/go/internal/profile"
@@ -146,5 +148,55 @@ func TestPrinterEndpoint404WithoutIdent(t *testing.T) {
 	enroll(t, h, token, "f412fa87c9e0")
 	if rr := get(h, "/api/device/f412fa87c9e0/printer", bearer(token)); rr.Code != 404 {
 		t.Errorf("= %d，期望 404", rr.Code)
+	}
+}
+
+// 真机上报的第 0 层档案。样本直接取自 /opt/stickbox/idents/，不是编的。
+//
+// 这条测试是为一个线上故障写的：parseIdent 一度只找顶层 serial 和
+// printer_class.serial，而真实结构把序列号放在 usb.serial。结果每次第 0 层
+// 上报都判「没有序列号」跳过建档，打印机建不了档，App 里 make/model 一直
+// 是空串——而日志只说「跳过建档」，看不出是字段路径错了。
+func TestParseIdentRealHP136a(t *testing.T) {
+	raw, err := os.ReadFile("testdata/ident-hp136a-base.json")
+	if err != nil {
+		t.Skipf("没有真机样本：%v", err)
+	}
+	p, ok := parseIdent(raw)
+	if !ok {
+		t.Fatal("真机样本解析不出打印机——序列号找不到就建不了档")
+	}
+	if p.Serial != "CNB1S5N3S7" {
+		t.Errorf("serial = %q，期望 CNB1S5N3S7（它在 usb.serial 下）", p.Serial)
+	}
+	if p.VID != "03F0" || p.PID != "F22A" {
+		t.Errorf("vid/pid = %q/%q，期望 03F0/F22A（usb 下是带 0x 前缀的写法）", p.VID, p.PID)
+	}
+	if p.Make == "" {
+		t.Error("make 是空的")
+	}
+	// 型号取 IEEE-1284 设备 ID 里的 MDL——打印机的自述才是真相，
+	// 网上的型号资料不是。
+	if !strings.Contains(p.Model, "HP Laser MFP") {
+		t.Errorf("model = %q，期望含 HP Laser MFP", p.Model)
+	}
+	// CMD 决定 App 能不能发 URF。取不到等于不知道这台机器认什么格式。
+	if !strings.Contains(p.CMD, "URF") {
+		t.Errorf("cmd = %q，期望含 URF", p.CMD)
+	}
+}
+
+func TestDevIDField(t *testing.T) {
+	const id = "MFG:HP;CMD:SPL,URF,FWV;MDL:HP Laser MFP 131 133 135-138;CLS:PRINTER;"
+	for _, c := range []struct{ key, want string }{
+		{"MFG", "HP"},
+		{"CMD", "SPL,URF,FWV"},
+		{"MDL", "HP Laser MFP 131 133 135-138"},
+		{"mdl", "HP Laser MFP 131 133 135-138"}, // 大小写不敏感
+		{"NOPE", ""},
+	} {
+		if got := devIDField(id, c.key); got != c.want {
+			t.Errorf("devIDField(%q) = %q，期望 %q", c.key, got, c.want)
+		}
 	}
 }
