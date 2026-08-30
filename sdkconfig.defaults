@@ -47,3 +47,27 @@ CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
 # 曾经在这里抬 mDNS 任务优先级来对抗 iOS 轮询把它饿死。云架构下已不再编译
 # mDNS 组件（dependencies.lock 里没有它），那两行是空配置，已删除。
 # 那次教训本身记在 docs/HANDOFF-cloud-print.md 第 2 节。
+
+# ── TLS 内存：两条连接同时开着时的悬崖 ──
+#
+# 实测（2026-08-30，f412fa87c9e0 真机，服务端 /api/status 的 heap 字段）：
+#   空闲          51080
+#   取件过程中     9284   ← 最低点
+#   取件结束后    42704 → 51544
+#
+# 也就是说一条 HTTPS 连接吃掉约 42KB，而 MQTT 那条 TLS 始终开着。剩 9KB
+# 时 mbedtls 分不到握手用的大数缓冲，**失败形态伪装成证书错误**——服务端
+# 日志里是 `tls: access denied` / `connection reset by peer`，现场会一路
+# 往证书和时钟上查，方向完全错。cloud_client.c 里那句「9.8KB 直接报
+# PK verify failed，其实是 mbedtls 分不到大数缓冲」说的是同一件事。
+#
+# DYNAMIC_BUFFER 让 TLS 在空闲时把收发缓冲还回去（16KB+4KB 一条）。
+# MQTT 那条连接 99% 的时间在空闲，正好是取件时最该让出来的那部分。
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
+
+# ⚠ 但 CA 证书不能跟着一起释放。
+# 它默认跟随 DYNAMIC_FREE_CONFIG_DATA 打开，而释放之后 ssl 对象再次握手
+# 必须重新注册 CA——MQTT 断线重连正是「同一个对象再次握手」。真出问题
+# 是设备永久连不上云端，比省这 1~2KB 严重得多。
+CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT=n
