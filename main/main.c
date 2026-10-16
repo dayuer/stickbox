@@ -3,7 +3,8 @@
  * 文档流不落地、不渲染。
  *
  * 注意：本地 IPP 服务器 + mDNS 那一版已经废弃（见 docs/HANDOFF-cloud-print.md
- * 第 2 节）。设备现在不监听任何端口，只有一条出站长连接。
+ * 第 2 节）。打印只走一条出站长连接；唯一监听的端口是 usage_http.c 的
+ * 用量上报接口（屏幕显示 Claude 用量用，限 2 个连接）。
  */
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -21,6 +22,7 @@
 #include "provision.h"
 #include "printer_profile.h"
 #include "lcd_ui.h"
+#include "usage_http.h"
 #include "esp_system.h"
 
 static const char *TAG = "bridge";
@@ -108,6 +110,7 @@ static void services_task(void *arg)
     xEventGroupWaitBits(s_evt, EVT_GOT_IP, pdFALSE, pdFALSE, portMAX_DELAY);
     extern void netlog_start(void);
     netlog_start();
+    usage_http_start();
 
     uint8_t mac[6];
     esp_wifi_get_mac(WIFI_IF_STA, mac);

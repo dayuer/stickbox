@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 每 10 分钟把 Claude 订阅用量推到 StickBox 屏幕。
+     用 launchd 不用 cron：cron 跑在后台会话里读不到登录钥匙串，claude 的 OAuth 凭据在那里。
+     安装：cp 到 ~/Library/LaunchAgents/ 后 launchctl bootstrap gui/$(id -u) <plist>
+     日志：~/Library/Logs/stickbox-usage.log -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.stickbox.claude-usage</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/liyuqing/sproot/esp-airprint/tools/claude-usage-push.sh</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>STICKBOX_HOST</key>
+        <string>192.168.3.14</string>
+    </dict>
+    <key>StartInterval</key>
+    <integer>600</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/liyuqing/Library/Logs/stickbox-usage.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/liyuqing/Library/Logs/stickbox-usage.log</string>
+</dict>
+</plist>

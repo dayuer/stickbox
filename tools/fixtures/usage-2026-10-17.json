@@ -1,0 +1,11 @@
+{
+  "now": 1792177433,
+  "five_hour": {
+    "used_percentage": 2,
+    "resets_at": 1792192800
+  },
+  "seven_day": {
+    "used_percentage": 34,
+    "resets_at": 1792591200
+  }
+}
