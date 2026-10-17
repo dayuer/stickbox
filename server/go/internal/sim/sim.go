@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -728,17 +727,11 @@ func (d *Device) pushToTV(ctx context.Context) {
 	if d.stream == nil || d.cfg.TV == "" {
 		return
 	}
-	ip, err := localIPToward(d.cfg.TV)
+	u, err := buildStreamURL(d.stream.Addr(), d.cfg.TV, localIPToward)
 	if err != nil {
-		d.logf("找不到本机地址：%v", err)
+		d.logf("找不到电视可达的本机地址：%v", err)
 		return
 	}
-	_, port, err := net.SplitHostPort(d.stream.Addr())
-	if err != nil {
-		d.logf("流地址异常：%v", err)
-		return
-	}
-	u := fmt.Sprintf("http://%s:%s/live.avi", ip, port)
 	if err := pushDLNA(ctx, d.cfg.TV, u); err != nil {
 		d.logf("DLNA 推送失败：%v", err)
 		return

@@ -324,12 +324,42 @@ func (s *streamServer) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// localIPToward 返回电视能访问到的本机地址。
+// localIPToward 返回「连电视时本机用的那个局域网 IP」。
+// 不能用监听地址（":8091" / "[::]:8091" 对电视不可达）。
 func localIPToward(host string) (string, error) {
-	conn, err := net.Dial("udp", net.JoinHostPort(host, "9"))
+	conn, err := net.Dial("udp", net.JoinHostPort(host, "1900"))
 	if err != nil {
 		return "", err
 	}
 	defer conn.Close()
-	return conn.LocalAddr().(*net.UDPAddr).IP.String(), nil
+	ip := conn.LocalAddr().(*net.UDPAddr).IP
+	if !usableLANIP(ip) {
+		return "", fmt.Errorf("sim: 连电视时拿到的本机地址不可用：%v", ip)
+	}
+	return ip.String(), nil
+}
+
+func usableLANIP(ip net.IP) bool {
+	return ip != nil && !ip.IsUnspecified() && !ip.IsLoopback()
+}
+
+// buildStreamURL 用局域网 IP + 监听端口拼直播地址；主机名永远取
+// 「连电视时的本机 IP」，不从 listenAddr 里取。
+func buildStreamURL(listenAddr, tv string, ipFor func(string) (string, error)) (string, error) {
+	ipStr, err := ipFor(tv)
+	if err != nil {
+		return "", err
+	}
+	ip := net.ParseIP(ipStr)
+	if !usableLANIP(ip) {
+		return "", fmt.Errorf("sim: 无效的局域网地址 %q", ipStr)
+	}
+	_, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return "", fmt.Errorf("sim: 监听地址 %q 不合法：%w", listenAddr, err)
+	}
+	if port == "" {
+		return "", fmt.Errorf("sim: 监听地址缺少端口：%q", listenAddr)
+	}
+	return "http://" + net.JoinHostPort(ip.String(), port) + "/live.avi", nil
 }
