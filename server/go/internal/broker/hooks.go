@@ -9,6 +9,7 @@ import (
 	"github.com/mochi-mqtt/server/v2/packets"
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
+	"github.com/dayuer/stickbox/server/go/internal/metrics"
 )
 
 // Router 是 broker 对在线状态表的窄依赖：收到设备心跳就记一笔。
@@ -83,6 +84,7 @@ func (h *Hook) OnConnectAuthenticate(cl *mqtt.Client, pk packets.Packet) bool {
 			return false
 		}
 		if !h.ids.admit(cl, id) {
+			metrics.IncPendingTakeoverRejected()
 			slog.Warn("pending 连接试图顶掉在线设备", "dev", id.Dev, "remote", cl.Net.Remote)
 			return false
 		}

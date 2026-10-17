@@ -10,6 +10,7 @@ import (
 func TestRenderText(t *testing.T) {
 	m := New()
 	m.SetGaugeProviders(func() int { return 3 }, func() int { return 2 })
+	m.SetFramePendingProvider(func() int { return 4 })
 	m.IncUsageReport()
 	m.IncUsageReport()
 	m.ObserveRender(150*time.Millisecond, true)
@@ -18,6 +19,7 @@ func TestRenderText(t *testing.T) {
 	m.IncPairOK()
 	m.IncPairFail()
 	m.IncRateLimited("reg_dev")
+	m.IncPendingTakeoverRejected()
 
 	rr := httptest.NewRecorder()
 	m.Handler().ServeHTTP(rr, httptest.NewRequest("GET", "/metrics", nil))
@@ -28,6 +30,7 @@ func TestRenderText(t *testing.T) {
 	for _, want := range []string{
 		`stickbox_online_devices 3`,
 		`stickbox_mqtt_connections 2`,
+		`stickbox_frame_pending_users 4`,
 		`stickbox_usage_reports_total 2`,
 		`stickbox_render_failures_total 1`,
 		`stickbox_render_seconds_count 2`,
@@ -37,6 +40,7 @@ func TestRenderText(t *testing.T) {
 		`stickbox_pair_total{result="ok"} 1`,
 		`stickbox_pair_total{result="fail"} 1`,
 		`stickbox_rate_limited_total{limiter="reg_dev"} 1`,
+		`stickbox_pending_takeover_rejected_total 1`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("缺少指标行 %q\n%s", want, body)

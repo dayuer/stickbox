@@ -122,6 +122,7 @@ func serve(cfg *config.Config) error {
 	// 指标只监听回环地址，不经过 nginx。online / mqtt 连接数在 scrape 时现查。
 	if cfg.MetricsAddr != "" {
 		metrics.Default.SetGaugeProviders(reg.OnlineCount, br.ClientCount)
+		metrics.Default.SetFramePendingProvider(fs.PendingUsers)
 		msrv, err := metrics.Default.Serve(cfg.MetricsAddr)
 		if err != nil {
 			br.Close()

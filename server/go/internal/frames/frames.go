@@ -174,6 +174,13 @@ func New(root string, st Store, us Usage, pub Publisher, b Builder, opt Options)
 	return s, nil
 }
 
+// PendingUsers 是当前有 worker 在排队/防抖/渲染的用户数。
+func (s *Service) PendingUsers() int {
+	s.workersMu.Lock()
+	defer s.workersMu.Unlock()
+	return len(s.workers)
+}
+
 // Close 停掉所有 worker。服务退出时调用。
 func (s *Service) Close() {
 	s.cancel()

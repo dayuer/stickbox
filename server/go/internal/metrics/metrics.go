@@ -54,8 +54,11 @@ type Registry struct {
 	pairFail     uint64
 	rateLimited  map[string]uint64
 
+	pendingTakeoverRejected uint64
+
 	onlineDevices func() int
 	mqttClients   func() int
+	framePending  func() int
 }
 
 var Default = New()
@@ -72,6 +75,13 @@ func New() *Registry {
 func (m *Registry) SetGaugeProviders(online, mqtt func() int) {
 	m.mu.Lock()
 	m.onlineDevices, m.mqttClients = online, mqtt
+	m.mu.Unlock()
+}
+
+// SetFramePendingProvider 接上「帧渲染排队/防抖中的用户数」。
+func (m *Registry) SetFramePendingProvider(f func() int) {
+	m.mu.Lock()
+	m.framePending = f
 	m.mu.Unlock()
 }
 
@@ -99,6 +109,13 @@ func (m *Registry) ObserveFrameBytes(n int) {
 func (m *Registry) IncPairOK()   { m.mu.Lock(); m.pairOK++; m.mu.Unlock() }
 func (m *Registry) IncPairFail() { m.mu.Lock(); m.pairFail++; m.mu.Unlock() }
 
+// IncPendingTakeoverRejected：pending 密钥试图顶掉在线 active 设备被拒。
+func (m *Registry) IncPendingTakeoverRejected() {
+	m.mu.Lock()
+	m.pendingTakeoverRejected++
+	m.mu.Unlock()
+}
+
 func (m *Registry) IncRateLimited(limiter string) {
 	m.mu.Lock()
 	m.rateLimited[limiter]++
@@ -112,6 +129,7 @@ func ObserveFrameBytes(n int)                { Default.ObserveFrameBytes(n) }
 func IncPairOK()                             { Default.IncPairOK() }
 func IncPairFail()                           { Default.IncPairFail() }
 func IncRateLimited(limiter string)          { Default.IncRateLimited(limiter) }
+func IncPendingTakeoverRejected()            { Default.IncPendingTakeoverRejected() }
 
 // Handler 输出 Prometheus 文本格式。
 func (m *Registry) Handler() http.Handler {
@@ -131,19 +149,25 @@ func (m *Registry) renderText() []byte {
 	defer m.mu.Unlock()
 
 	var b strings.Builder
-	online, mqtt := 0, 0
+	online, mqtt, framePending := 0, 0, 0
 	if m.onlineDevices != nil {
 		online = m.onlineDevices()
 	}
 	if m.mqttClients != nil {
 		mqtt = m.mqttClients()
 	}
+	if m.framePending != nil {
+		framePending = m.framePending()
+	}
 
 	writeGauge(&b, "stickbox_online_devices", "最近 120 秒内发过心跳的设备数", online)
 	writeGauge(&b, "stickbox_mqtt_connections", "当前 MQTT 连接数（不含服务端内联客户端）", mqtt)
+	writeGauge(&b, "stickbox_frame_pending_users", "帧渲染排队或防抖中的用户数", framePending)
 
 	writeCounter(&b, "stickbox_usage_reports_total", "成功落库的用量上报次数", m.usageReports)
 	writeCounter(&b, "stickbox_render_failures_total", "看板渲染失败次数", m.renderFails)
+	writeCounter(&b, "stickbox_pending_takeover_rejected_total",
+		"pending 密钥试图顶掉在线 active 设备被拒的次数", m.pendingTakeoverRejected)
 	writeHistogram(&b, "stickbox_render_seconds", "一次看板渲染的耗时", m.render)
 	writeHistogram(&b, "stickbox_frame_package_bytes", "一次帧包（底帧+图集+索引）的字节数", m.frames)
 
