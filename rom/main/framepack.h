@@ -31,10 +31,21 @@
  * 全部多字节字段用大端，和 T13c 的 SBF1 一致。 */
 #define FP_SLOT_SIZE   (256 * 1024)
 #define FP_SLOT_HEADER 32
-#define FP_SLOT_COUNT  6
+/* 槽数在运行时从 frames 分区的实际大小算（见 framepack_slots）。
+ * 一份固件要能同时跑在 8MB 和 16MB 两种分区表上：模组一旦中途换过，
+ * 机群就是混的，槽数写成编译期常量会让其中一半白白浪费或者直接拒载。
+ * FP_MIN_SLOTS 是能开工的下限，FP_MAX_SLOTS 只用来定静态数组上界。 */
+#define FP_MIN_SLOTS   2
+#define FP_MAX_SLOTS   64
 /* 一个帧包最大能有多少字节。服务端的构建上限必须 ≤ 这个数，否则会产出
  * 没有任何设备存得下的帧包。 */
 #define FP_MAX_PACK    (FP_SLOT_SIZE - FP_SLOT_HEADER)
+
+/* 一个主题占几个槽做磨损均衡。底帧只在数据变化时重写（约 144 次/天），
+ * 摊到 3 个槽是 48 次/槽/天，10 万次擦写约 5.7 年。
+ * 设备能同时驻留的主题数 = framepack_slots() / FP_SLOTS_PER_THEME，
+ * 由设备上报给服务端——服务端不该假设机群里的 flash 有多大。 */
+#define FP_SLOTS_PER_THEME 3
 
 #define FP_SLOTS      4    /* HH:MM 四个数字槽 */
 #define FP_BAND_ROWS 12    /* 时钟带占 12 个 MCU 行 */
