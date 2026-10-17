@@ -1,7 +1,8 @@
 # stickboxd 部署
 
-StickBox 服务端的部署说明。项目方向与接口约定见
-[`docs/PLAN.md`](../docs/PLAN.md)。
+StickBox 服务端的部署说明。项目方向见
+[`docs/PLAN.md`](../docs/PLAN.md)；HTTP / MQTT 接口约定见
+[`docs/API.md`](../docs/API.md)。
 
 **部署物只有两样：一个 Go 二进制和一个 sqlite 文件。**
 没有手机号、短信服务商和 App；设备靠配对码绑定到 agent。
@@ -192,7 +193,7 @@ openssl s_client -connect mqtt.stickbox.ai:443 -servername mqtt.stickbox.ai </de
 ```bash
 curl -s -X POST https://mqtt.stickbox.ai/api/device/register \
   -H 'Content-Type: application/json' -d '{"dev":"f412fa87c9e0"}'
-# → {"token":"...","code":"123456","expires_at":...}
+# → {"token":"...","code":"123456","expires_at":...,"now":...,"pending":true}
 curl -s -X POST https://mqtt.stickbox.ai/api/agent/pair \
   -H 'Content-Type: application/json' -d '{"code":"123456","name":"test"}'
 # → {"dev":"f412fa87c9e0","user_id":"...","token":"..."}

@@ -36,7 +36,7 @@
 | T3 | 固件：删除打印，接入 DLNA 推流引擎与 MQTT 用量 | esp | T0 | 完成 |
 | T4 | 固件：按设计稿渲染 1080p 看板（多页轮播） | esp | T3 | **搁置**，见 T13 |
 | T5 | 端到端联调、上板与电视验收 | 整合 | T1–T4 | 待办 |
-| T6 | 文档收尾：接口文档重写、删除 `probe/`、交接文档 | esp + 整合 | T5 | 待办 |
+| T6 | 文档收尾：接口文档重写、删除 `probe/`、交接文档 | esp + 整合 | T5 | 进行中：接口文档部分待审计 |
 | T7 | 配对码绑定（无手机号）：设备自注册出码，agent 输码配对；删除短信与 App 角色 | esp | T1、T3 | 完成 |
 | T8 | 固件内存压缩（T4 动态条带的前提） | esp | T7 | 完成 |
 | T9 | OTA 双槽与签名升级通道 | esp（M0 会话） | T7 | 进行中 |
@@ -136,8 +136,14 @@ agent 上报 → 服务端 → MQTT → 板子 → 电视，全链路；断网 /
 
 ### T6 文档收尾
 
-`docs/API-cloud-print.md` 改写为只含账号、设备、MQTT、用量与 agent 的接口文档（改名）；
-`docs/HANDOFF-usb-tv-probe.md` 补 DLNA 结论；删除 `probe/`；`rom/README.md` 写烧录与调试要点。
+**接口文档部分（T6a，待审计）**：原 `docs/API-cloud-print.md` 已改名为
+[`docs/API.md`](API.md)，按 T7 之后的真实接口重写：设备注册与配对码、MQTT 主题与 ACL、
+agent 配对 / 解绑 / 设备 / 用量、错误与限流、部署拓扑；打印、短信、App 内容已全部删除。
+`server/go/internal/apidoc/apidoc_test.go` 在 `go test` 中比对文档端点表与
+`server/go/internal/httpapi/api.go` 的路由表，防止文档漂移。
+
+**其余部分（随 T5）**：`docs/HANDOFF-usb-tv-probe.md` 补 DLNA 结论；删除 `probe/`；
+`rom/README.md` 写烧录与调试要点。
 
 ### T7 配对码绑定（无手机号、无短信）
 

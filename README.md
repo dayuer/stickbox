@@ -30,7 +30,7 @@
 
 - [`docs/PLAN.md`](docs/PLAN.md) — **项目计划与任务看板**（先看这个）
 - [`docs/design/`](docs/design/) — 1080p 电视看板高保真设计稿（规格以其 README 为准）
-- [`docs/API-cloud-print.md`](docs/API-cloud-print.md) — 设备 / 服务端接口（打印部分待删，见 PLAN T1）
+- [`docs/API.md`](docs/API.md) — HTTP / MQTT 接口：设备注册与配对码、agent 配对、用量上报与推送
 - [`docs/HANDOFF-usb-tv-probe.md`](docs/HANDOFF-usb-tv-probe.md) — 电视接入的实验记录（U 盘方案为何放弃、三星电视能力）
 - [`server/DEPLOY.md`](server/DEPLOY.md) — 服务端部署
 
