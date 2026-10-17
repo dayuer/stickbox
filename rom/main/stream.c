@@ -52,6 +52,13 @@ static int s_band_page[2] = { -1, -1 };
 /* 帧包模式（T13b）。底帧来自 framepack 的 flash 映射地址，推流时直接从
  * 那里发，整帧从不在 RAM 里拼起来。 */
 static bool             s_fp_mode;
+/* 索引按**值**保存，不存调用方的指针。
+ *
+ * 踩过一次：framepack 的 activate() 里索引是个局部变量，把它的地址交给
+ * 这里，函数一返回就是悬垂指针。而且即使调用方改用静态变量，它在原地
+ * 覆盖内容的那一刻，正在拼段的那一帧会读到半新半旧的索引。
+ * 拷贝约 1.5KB，换掉整整一类生命周期问题，很划算。 */
+static fp_index_t       s_fp_ix_buf;
 static const fp_index_t *s_fp_ix;
 static const uint8_t    *s_fp_base;
 static size_t            s_fp_base_len;
@@ -120,7 +127,9 @@ void stream_use_framepack(const struct fp_index *ix, const uint8_t *base, size_t
 {
     fp_wait_idle();
     xSemaphoreTake(s_mx, portMAX_DELAY);
-    s_fp_ix = ix; s_fp_base = base; s_fp_base_len = base_len;
+    s_fp_ix_buf = *ix;          /* 按值拷贝，见 s_fp_ix_buf 的注释 */
+    s_fp_ix = &s_fp_ix_buf;
+    s_fp_base = base; s_fp_base_len = base_len;
     s_fp_mode = true;
     /* 旧的带是给预置页拼的，在帧包模式下毫无意义。不作废的话，第一帧
      * 会拿预置页的带去配底帧，发出去是花屏。
