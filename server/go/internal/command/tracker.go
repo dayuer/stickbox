@@ -75,6 +75,9 @@ type Tracker struct {
 	presence Presence
 	now      func() time.Time
 
+	// pubMu 串行化「决定 + 发布」。见 Send 里的说明。
+	pubMu sync.Mutex
+
 	mu   sync.Mutex
 	pend map[string]*pending // cid -> 未确认的指令
 	last map[string]Outcome  // dev -> 最近一条的结局
@@ -116,35 +119,27 @@ func (t *Tracker) Send(dev, topic string, payload []byte, retain bool) (string, 
 		return "", err
 	}
 
+	// pubMu 把「决定发什么」和「真的发出去」绑成一个不可分割的动作，
+	// sweep 的重投也走同一把锁。否则会这样翻车：sweep 在锁内挑中一条旧
+	// 指令、解锁、还没发；这时 Send 作废了它并发出新指令；sweep 接着把
+	// 旧 payload 发出去——pair 是 retain=1，broker 上的保留消息就被旧状态
+	// 盖了，设备重连后拿到的是旧状态。
+	//
+	// 发布是进程内调用（mochi 内嵌 broker），不是网络 IO，拿着锁不亏。
+	t.pubMu.Lock()
+	defer t.pubMu.Unlock()
+
 	now := t.now()
 	t.mu.Lock()
-	if t.noAck[dev] {
-		// 已知这台不回 ACK：带上 cid 照常发（新固件刷上去之后下一条就能
-		// 恢复跟踪），但不记待确认、不重投、不打放弃日志。
-		t.mu.Unlock()
-		if err := t.pub.PublishRaw(topic, withCID, retain); err != nil {
-			return "", err
+	// 已知不回 ACK 的设备（旧固件）：带上 cid 照常发，但不记待确认、不重投。
+	// 注意作废仍然要做——漏掉的话会出现「pair(A) 还挂着重投，设备被标成
+	// noAck 之后 pair(C) 只发一次」，最后设备应用的是旧的 A。
+	tracked := !t.noAck[dev]
+	if tracked {
+		t.pend[cid] = &pending{
+			dev: dev, topic: topic, payload: withCID, retain: retain,
+			tries: 1, next: now.Add(retryBase), deadline: now.Add(pendingTTL),
 		}
-		return cid, nil
-	}
-	// 同一 (dev, topic) 上还没确认的旧指令，就此作废。
-	//
-	// usage 和 pair 都是「只要最新状态」的语义，而旧记录如果继续重投，就会
-	// 和新记录并行投递，map 遍历顺序又是随机的——设备离线时先 pair 再
-	// unpair，上线后两条一起重投，设备最终应用的可能是 paired:true。用来
-	// 防分叉的机制自己制造分叉，那就本末倒置了。
-	for oldCID, p := range t.pend {
-		if p.dev == dev && p.topic == topic {
-			delete(t.pend, oldCID)
-			t.last[dev] = Outcome{
-				CID: oldCID, Topic: p.topic, OK: false, Err: "superseded",
-				Tries: p.tries, Finished: now,
-			}
-		}
-	}
-	t.pend[cid] = &pending{
-		dev: dev, topic: topic, payload: withCID, retain: retain,
-		tries: 1, next: now.Add(retryBase), deadline: now.Add(pendingTTL),
 	}
 	t.mu.Unlock()
 
@@ -154,8 +149,33 @@ func (t *Tracker) Send(dev, topic string, payload []byte, retain bool) (string, 
 		t.mu.Unlock()
 		return "", err
 	}
+
+	// 发布成功之后才作废旧的。反过来的话，发布失败时旧记录已经删了、新记录
+	// 又回滚，这条指令就整个丢了，两端状态照样分叉。
+	t.supersede(dev, topic, cid, now)
 	t.nudge()
 	return cid, nil
+}
+
+// supersede 把同一 (dev, topic) 下除 keep 之外的未确认记录结案。
+//
+// usage 和 pair 都是「只要最新状态」的语义：旧记录继续重投就会和新记录
+// 并行投递，而 map 遍历顺序是随机的——设备离线时先 pair 再 unpair，上线后
+// 两条一起重投，设备最终应用的可能是 paired:true。用来防分叉的机制自己
+// 制造分叉，本末倒置。
+func (t *Tracker) supersede(dev, topic, keep string, now time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for oldCID, p := range t.pend {
+		if oldCID == keep || p.dev != dev || p.topic != topic {
+			continue
+		}
+		delete(t.pend, oldCID)
+		t.last[dev] = Outcome{
+			CID: oldCID, Topic: p.topic, OK: false, Err: "superseded",
+			Tries: p.tries, Finished: now,
+		}
+	}
 }
 
 // Ack 处理设备回执。ok=false 是永久失败（设备刻意不应用，重投还会是同样
@@ -322,7 +342,21 @@ func (t *Tracker) sweep() {
 		}
 	}
 	for _, j := range jobs {
-		if err := t.pub.PublishRaw(j.p.topic, j.p.payload, j.p.retain); err != nil {
+		// 和 Send 共用 pubMu，并在发布前再确认这条记录还在待确认表里。
+		// 从上面解锁到这里之间，Send 可能已经把它作废并发了新指令——那时
+		// 再把旧 payload 发出去，retain=1 的 pair 就会被旧状态盖回去。
+		t.pubMu.Lock()
+		t.mu.Lock()
+		cur, still := t.pend[j.cid]
+		t.mu.Unlock()
+		if !still || cur != j.p {
+			t.pubMu.Unlock()
+			slog.Debug("重投前发现指令已被取代，跳过", "dev", j.p.dev, "cid", j.cid)
+			continue
+		}
+		err := t.pub.PublishRaw(j.p.topic, j.p.payload, j.p.retain)
+		t.pubMu.Unlock()
+		if err != nil {
 			slog.Warn("重投失败", "dev", j.p.dev, "topic", j.p.topic, "err", err)
 			continue
 		}

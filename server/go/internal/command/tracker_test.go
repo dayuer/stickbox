@@ -395,3 +395,136 @@ func TestOutcomeCarriesCID(t *testing.T) {
 		t.Errorf("Outcome.CID = %q，期望 %q", o.CID, cid)
 	}
 }
+
+// —— 审计第二轮：作废机制的两个漏洞 ——
+
+// noAck 分支也必须作废旧指令。
+// 场景：pair(A) 还挂着重投 → 设备因 usage 连丢被标成 noAck → 发 pair(C)
+// 只发一次不跟踪 → A 照常重投，设备最后应用的是旧的 A。
+func TestNoAckDeviceStillSupersedes(t *testing.T) {
+	tr, pub, pres, _, clock := newTracker(t)
+	pres.set("d", true)
+
+	// 先挂一条 pair。
+	tr.Send("d", "printer/d/pair", []byte(`{"paired":true}`), true)
+	// 再用 usage 把这台设备熬成 noAck。
+	tr.Send("d", "printer/d/usage", []byte(`{"now":1}`), false)
+	for i := 0; i < maxTries+2; i++ {
+		*clock = clock.Add(retryMax + time.Second)
+		tr.sweep()
+	}
+	tr.mu.Lock()
+	marked := tr.noAck["d"]
+	tr.mu.Unlock()
+	if !marked {
+		t.Fatal("设备没被标成 noAck，场景没复现")
+	}
+
+	// 现在发一条新的 pair：虽然不跟踪，也必须把旧的那条作废掉。
+	before := len(pub.all())
+	tr.Send("d", "printer/d/pair", []byte(`{"paired":false}`), true)
+
+	for i := 0; i < maxTries+2; i++ {
+		*clock = clock.Add(retryMax + time.Second)
+		tr.sweep()
+	}
+	for _, m := range pub.all()[before+1:] {
+		if m.topic == "printer/d/pair" {
+			t.Fatalf("新 pair 之后旧 pair 还在重投：%s", m.payload)
+		}
+	}
+}
+
+// sweep 的重投不能越过 Send：被作废的 cid 绝不能在作废它的那条之后发出。
+// pair 是 retain=1，旧 payload 后发会把 broker 上的保留消息盖回旧状态。
+func TestSupersededCommandNeverPublishedAfterSuccessor(t *testing.T) {
+	pub := &fakePub{}
+	pres := &fakePresence{online: map[string]bool{"d": true}}
+	tr := New(pub, pres)
+
+	// 真实时钟 + 极短退避，让 sweep 每次都想重投。
+	var mu sync.Mutex
+	var sends []string // 按发布顺序记下 cid
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { // 不停重投
+		defer wg.Done()
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				// 持续制造重投压力：清掉 noAck、把次数退回去、让记录立刻
+				// 到期。否则设备几轮就被熬成 noAck，之后没有任何重投，
+				// 这个测试会变成空测。
+				tr.mu.Lock()
+				delete(tr.noAck, "d")
+				for _, p := range tr.pend {
+					p.next = time.Time{}
+					p.tries = 1
+				}
+				tr.mu.Unlock()
+				tr.sweep()
+			}
+		}
+	}()
+	go func() { // 不停发新指令
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			cid, err := tr.Send("d", "printer/d/pair",
+				[]byte(`{"paired":true}`), true)
+			if err == nil {
+				mu.Lock()
+				sends = append(sends, cid)
+				mu.Unlock()
+			}
+		}
+	}()
+	go func() { time.Sleep(300 * time.Millisecond); close(done) }()
+	wg.Wait()
+
+	// 从发布记录里还原每个 cid 最后一次出现的位置。
+	order := map[string]int{}
+	for i, m := range pub.all() {
+		order[cidOf(t, m.payload)] = i
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for i := 1; i < len(sends); i++ {
+		prev, cur := sends[i-1], sends[i]
+		pi, ok1 := order[prev]
+		ci, ok2 := order[cur]
+		if ok1 && ok2 && pi > ci {
+			t.Fatalf("被取代的 %s 在取代它的 %s 之后才发出（%d > %d）",
+				prev, cur, pi, ci)
+		}
+	}
+	if len(sends) < 10 {
+		t.Fatalf("只发了 %d 条，压力不够", len(sends))
+	}
+}
+
+// 发布失败时不能把旧记录也赔进去——否则这条指令整个丢了，两端照样分叉。
+func TestFailedSendKeepsOldPending(t *testing.T) {
+	tr, pub, pres, _, _ := newTracker(t)
+	pres.set("d", true)
+	oldCID, _ := tr.Send("d", "printer/d/pair", []byte(`{"paired":true}`), true)
+
+	pub.mu.Lock()
+	pub.err = errSentinel
+	pub.mu.Unlock()
+	if _, err := tr.Send("d", "printer/d/pair", []byte(`{"paired":false}`), true); err == nil {
+		t.Fatal("应当返回发布错误")
+	}
+	if tr.Pending("d") != 1 {
+		t.Errorf("待确认 = %d，旧记录应当还在", tr.Pending("d"))
+	}
+	tr.mu.Lock()
+	_, still := tr.pend[oldCID]
+	tr.mu.Unlock()
+	if !still {
+		t.Error("发布失败却把旧记录删了，这条指令整个丢了")
+	}
+}
