@@ -1,9 +1,12 @@
+# 固件（ESP-IDF）：各工程目录下的构建产物一律不入库
 build/
 managed_components/
 sdkconfig
 sdkconfig.old
-main/wifi_creds.h
+rom/main/wifi_creds.h
+rom/main/cloud_creds.h
 nvs.bin
 nvs.csv
-main/cloud_creds.h
+.DS_Store
+__pycache__/
 server/config.json

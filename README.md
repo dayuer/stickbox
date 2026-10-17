@@ -1,75 +1,64 @@
 # StickBox
 
-用一块 **ESP32-S3-USB-OTG** 开发板，把只有 USB 口的打印机变成**可以从任何地方投递**
-的网络打印机。实测机型：**HP Laser MFP 136a**。
+把一块 ESP32-S3 插在电视的 USB 口上取电，让电视变成一块 **Claude 订阅用量看板**：
+5 小时 / 7 天两个额度窗口用了多少、按当前速度会不会提前用完，房间里任何位置一眼看清。
 
 ```
-浏览器/App ──HTTPS──▶ 云服务器 ────MQTT/TLS(信令)────▶ ESP32 ──USB──▶ 打印机
-                    (渲染成 URF)  ◀──MQTT/TLS(状态)───┘
-                         └────────HTTPS(文档流式)─────▶
+用户电脑 stickbox-agent ──agent 令牌──▶ stickboxd（Go）──MQTT──▶ ESP32 ──DLNA 1080p MJPEG──▶ 电视
+   用用户自己的 Claude 登录                 存最新用量           收用量、板上渲染
+   跑 claude -p /usage                     推给名下设备          推流给电视
 ```
 
-设备侧只做一件事：**当一根管子**。把字节搬进 USB，把打印机状态搬出来。
-它不认识文档格式、不跑 IPP、不跑 mDNS，只有一条出站长连接。
+- **数据从哪来**：Anthropic 没有开放订阅用量的第三方授权。用户电脑上的 `stickbox-agent`
+  用**用户自己的** Claude 登录执行 `claude -p /usage`（本地命令，不耗额度），带服务端签发的
+  agent 令牌上报。服务端从不接触 Claude 凭据。
+- **怎么上电视**：板子用 SSDP 找到电视、DLNA 推送一路「永不结束」的 1080p MJPEG 流，
+  换内容只是换帧——无工具条、无闪回首页。USB 只负责供电。
+- **怎么在没 PSRAM 的板子上出 1080p**：画面按 16 像素行切成可独立解码的 JPEG 片段
+  （restart marker），只重编码变化的那几条。
 
-## 为什么可行：打印机自己就懂
+## 目录
 
-关键发现来自打印机自报的 IEEE-1284 设备 ID：
+| 目录 | 是什么 | 说明 |
+|---|---|---|
+| [`rom/`](rom/) | ESP32-S3 固件（ESP-IDF 5.5） | 配网、MQTT、推流、看板渲染、板载 LCD 状态屏 |
+| [`server/`](server/) | Go 服务端 `stickboxd` 与电脑端 `stickbox-agent` | 账号、设备绑定、内嵌 MQTT broker、用量链路 |
+| [`docs/`](docs/) | 设计稿、接口文档、计划 | 见下 |
+| `probe/dlna-tv/` | **临时**：DLNA 推流的技术验证工程 | 并入 `rom/` 后删除（见 PLAN T3） |
 
-```
-MFG:HP;CMD:SPL,URF,FWV,PIC,RDS,AMPV,PWGRaster,EXT;PRN:4ZB85A;
-MDL:HP Laser MFP 131 133 135-138;CID:HPLJPCLMSMV1
-```
+## 文档
 
-`CMD:` 里有 **URF**（Apple Raster）——打印机原生就能解码，不需要闭源光栅器。
-**打印机的自述能力表才是真相，网上的型号资料不是。**
-
-## 为什么走云、不在设备上跑 AirPrint
-
-本地 AirPrint 版本真的做出来过、能打印，但有三个结构性问题：mDNS 在 iOS 高频轮询下
-被饿死、并发连接吃光内存、持续射频负载导致掉电复位。而且 **mDNS 是链路本地的，
-跨不了互联网**——「在公司打印到家里」本地方案无论怎么调优都做不到。
-
-云方案把这些一次消掉。实测设备空闲堆稳定在 72~120KB。
+- [`docs/PLAN.md`](docs/PLAN.md) — **项目计划与任务看板**（先看这个）
+- [`docs/design/`](docs/design/) — 1080p 电视看板高保真设计稿（规格以其 README 为准）
+- [`docs/API-cloud-print.md`](docs/API-cloud-print.md) — 设备 / 服务端接口（打印部分待删，见 PLAN T1）
+- [`docs/HANDOFF-usb-tv-probe.md`](docs/HANDOFF-usb-tv-probe.md) — 电视接入的实验记录（U 盘方案为何放弃、三星电视能力）
+- [`server/DEPLOY.md`](server/DEPLOY.md) — 服务端部署
 
 ## 快速上手
 
-**设备端**
+**固件**
 
 ```bash
 source ~/esp/esp-idf-v5.5/export.sh
-cp main/cloud_creds.h.example main/cloud_creds.h   # 填自己的服务器和口令
+cd rom
+cp main/cloud_creds.h.example main/cloud_creds.h   # 填服务器地址
 idf.py build
 idf.py -p /dev/cu.usbmodemXXXX flash
 ```
 
-> ⚠️ 固件一启动就把 USB 数据线切到 host 口去驱动打印机，串口会消失。
-> 第二次之后烧录都要先**按住 BOOT → 点 RST → 松开 BOOT** 进下载模式。
-
-首次上电会开一个 `StickBox-Setup-XXXX` 热点，手机连上后自动弹配网页。
-长按 MENU 键（GPIO14）开机可擦除 Wi-Fi 配置。
+首次上电开 `StickBox-Setup-XXXX` 热点，手机连上后自动弹出配网页（设备自带的网页，不需要 App）。
+开机按住 MENU 键（GPIO14）清空 Wi-Fi 配置。
 
 **服务端**
 
 ```bash
-cp server/config.example.json /opt/stickbox/config.json   # 填口令，chmod 600
-apt install fonts-noto-cjk python3-gi python3-gi-cairo gir1.2-pango-1.0 python3-cairo
-cp server/stickbox-job.service /etc/systemd/system/ && systemctl enable --now stickbox-job
+cd server/go && go test ./... && go build ./cmd/stickboxd
 ```
 
-## 特性
+部署见 [`server/DEPLOY.md`](server/DEPLOY.md)。
 
-- **离线不丢件**：设备离线时作业排队，上线自动续打，一次只派一件
-- **中文正常**：文本走 PangoCairo 排版，字体真嵌进 PDF（CUPS 的 texttopdf 和
-  Debian 的 paps 0.6.7 都会输出方框）
-- **打印机状态回传**：面板文字、缺纸、开盖、故障、休眠
-- **多机型**：渲染差异在服务端的 CUPS PPD，USB 层怪癖在固件 `printer_profile.c`
+## 协作方式
 
-## 文档
-
-**[docs/SERVER-REQUIREMENTS.md](docs/SERVER-REQUIREMENTS.md)** —— 写给服务端的硬约束清单：
-设备的内存/判活/分片/幂等要求，每条都对应一个真实故障。做服务端先读它。
-
-**[docs/HANDOFF-cloud-print.md](docs/HANDOFF-cloud-print.md)** —— 完整移交文档：
-架构决策、已验证的硬事实（URF / UEL / USB 时序 / PJL 状态）、服务端部署、
-排障手册、遗留问题。接手先读它。
+- `main` 只接受审计过的合并。每个任务一个分支 / worktree，完成后提交审计。
+- 任务、负责人、验收标准、状态都在 [`docs/PLAN.md`](docs/PLAN.md)；做完一项就更新它。
+- 固件改动必须上板验证；服务端改动 `go test ./...` 全绿才算完。
