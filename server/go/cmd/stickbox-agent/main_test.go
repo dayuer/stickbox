@@ -134,20 +134,115 @@ func TestParseResetsAt(t *testing.T) {
 	}
 }
 
-// 宿主环境里的 ANTHROPIC_* / CLAUDE_* 会污染子进程，必须滤掉。
-func TestFilterEnvStripsAnthropicAndClaude(t *testing.T) {
+// 子进程环境必须走白名单：黑名单挡不住 Claude 桌面版注入的其他变量。
+func TestFilterEnvKeepsOnlyWhitelist(t *testing.T) {
 	in := []string{
 		"PATH=/usr/bin",
+		"HOME=/Users/example",
+		"USER=example",
+		"LOGNAME=example",
+		"SHELL=/bin/zsh",
+		"TMPDIR=/var/folders/x",
+		"LANG=zh_CN.UTF-8",
+		"LC_ALL=zh_CN.UTF-8",
+		"LC_CTYPE=UTF-8",
+		"TERM=xterm-256color",
+		"HTTP_PROXY=http://proxy:8080",
+		"HTTPS_PROXY=http://proxy:8080",
+		"NO_PROXY=localhost",
+		"http_proxy=http://proxy:8080",
+		"https_proxy=http://proxy:8080",
+		"no_proxy=localhost",
+		"SSL_CERT_FILE=/etc/ssl/cert.pem",
+		"SSL_CERT_DIR=/etc/ssl/certs",
+		"NODE_EXTRA_CA_CERTS=/etc/ssl/extra.pem",
+		// 以下都必须剔掉
 		"ANTHROPIC_AUTH_TOKEN=x",
 		"ANTHROPIC_BASE_URL=https://example",
 		"CLAUDE_CODE_ENTRYPOINT=cli",
+		"CLAUDE_CODE_SSE_PORT=1234",
 		"CLAUDECODE=1",
-		"HOME=/Users/example",
+		"CLAUDE_PID=42",
+		"NODE_OPTIONS=--require=/tmp/evil.js",
+		"LD_PRELOAD=/tmp/evil.dylib",
+		"DYLD_INSERT_LIBRARIES=/tmp/evil.dylib",
+		"OPENAI_API_KEY=x",
+		"SOMETHING_ELSE=1",
 	}
 	got := filterEnv(in)
-	want := []string{"PATH=/usr/bin", "HOME=/Users/example"}
+	want := in[:19] // 前 19 个是白名单
 	if strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Errorf("filterEnv = %v，期望 %v", got, want)
+		t.Errorf("白名单过滤结果 = %v\n期望 %v", got, want)
+	}
+}
+
+// Windows 的家庭目录与系统变量名和 Unix 不同。
+func TestEnvNameAllowedWindows(t *testing.T) {
+	for _, name := range []string{"USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "ComSpec", "PATHEXT", "TEMP", "TMP"} {
+		if !envNameAllowed("windows", name) {
+			t.Errorf("windows 下应保留 %s", name)
+		}
+		if envNameAllowed("darwin", name) {
+			t.Errorf("darwin 下不该保留 %s", name)
+		}
+	}
+	if envNameAllowed("windows", "ANTHROPIC_AUTH_TOKEN") {
+		t.Error("windows 下也不该保留 ANTHROPIC_*")
+	}
+}
+
+// claude 必须在配置目录下的专用空目录里跑；HOME 里的“项目设置”就是
+// 用户的全局设置，正是 --setting-sources project 要避开的。
+func TestPrepareWorkDirIsPrivate(t *testing.T) {
+	cfgDir := t.TempDir()
+	t.Setenv("STICKBOX_CONFIG_DIR", cfgDir)
+	work, err := prepareWorkDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(work) != cfgDir || filepath.Base(work) != "work" {
+		t.Errorf("工作目录 = %s，期望 %s/work", work, cfgDir)
+	}
+	di, err := os.Stat(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !di.IsDir() {
+		t.Fatal("工作目录不是目录")
+	}
+	if runtime.GOOS != "windows" && di.Mode().Perm() != 0o700 {
+		t.Errorf("工作目录权限 = %o，期望 700", di.Mode().Perm())
+	}
+}
+
+func TestNormalizeServer(t *testing.T) {
+	cases := []struct {
+		in  string
+		out string
+		bad bool
+	}{
+		{"", defaultServer, false},
+		{"https://mqtt.stickbox.ai/", "https://mqtt.stickbox.ai", false},
+		{"https://stickbox.example:9443", "https://stickbox.example:9443", false},
+		{"http://localhost:8080", "http://localhost:8080", false},
+		{"http://127.0.0.1:19443/", "http://127.0.0.1:19443", false},
+		{"http://[::1]:8080", "http://[::1]:8080", false},
+		{"http://stickbox.example", "", true},
+		{"http://192.168.1.5:8080", "", true},
+		{"ftp://stickbox.example", "", true},
+		{"stickbox.example", "", true},
+	}
+	for _, c := range cases {
+		got, err := normalizeServer(c.in)
+		if c.bad {
+			if err == nil {
+				t.Errorf("%q 应该被拒绝，得到 %q", c.in, got)
+			}
+			continue
+		}
+		if err != nil || got != c.out {
+			t.Errorf("%q = %q, %v；期望 %q", c.in, got, err, c.out)
+		}
 	}
 }
 

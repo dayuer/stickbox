@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -184,20 +185,40 @@ func parseResetsAt(s string) (int64, error) {
 	return t.Unix(), nil
 }
 
-// filterEnv 去掉会污染子进程的宿主变量。
-// CLAUDECODE 没有下划线前缀，单独列出来。
+// filterEnv 只透传白名单变量。
+//
+// 黑名单挡不住：Claude 桌面版会往子进程环境里塞其他变量，实测只剔除
+// ANTHROPIC_* / CLAUDE_* 时 /usage 仍返回 rate_limits=null。
 func filterEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		name, _, _ := strings.Cut(kv, "=")
-		if strings.HasPrefix(name, "ANTHROPIC_") ||
-			strings.HasPrefix(name, "CLAUDE_") ||
-			name == "CLAUDECODE" {
-			continue
+		if envNameAllowed(runtime.GOOS, name) {
+			out = append(out, kv)
 		}
-		out = append(out, kv)
 	}
 	return out
+}
+
+func envNameAllowed(goos, name string) bool {
+	up := strings.ToUpper(name)
+	if strings.HasPrefix(up, "LC_") {
+		return true
+	}
+	switch up {
+	case "HOME", "USER", "LOGNAME", "PATH", "SHELL", "TMPDIR", "TERM", "LANG",
+		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", // 大小写两种写法都靠 ToUpper 命中
+		"SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS":
+		return true
+	}
+	if goos == "windows" {
+		switch up {
+		case "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SYSTEMROOT", "COMSPEC",
+			"PATHEXT", "USERNAME", "TEMP", "TMP":
+			return true
+		}
+	}
+	return false
 }
 
 // ---- 配置 ----
@@ -329,10 +350,28 @@ func normalizeServer(s string) (string, error) {
 		return defaultServer, nil
 	}
 	u, err := url.Parse(s)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return "", fmt.Errorf("服务端地址必须以 http:// 或 https:// 开头：%q", s)
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("服务端地址必须以 https:// 开头（本机联调可用 http://）：%q", s)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+	case "http":
+		// 令牌会放在 Authorization 头里，明文 HTTP 只允许本机回环。
+		if !isLoopbackHost(u.Hostname()) {
+			return "", fmt.Errorf("http:// 只允许本机地址（localhost / 127.0.0.1 / ::1）：%q；对外地址请用 https://", s)
+		}
+	default:
+		return "", fmt.Errorf("服务端地址必须以 https:// 开头（本机联调可用 http://）：%q", s)
 	}
 	return strings.TrimRight(s, "/"), nil
+}
+
+func isLoopbackHost(h string) bool {
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
 }
 
 func newAPIClient(c *agentConfig) (*apiClient, error) {
@@ -442,8 +481,29 @@ func resolveClaude(c *agentConfig) (string, error) {
 	return p, nil
 }
 
+// prepareWorkDir 返回 claude 的专用工作目录：配置目录下的空目录。
+//
+// 不能用 HOME：在 HOME 下 --setting-sources project 读到的「项目设置」
+// 就是 ~/.claude/settings.json，也就是用户的全局设置——正是要避开的。
+func prepareWorkDir() (string, error) {
+	dir, err := configDir()
+	if err != nil {
+		return "", err
+	}
+	work := filepath.Join(dir, "work")
+	if err := os.MkdirAll(work, 0o700); err != nil {
+		return "", fmt.Errorf("创建 claude 工作目录失败：%w", err)
+	}
+	_ = os.Chmod(work, 0o700) // Windows 上忽略
+	return work, nil
+}
+
 func collectUsage(c *agentConfig) (usagePayload, string, error) {
 	claude, err := resolveClaude(c)
+	if err != nil {
+		return usagePayload{}, "", err
+	}
+	work, err := prepareWorkDir()
 	if err != nil {
 		return usagePayload{}, "", err
 	}
@@ -458,10 +518,7 @@ func collectUsage(c *agentConfig) (usagePayload, string, error) {
 		"--verbose",
 	)
 	cmd.Env = filterEnv(os.Environ())
-	// 固定工作目录，避免不同 launchd/systemd 环境下的 project 设置不一样。
-	if home, err := os.UserHomeDir(); err == nil {
-		cmd.Dir = home
-	}
+	cmd.Dir = work
 
 	out, err := cmd.Output()
 	if err != nil {
