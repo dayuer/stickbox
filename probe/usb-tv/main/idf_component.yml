@@ -1,0 +1,9 @@
+dependencies:
+  idf: ">=5.3"
+  # 刻意直接依赖底层 tinyusb，而不是 espressif/esp_tinyusb：
+  # 后者的 tinyusb_msc.c 无条件定义了全部 tud_msc_* 回调（强符号、无 weak、
+  # 无 Kconfig 逃生口），而它的 tusb_config.h 里 CFG_TUD_MSC 直接等于
+  # CONFIG_TINYUSB_MSC_ENABLED —— 开类就必然撞符号。
+  #
+  # 版本先放宽。第一次编过之后请固定成实际解析到的版本。
+  espressif/tinyusb: "*"
