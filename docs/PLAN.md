@@ -34,6 +34,7 @@
 | T4 | 固件：按设计稿渲染 1080p 看板（多页轮播） | esp | T3 | 待办 |
 | T5 | 端到端联调、上板与电视验收 | 整合 | T1–T4 | 待办 |
 | T6 | 文档收尾：接口文档重写、删除 `probe/`、交接文档 | esp + 整合 | T5 | 待办 |
+| T8 | 固件内存压缩（T4 动态条带的前提） | esp | T7 | 待办 |
 | T7 | 配对码绑定（无手机号）：设备自注册出码，agent 输码配对；删除短信与 App 角色 | esp | T1、T3 | 待办 |
 
 ---
@@ -159,6 +160,28 @@ agent 上报 → 服务端 → MQTT → 板子 → 电视，全链路；断网 /
 
 **验收**：`go test ./...` 全绿；上板：清配置 → 配 Wi-Fi → 电视和 LCD 出码 → 本机 `curl` 调 `/api/agent/pair` 配对 →
 设备切看板并收到用量；擦 NVS 重来时原主人能转正、换一个 agent 配对被拒。
+
+### T8 固件内存压缩
+
+**实测**（2026-10-17，feat/tv-dashboard cbc9021 + 临时探针，推流 + 三页轮播运行 45 秒）：
+
+| 项 | 数值 |
+|---|---|
+| 内部 RAM 空闲 / 历史最低 | 87KB / 52KB |
+| TLS 连接（同一套 mbedtls 配置，GET https 一次） | 握手峰值约 45KB，连接保持时常驻约 42KB |
+| 加上 TLS 后历史最低 | **32KB**；T4 还要两块 24KB 条带缓冲（48KB）——**放不下** |
+| LVGL 内置堆（静态 .bss） | 64KB，峰值只用 9.6KB |
+| 任务栈余量最低 | taskLVGL 3.3K、mqtt_task 3.4K、esp_timer 3.1K、dlna_sup 3.0K、lcd_ui 1.9K、cycle 1.8K、avi_srv 1.8K |
+
+**要做**（按收益排序）：
+1. `CONFIG_LV_MEM_SIZE_KILOBYTES` 64 → 16（实测峰值 9.6KB，留余量；配对码页面加上后重测）——省约 48KB
+2. `CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN` 16384 → 8192（服务端只有 MQTT 小消息，证书链约 3~4KB；需对 mqtt.stickbox.ai 实测握手）——握手峰值省约 8KB
+3. 任务栈按余量收缩，每个留 ≥1KB：taskLVGL、mqtt_task（`CONFIG_MQTT_TASK_STACK_SIZE`）、esp_timer、dlna_sup——合计约 8KB
+4. MQTT 收发缓冲（`CONFIG_MQTT_BUFFER_SIZE`）按用量 payload 大小定，不用默认值
+5. Wi-Fi 动态 TX 缓冲 16 → 10，测推流帧率不降
+
+**验收**：真实连上 mqtt.stickbox.ai 的 TLS 长连接 + 推流 + 轮播运行 10 分钟，历史最低空闲 ≥ 48KB + 24KB 余量（即能放下 T4 的条带缓冲后仍有 ≥24KB）；
+推流 2fps 不掉；每项改动前后数值写进提交说明。
 
 ## 已知风险
 
