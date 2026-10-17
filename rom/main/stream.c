@@ -59,14 +59,25 @@ uint8_t *stream_band_begin(void)
     }
 }
 
-void stream_band_publish(uint8_t *buf, size_t len, int page)
+size_t stream_band_cap(void) { return BAND_CAP; }
+
+bool stream_band_publish(uint8_t *buf, size_t len, int page)
 {
+    /* 越界在写入的时候就已经发生了，这里拦不住它。但发布一个超长的 len
+     * 会让推流循环每帧都读到缓冲区外的垃圾、并推给电视——那是第二个 bug，
+     * 而且比第一个更难查。宁可画面停在上一版。 */
+    if (len > BAND_CAP) {
+        ESP_LOGE(TAG, "带长度 %u 超过 BAND_CAP %u，拒绝发布（画面保持上一版）",
+                 (unsigned)len, (unsigned)BAND_CAP);
+        return false;
+    }
     int i = buf == s_band[0] ? 0 : 1;
     xSemaphoreTake(s_mx, portMAX_DELAY);
     s_band_len[i] = len;
     s_band_page[i] = page;
     s_front = i;
     xSemaphoreGive(s_mx);
+    return true;
 }
 int stream_current(void) { return s_cur; }
 void stream_set(int idx) { s_cur = ((idx % s_n) + s_n) % s_n; }
