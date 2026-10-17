@@ -364,3 +364,20 @@ location /fw/ {
 （`esp_crt_bundle_attach`）。**自托管如果用私有 CA 签的证书，这两条链路都走
 不通**（配网填的自托管地址只影响连哪台服务器，不影响信任哪个 CA）。
 目前只能用公共 CA 签发的证书，或者自行改固件换成自带 CA。
+
+## 设备诊断（服务器本机）
+
+```sh
+stickboxd -conf /opt/stickbox/config.json device show <dev> [--last N]
+```
+
+只读诊断，从 `admin_addr`（默认 `127.0.0.1:9091`，配置层强制回环）取
+运行期状态，不打开数据库文件、不输出任何密钥材料。输出包括：
+
+- 该设备的全部 key_id 与状态（active / pending / disabled）及当前在线连接用的 key_id
+- 最近 N 次 MQTT CONNECT 的 CONNACK 返回码（0x00 / 0x03 / 0x05）和原因
+- 未确认的下行 cid、重投次数与下次重投时间
+- 最近一次用量、帧版本、注册限流剩余额度
+
+`admin_addr` 只允许回环地址；配置成 `0.0.0.0` 或省略主机名会被拒绝启动。
+不要把该端口经 nginx 暴露到公网。

@@ -23,6 +23,9 @@ const cliUsage = `用法：
   stickboxd device list                 列出全部密钥
   stickboxd device revoke <key_id>      吊销一把密钥
   stickboxd device unbind <dev>         强制解绑（原持有人不配合时用）
+  stickboxd device show <dev> [--last N]
+                                        设备诊断：密钥状态、最近 CONNECT、
+                                        未确认 cid、用量/帧版本、注册配额
   stickboxd user list                   列出用户
 
 正常设备走 /api/device/register 出配对码，不需要这些命令。
@@ -38,6 +41,10 @@ func runCLI(cfg *config.Config, args []string) error {
 		return runHealthcheck(cfg)
 	case "backup":
 		return runBackup(cfg, args[1:])
+	}
+	// device show 只读运行中的 stickboxd，不打开数据库。
+	if len(args) >= 2 && args[0] == "device" && args[1] == "show" {
+		return runDeviceShow(cfg, args[2:])
 	}
 
 	st, err := store.Open(cfg.DBPath())

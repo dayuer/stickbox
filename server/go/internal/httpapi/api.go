@@ -76,6 +76,12 @@ func New(cfg *config.Config, st *store.Store, v *auth.Verifier,
 	}
 }
 
+// RegisterQuota 返回某台设备注册限流的剩余次数与最早恢复时间，
+// 给服务器本机的 device show 诊断用。
+func (a *API) RegisterQuota(dev string) (left, limit int, reset time.Time) {
+	return a.regDev.remaining(dev)
+}
+
 // Usage 暴露用量服务，main 拿它接到 broker 上（设备订阅时补发）。
 func (a *API) Usage() *usage.Service { return a.usage }
 

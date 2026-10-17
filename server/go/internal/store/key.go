@@ -46,6 +46,21 @@ func (s *Store) ListKeys() ([]Key, error) {
 		return nil, err
 	}
 	defer rows.Close()
+	return scanKeys(rows)
+}
+
+// KeysOfDevice 返回某台设备的全部密钥（pending/active/disabled），按创建时间排序。
+func (s *Store) KeysOfDevice(dev string) ([]Key, error) {
+	rows, err := s.db.Query(
+		`SELECT `+keyCols+` FROM devices WHERE dev=? ORDER BY created`, dev)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanKeys(rows)
+}
+
+func scanKeys(rows *sql.Rows) ([]Key, error) {
 	out := []Key{}
 	for rows.Next() {
 		var k Key
