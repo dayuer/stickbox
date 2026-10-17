@@ -120,7 +120,16 @@ static bool activate(int slot, uint32_t len, const char *ver)
         return false;
     }
 
-    /* 新帧一切就绪，才换掉旧的——中途失败时画面继续用上一帧。 */
+    /* 新帧一切就绪，才换掉旧的——中途失败时画面继续用上一帧。
+     *
+     * **释放旧映射之前必须先让推流松手。** 发送循环在每帧开头把 s_base
+     * 快照进段表，之后一路 send_all 不再回头看共享状态；这段时间里旧的
+     * flash 映射必须一直有效。这里直接 munmap 就是把地址从正在发送的段
+     * 底下抽走，电视上先是花屏，严重时取到已经被别的东西占用的 flash。
+     *
+     * stream_use_framepack() 内部会等在途的帧发完（fp_wait_idle），所以
+     * 顺序必须是「先切 stream 再 munmap」。 */
+    stream_use_framepack(&ix, pk + PACK_HEADER, bl);
     if (s_mapped) esp_partition_munmap(s_map);
     s_map = h; s_mapped = true;
     s_base = pk + PACK_HEADER;      s_base_len = bl;

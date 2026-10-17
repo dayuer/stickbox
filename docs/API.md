@@ -70,17 +70,17 @@ agent 不能连 MQTT；设备不能调 agent 的 HTTP 端点。
 |---|---|---|---|
 | POST | `/api/device/register` | 无 | 设备注册，领 device 令牌和配对码 |
 | POST | `/api/device/pair-code` | device | 配对码过期后换一个新码 |
+| GET | `/api/device/firmware` | device | 取 OTA manifest；不在本轮放量里返回 204 |
+| POST | `/api/device/coredump` | device | 上传崩溃镜像；只收已配对设备 |
+| GET | `/fw/{name}` | 无 | 下载固件 bin；开源硬件，防篡改靠签名 |
 | GET | `/api/device/frame` | device | 取当前帧包（ETag/304） |
-| GET | `/api/device/firmware` | device | OTA：查本轮有没有新固件 |
-| GET | `/fw/{name}` | 无 | 下载固件二进制（防篡改靠签名） |
-| POST | `/api/device/coredump` | device | 上传崩溃 ELF |
 | POST | `/api/agent/pair` | 可选 agent | 输码配对；新用户或并入已有用户 |
 | POST | `/api/agent/unpair` | agent | 解绑自己名下的屏 |
 | GET | `/api/agent/devices` | agent | 列出名下设备与在线状态 |
 | GET | `/api/agent/usage` | agent | 读取本用户最新用量 |
 | POST | `/api/usage` | agent | 上报一次用量 |
+| GET | `/api/agent/coredumps` | agent | 列出自己名下设备的崩溃记录 |
 | POST | `/api/agent/logout` | agent | 注销当前 agent 令牌 |
-| GET | `/api/agent/coredumps` | agent | 列出名下设备的崩溃记录 |
 | GET | `/healthz` | 无 | 健康检查，只返回 200/503 |
 <!-- endpoints:end -->
 
@@ -186,37 +186,42 @@ device 鉴权，且密钥必须已配对（pending 密钥返回 `403`）。
 帧版本变化时服务端往 MQTT `printer/{dev}/frame` 发 `{"ver":N}`（QoS 1，
 不 retain）。设备重连订阅该主题时服务端补发当前版本。
 
-### 2.5 `GET /api/device/firmware`
+### 2.4 `GET /api/device/firmware`
 
-device 鉴权。设备每天问一次有没有新版本，要不要升级由设备比对版本号决定。
-
-有新版本 `200`：
+设备鉴权。返回 OTA manifest：
 
 ```json
-{"version":"0.2.0","url":"https://mqtt.stickbox.ai/fw/stickbox-0.2.0.bin","sha256":"…","size":1234567}
+{"version":"v1.2.0","url":"https://host/fw/stickbox-1.2.0.bin","sha256":"…","size":2063040}
 ```
 
-没有配置固件、或这台设备不在本轮放量比例里，返回 `204`（不是错误，设备安静跳过）。
-放量按 `dev` 哈希分桶，同一台设备每次问到的答案一致；配置见 `server/config.example.json`
-的 `firmware` 段，签名校验在设备侧完成。
+**没有配置固件、或这台设备不在本轮放量范围里，返回 `204`。** 204 是「现在
+没有你的份」，不是错误——设备见到非 200 安静跳过。
+
+分阶段放量按 `dev` 哈希分桶，不是随机：同一台设备每次问得到的答案一致，
+放量比例调大时原先在的设备仍然在。一版坏固件如果一次推给所有设备，等发现
+时已经全军覆没。
+
+### 2.5 `POST /api/device/coredump`
+
+设备鉴权，请求体是原始 ELF，`Content-Type: application/octet-stream`。
+固件版本和复位原因走 `X-Stickbox-Version` / `X-Stickbox-Reset` 头——服务端
+不解 ELF，没有版本号就还原不了符号。
+
+**只收已配对设备**：密钥不能是待配对的，设备也必须已经绑定。两道都要——
+知道 MAC 的人可以重新 register 拿一把 pending 密钥冒用已配对设备。
+
+每台设备每小时 1 次；单包 256KB 封顶；全局 512MB 配额，超了返回 `507`。
 
 ### 2.6 `GET /fw/{name}`
 
-不鉴权，返回 `{root}/fw/<name>` 的固件二进制（`application/octet-stream`，
-带 `Content-Length` 与 Range 支持——`esp_https_ota` 需要前者）。只认单层文件名，
-路径部分会被 `Base()` 掉以防目录穿越。固件防篡改靠签名，不靠访问控制。
+**不鉴权。** 固件二进制不是秘密（开源硬件），防篡改靠固件签名而不是访问
+控制。只认 `{Root}/fw` 下的文件名。
 
-### 2.7 `POST /api/device/coredump`
+> 自托管注意：设备的 TLS 接收缓冲是 8KB，而 nginx 默认 `ssl_buffer_size`
+> 是 16k，两者都不支持 MFL 协商——必须给这个路径设 `ssl_buffer_size 4k`，
+> 否则 OTA 下载直接失败。见 `server/DEPLOY.md`。
 
-device 鉴权，且密钥已配对、设备已绑定用户（pending 或未绑定一律 `403`）。
-请求体是原始 ELF，单份上限 256KB；头部 `X-Stickbox-Version` 与
-`X-Stickbox-Reset` 记录固件版本和复位原因（服务端不解 ELF，没有版本号无法还原符号）。
-
-成功 `200`：`{"ok":1,"size":N}`。服务端按 `coredumps/{dev}/{时间戳}.elf` 存盘，
-旁边写一份 `.json` 元数据；每台设备保留最近 10 份，全局上限 512MB。
-每台设备每小时最多一次（`429`）；过大 `413`；全局配额满 `507`。
-
-### 2.4 MQTT 连接
+### 2.7 MQTT 连接
 
 ```
 mqtts://mqtt.stickbox.ai:8883
@@ -495,7 +500,11 @@ agent 上报一次用量。服务端保存为该用户的最新一份，并推�
 错误：`400 bad request`（校验失败，`detail` 说明哪项越界）、
 `401 unauthorized`、`500 server error`。
 
-### 3.6 `POST /api/agent/logout`
+### 3.6 `GET /api/agent/coredumps`
+
+agent 鉴权。列出自己名下设备的崩溃记录（`dev`、`at`、`size`），新的在前。
+
+### 3.7 `POST /api/agent/logout`
 
 注销当前 agent 令牌（只影响这一把）。
 
