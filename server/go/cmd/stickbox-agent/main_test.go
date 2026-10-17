@@ -412,6 +412,45 @@ func TestLaunchdPlistKeepAliveOnlyOnFailure(t *testing.T) {
 	}
 }
 
+// Background 进程会被 macOS 强力节流，claude 的网络往返会被拖到超时。
+func TestLaunchdPlistDoesNotThrottle(t *testing.T) {
+	p := launchdPlist("/opt/stickbox/agent", "/tmp/agent.log", "")
+	if strings.Contains(p, "<key>ProcessType</key>") || strings.Contains(p, "Background") {
+		t.Errorf("plist 不应再设置 ProcessType=Background：\n%s", p)
+	}
+	if !strings.Contains(p, "<key>LowPriorityIO</key><false/>") {
+		t.Errorf("plist 应显式 LowPriorityIO=false：\n%s", p)
+	}
+}
+
+func TestTailText(t *testing.T) {
+	if got := tailText(nil, 600); got != "" {
+		t.Errorf("空输入 = %q", got)
+	}
+	short := tailText([]byte("  hello\n"), 600)
+	if short != "hello" {
+		t.Errorf("短文本 = %q", short)
+	}
+	long := strings.Repeat("x", 1000) + "THE-END"
+	got := tailText([]byte(long), 600)
+	if len(got) != 600 || !strings.HasSuffix(got, "THE-END") {
+		t.Errorf("tailText 长度 = %d，末尾 = %q", len(got), got[max(0, len(got)-20):])
+	}
+}
+
+// 超时错误必须带上 claude 的 stderr 线索。
+func TestClaudeExecErrorIncludesStderr(t *testing.T) {
+	err := claudeExecError(errors.New("killed"), true, "network timeout")
+	msg := err.Error()
+	if !strings.Contains(msg, "超时") || !strings.Contains(msg, "network timeout") {
+		t.Errorf("超时错误 = %q", msg)
+	}
+	err = claudeExecError(errors.New("exit 2"), false, "auth failed")
+	if msg := err.Error(); !strings.Contains(msg, "auth failed") || !strings.Contains(msg, "exit 2") {
+		t.Errorf("普通错误 = %q", msg)
+	}
+}
+
 // 临时配置目录必须带进 launchd，否则服务读的是另一份配置。
 func TestLaunchdPlistPropagatesConfigDir(t *testing.T) {
 	p := launchdPlist("/opt/stickbox/agent", "/tmp/agent.log", "/tmp/cfg dir")

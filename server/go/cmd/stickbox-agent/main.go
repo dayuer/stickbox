@@ -45,7 +45,7 @@ const (
 	defaultServer     = "https://mqtt.stickbox.ai"
 	usageInterval     = 10 * time.Minute
 	authRetryInterval = time.Hour
-	claudeTimeout     = 3 * time.Minute
+	claudeTimeout     = 5 * time.Minute
 	httpTimeout       = 20 * time.Second
 )
 
@@ -521,24 +521,63 @@ func collectUsage(c *agentConfig) (usagePayload, string, error) {
 	cmd.Env = filterEnv(os.Environ())
 	cmd.Dir = work
 
+	// 显式接 /dev/null：launchd 下继承的 stdin 可能是个不关闭的管道。
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		return usagePayload{}, "", fmt.Errorf("打开 %s 失败：%w", os.DevNull, err)
+	}
+	defer devNull.Close()
+	cmd.Stdin = devNull
+
+	// 单独收 stderr：超时被杀时没有 ExitError，只能靠这里留线索。
+	stderr := &tailWriter{max: 64 << 10}
+	cmd.Stderr = stderr
+
 	out, err := cmd.Output()
 	if err != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return usagePayload{}, "", fmt.Errorf("claude 执行超时（%s）", claudeTimeout)
-		}
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			stderr := strings.TrimSpace(string(ee.Stderr))
-			if len(stderr) > 600 {
-				stderr = stderr[len(stderr)-600:]
-			}
-			if stderr != "" {
-				return usagePayload{}, "", fmt.Errorf("claude 执行失败：%v（%s）", err, stderr)
-			}
-		}
-		return usagePayload{}, "", fmt.Errorf("claude 执行失败：%w", err)
+		tail := tailText(stderr.buf, 600)
+		return usagePayload{}, "", claudeExecError(err, errors.Is(ctx.Err(), context.DeadlineExceeded), tail)
 	}
 	return parseUsageStream(bytes.NewReader(out))
+}
+
+func claudeExecError(err error, timedOut bool, stderrTail string) error {
+	suffix := ""
+	if stderrTail != "" {
+		suffix = "；stderr 末尾：" + stderrTail
+	}
+	if timedOut {
+		return fmt.Errorf("claude 执行超时（%s）%s", claudeTimeout, suffix)
+	}
+	return fmt.Errorf("claude 执行失败：%v%s", err, suffix)
+}
+
+// tailWriter 只保留最后 max 字节，避免异常输出把内存吃光。
+type tailWriter struct {
+	buf []byte
+	max int
+}
+
+func (w *tailWriter) Write(p []byte) (int, error) {
+	if w.max <= 0 {
+		return len(p), nil
+	}
+	w.buf = append(w.buf, p...)
+	if len(w.buf) > w.max {
+		copy(w.buf, w.buf[len(w.buf)-w.max:])
+		w.buf = w.buf[:w.max]
+	}
+	return len(p), nil
+}
+
+func tailText(b []byte, n int) string {
+	if n <= 0 || len(b) == 0 {
+		return ""
+	}
+	if len(b) > n {
+		b = b[len(b)-n:]
+	}
+	return strings.ToValidUTF8(strings.TrimSpace(string(b)), "�")
 }
 
 // runRound 执行一轮：取用量 → 上报。skip 不是错误。
@@ -1008,7 +1047,7 @@ func launchdPlist(exe, logPath, configDir string) string {
     <key>SuccessfulExit</key><false/>
   </dict>
   <key>ThrottleInterval</key><integer>10</integer>
-  <key>ProcessType</key><string>Background</string>
+  <key>LowPriorityIO</key><false/>
 %s  <key>StandardOutPath</key><string>%s</string>
   <key>StandardErrorPath</key><string>%s</string>
 </dict>
