@@ -65,10 +65,12 @@ static char s_devid[24];
 /* 设备密钥 {key_id}.{secret}。按不透明字符串处理，不打进日志。 */
 static char s_devkey[80];
 static char s_topic_status[64], s_topic_usage[64], s_topic_pair[64];
+static char s_topic_frame[64];
 
 static bool     s_paired;
 static volatile bool s_connected;
 static volatile bool s_got_usage;   /* 收到过用量 = 密钥已转正 */
+static int s_sub_usage_id = -1, s_sub_frame_id = -1;   /* 用来识别 SUBACK */
 static char     s_key_id[24];       /* 设备令牌里第一个 '.' 之前的部分 */
 static char     s_pair_code[8];
 static int64_t  s_pair_expire_us;   /* 本机 uptime 截止时间 */
@@ -379,11 +381,22 @@ static void pair_code_task(void *arg)
  * 配对成功后永远收不到用量，电视就停在配对页——而两端都不报错。
  *
  * 重复订阅是无害的，所以不必记状态。 */
+/* 配对之后才有权订阅的主题：用量与帧版本通知。
+ *
+ * **有密钥就订，不等 paired=true。** mochi 的 retained 消息只在内存里，
+ * 服务端一重启那条 paired=true 就没了；只认它的话，设备会卡在「已配对却
+ * 收不到任何数据」，而两端都不报错。所以只要本地有密钥、MQTT 也连上了，
+ * 就直接订——真是 pending，服务端会用 SUBACK 0x80 拒掉，那时再等配对通知
+ * 补订即可。
+ *
+ * 重复订阅无害，所以不必记状态。 */
 static void subscribe_paired_topics(void)
 {
     if (!s_mqtt) return;
-    esp_mqtt_client_subscribe(s_mqtt, s_topic_usage, 1);
-    ESP_LOGI(TAG, "已订阅用量");
+    s_sub_usage_id = esp_mqtt_client_subscribe(s_mqtt, s_topic_usage, 1);
+    s_sub_frame_id = esp_mqtt_client_subscribe(s_mqtt, s_topic_frame, 1);
+    ESP_LOGI(TAG, "已请求订阅用量与帧通知（msg_id %d/%d）",
+             s_sub_usage_id, s_sub_frame_id);
 }
 
 static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -401,7 +414,18 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
          * usage 只有已配对才订——服务端的 ACL 不允许待配对密钥读 usage，
          * 订了也是被拒。配对成功时再补订，见 subscribe_paired_topics()。 */
         esp_mqtt_client_subscribe(s_mqtt, s_topic_pair, 1);
-        if (s_paired) subscribe_paired_topics();
+        /* 手里有密钥就直接订用量与帧通知，不等 paired=true——理由见
+         * subscribe_paired_topics() 的注释。被拒了会走 SUBACK 分支。 */
+        if (s_devkey[0]) subscribe_paired_topics();
+        break;
+
+    case MQTT_EVENT_SUBSCRIBED:
+        /* SUBACK 里 0x80 = 拒绝。走到这儿说明密钥还是 pending（配对没完成，
+         * 或者服务端认为没完成）。不是错误，等 paired=true 到了再补订。 */
+        if (e->data_len > 0 && (uint8_t)e->data[0] == 0x80) {
+            if (e->msg_id == s_sub_usage_id || e->msg_id == s_sub_frame_id)
+                ESP_LOGW(TAG, "订阅被拒（msg_id %d），密钥尚未转正，等配对通知", e->msg_id);
+        }
         break;
 
     case MQTT_EVENT_DISCONNECTED:
@@ -489,6 +513,7 @@ void cloud_client_start(const uint8_t mac[6])
     snprintf(s_topic_status, sizeof s_topic_status, "printer/%s/status", s_devid);
     snprintf(s_topic_usage, sizeof s_topic_usage, "printer/%s/usage", s_devid);
     snprintf(s_topic_pair, sizeof s_topic_pair, "printer/%s/pair", s_devid);
+    snprintf(s_topic_frame, sizeof s_topic_frame, "printer/%s/frame", s_devid);
     ESP_LOGI(TAG, "设备 ID: %s", s_devid);
 
     /* 服务器地址：NVS 里的自托管值优先，哪一项为空就用编译期默认。 */
