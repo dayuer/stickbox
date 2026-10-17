@@ -24,19 +24,35 @@ type state struct {
 	rem5 time.Duration
 	u7   float64
 	rem7 time.Duration
+	// dir 为 Target 时换成「当日目标」口径的两个窗口：结论句、预测句、
+	// 速度建议的措辞都不一样，底帧字数变了就要重新确认装得进槽位。
+	dir source.Direction
 }
 
 var states = []state{
-	{"超速", true, .02, 4*time.Hour + 15*time.Minute + 30*time.Second, .34, 4*24*time.Hour + 18*time.Hour + 13*time.Minute},
-	{"安全", true, .38, 2*time.Hour + 24*time.Minute + 2*time.Second, .20, 4*24*time.Hour + 18*time.Hour + 13*time.Minute},
-	{"危险", true, .92, time.Hour + 4*time.Minute + 55*time.Second, .34, 4*24*time.Hour + 18*time.Hour + 13*time.Minute},
-	{"用满", true, 1, 42*time.Minute + 15*time.Second, .364, 4*24*time.Hour + 16*time.Hour},
-	{"无数据", false, 0, 0, 0, 0},
+	{"超速", true, .02, 4*time.Hour + 15*time.Minute + 30*time.Second, .34, 4*24*time.Hour + 18*time.Hour + 13*time.Minute, source.Budget},
+	{"安全", true, .38, 2*time.Hour + 24*time.Minute + 2*time.Second, .20, 4*24*time.Hour + 18*time.Hour + 13*time.Minute, source.Budget},
+	{"危险", true, .92, time.Hour + 4*time.Minute + 55*time.Second, .34, 4*24*time.Hour + 18*time.Hour + 13*time.Minute, source.Budget},
+	{"用满", true, 1, 42*time.Minute + 15*time.Second, .364, 4*24*time.Hour + 16*time.Hour, source.Budget},
+	{"无数据", false, 0, 0, 0, 0, source.Budget},
+	{"目标落后", true, .28, 11 * time.Hour, .41, 11 * time.Hour, source.Target},
+	{"目标达成", true, 1.06, 11 * time.Hour, .93, 11 * time.Hour, source.Target},
+	{"目标无数据", false, 0, 0, 0, 0, source.Target},
 }
 
 func snapshot(st state, now time.Time) source.Snapshot {
 	s := source.Snapshot{Now: now, LastUpdate: now.Add(-3 * time.Minute), DeviceIP: "192.168.3.14"}
+	s.Dir = st.dir
 	if !st.has {
+		return s
+	}
+	if st.dir == source.Target {
+		s.Windows = []source.Window{
+			{Label: "今日成交额", Length: 24 * time.Hour, UsedPercentage: st.u5,
+				ResetsAt: now.Add(st.rem5), Dir: source.Target},
+			{Label: "今日订单", Length: 24*time.Hour + time.Second, UsedPercentage: st.u7,
+				ResetsAt: now.Add(st.rem7), Dir: source.Target},
+		}
 		return s
 	}
 	s.Windows = []source.Window{

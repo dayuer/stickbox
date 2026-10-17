@@ -35,12 +35,11 @@ type Window struct {
 	// ResetsAt 是窗口重置的绝对时刻。
 	ResetsAt time.Time
 	// Dir 决定配色与文案方向，零值 Budget 兼容既有数据源。
+	//
+	// 这里故意只有比例、没有绝对量：环内的大数字用 Barlow Condensed 画，
+	// 单位只能是 ASCII（"万"/"¥" 在这套字体里没有字形），所以绝对量要上屏
+	// 得先在版面上开一个中文槽位——那是要上电视看过才能定的事。
 	Dir Direction
-	// Value/Goal/Unit 是可选的绝对量，用于在环内显示 "12.3万 / 20万"。
-	// Goal 为 0 表示没有绝对量可显示，只显示百分比。
-	Value float64
-	Goal  float64
-	Unit  string
 }
 
 // Snapshot 是某一时刻要落到一帧里的全部数据。
@@ -55,6 +54,10 @@ type Snapshot struct {
 	LastUpdate time.Time
 	// DeviceIP 只在完全没有数据时显示在底栏。
 	DeviceIP string
+	// Dir 只用于「一个窗口都没有」时的占位文案方向：消耗型说「等待电脑
+	// 上报数据」，达成型说「等待数据上报」。有窗口时一律以窗口自己的
+	// Dir 为准，不看这里。
+	Dir Direction
 }
 
 // HasData 报告这个快照背后是否真有数据到达过。
