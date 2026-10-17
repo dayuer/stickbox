@@ -3,11 +3,13 @@ package broker
 import (
 	"log/slog"
 	"strings"
+	"time"
 
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/packets"
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
+	"github.com/dayuer/stickbox/server/go/internal/metrics"
 )
 
 // Router 是 broker 对在线状态表的窄依赖：收到设备心跳就记一笔。
@@ -20,22 +22,31 @@ type UsageResender interface {
 	Resend(dev string)
 }
 
-// Claimer 是 broker 对 store 的窄依赖：把待认领的密钥绑到设备上。
-type Claimer interface {
-	ClaimKey(keyID, dev string) (bool, error)
-	OwnerOfDevice(dev string) (string, bool, error)
+// FrameResender 在设备订阅 printer/{dev}/frame 时补发当前帧版本。
+type FrameResender interface {
+	Resend(dev string)
+}
+
+// PairResender 在设备订阅 printer/{dev}/pair 时，按这条连接自己那把
+// 密钥的当前状态补发一条配对通知。retained 消息只在 broker 内存里，
+// 服务端重启后就没了，不能只依赖它。
+type PairResender interface {
+	ResendPair(dev, keyID string)
 }
 
 type Hook struct {
 	mqtt.HookBase
+	srv    *mqtt.Server
 	v      *auth.Verifier
-	mem    *Membership
 	router Router
-	claim  Claimer
 	// ids 记录每个连接校验通过的身份，ACL 判定时直接取，不重复跑 argon2。
 	ids *idTable
-	// usage 为 nil 时不补发（测试里、或还没接上的时候）。
+	// usage / frame 为 nil 时不补发（测试里、或还没接上的时候）。
 	usage UsageResender
+	frame FrameResender
+	pair  PairResender
+	// pending 限制同一 dev 的 pending 连接频率。
+	pending *pendingLimiter
 }
 
 func (h *Hook) ID() string { return "stickbox-auth" }
@@ -57,69 +68,83 @@ func (h *Hook) OnConnectAuthenticate(cl *mqtt.Client, pk packets.Packet) bool {
 		return false
 	}
 
-	// agent 只走 HTTP 上报，ACL 也不给它任何 topic。连接直接拒掉，
-	// 省得它占着一条连接什么都干不了。
+	// agent 只走 HTTP，ACL 也不给它任何 topic。
 	if id.Role == auth.RoleAgent {
 		slog.Warn("agent 令牌不允许连 MQTT", "username", user)
 		return false
 	}
 
-	// 待认领的密钥：App 在还没连上设备热点时就签发了它，那时候还不知道 MAC。
-	// 设备现在自己报上来了——username 就是它的 dev。
+	// T7 起设备注册时就直接带 dev，不会再签出 dev='' 的密钥。
+	// 旧库里若还有这种密钥，直接拒绝，让设备重新注册出码。
 	if id.Role == auth.RoleDevice && id.Dev == "" {
-		claimed, ok := h.claimKey(id, user)
-		if !ok {
-			return false
-		}
-		id = claimed
+		slog.Warn("设备密钥未绑定 dev，拒绝连接；请重新注册", "key_id", id.KeyID)
+		return false
 	}
-
 	// device 角色的 username 必须等于它自己的 dev——防止拿 A 的密钥冒充 B 连接。
 	if id.Role == auth.RoleDevice && id.Dev != user {
 		slog.Warn("MQTT username 与密钥不符", "username", user, "key_dev", id.Dev)
 		return false
 	}
-	h.ids.put(cl, id)
+	// pending 密钥只能读 pair；它不能把已在线 active 设备顶下线。
+	// 同一个 dev 的 pending 连接还要限频，防止趁合法设备重连空档抢先。
+	if id.Role == auth.RoleDevice && id.Pending {
+		if h.pending != nil && !h.pending.allow(id.Dev, time.Now()) {
+			slog.Warn("pending 连接过频，拒绝", "dev", id.Dev, "remote", cl.Net.Remote)
+			return false
+		}
+		if !h.ids.admit(cl, id) {
+			metrics.IncPendingTakeoverRejected()
+			slog.Warn("pending 连接试图顶掉在线设备", "dev", id.Dev, "remote", cl.Net.Remote)
+			return false
+		}
+		h.evictStale(id.Dev)
+		return true
+	}
+	if !h.ids.admit(cl, id) {
+		return false
+	}
+	h.evictStale(id.Dev)
 	return true
 }
 
-// claimKey 把一把待认领的密钥绑到设备自报的 dev 上。
+// evictStale 在 mochi 走会话接管之前，把同 client ID 的旧连接踢掉并等它
+// 从 Clients 里消失。
 //
-// 抢绑防护从 enroll 挪到了这里：App 不带 dev 签发密钥时，服务端那一刻还
-// 不知道要绑哪台，所以只能在设备真的连上来时才判。判据不变——这台设备
-// 已经属于别人就拒绝，不然任何人把自己的密钥写进别人的设备就能顶掉绑定。
-func (h *Hook) claimKey(id auth.Identity, dev string) (auth.Identity, bool) {
-	if !auth.ValidDev(dev) {
-		slog.Warn("待认领密钥的 username 不是合法 dev", "username", dev)
-		return id, false
+// mochi v2.7.9 的 inheritClientSession 有竞态：被顶掉的旧连接可能在
+// isTakenOver 置位之前进入清理流程，于是它在 Clients.Add(新连接) 之后
+// 仍会按 client ID 执行 Clients.Delete，把新连接从路由表里删掉。表现是
+// 连接没断、订阅也 SUBACK 了，但之后所有消息都送不到，直到设备重连。
+// 先同步踢掉旧连接并等它清完，新连接就不会再走接管路径。
+func (h *Hook) evictStale(dev string) {
+	if h.srv == nil {
+		return
 	}
-	if h.claim == nil {
-		slog.Error("没有 Claimer，待认领的密钥无法绑定", "key_id", id.KeyID)
-		return id, false
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		old, ok := h.srv.Clients.Get(dev)
+		if !ok || old.Net.Inline {
+			return
+		}
+		// 非 clean 会话断线后 mochi 不会删 Clients 条目，不存在上面的
+		// 竞态；接管时它也会保留订阅，直接交给 mochi 处理。
+		if !sessionExpiresOnDisconnect(old) {
+			return
+		}
+		_ = h.srv.DisconnectClient(old, packets.ErrSessionTakenOver)
+		if !time.Now().Before(deadline) {
+			slog.Warn("旧连接未在期限内退出", "dev", dev)
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	if owner, bound, err := h.claim.OwnerOfDevice(dev); err != nil {
-		slog.Error("查设备归属失败", "dev", dev, "err", err)
-		return id, false
-	} else if bound && owner != id.UserID {
-		slog.Warn("拒绝认领：设备属于其他账号", "dev", dev)
-		return id, false
+}
+
+// sessionExpiresOnDisconnect 与 mochi 清理连接时的 expire 判断一致。
+func sessionExpiresOnDisconnect(cl *mqtt.Client) bool {
+	if cl.Properties.ProtocolVersion == 5 {
+		return cl.Properties.Props.SessionExpiryInterval == 0
 	}
-	ok, err := h.claim.ClaimKey(id.KeyID, dev)
-	if err != nil {
-		slog.Error("认领密钥失败", "dev", dev, "err", err)
-		return id, false
-	}
-	if !ok {
-		// 已经被别的设备抢先认领了。并发保护在 SQL 的 dev='' 条件里。
-		slog.Warn("密钥已被认领，拒绝", "dev", dev, "key_id", id.KeyID)
-		return id, false
-	}
-	// 缓存里那份 Identity 的 Dev 还是空的，不清掉后面的 ACL 会全部拒绝。
-	h.v.Invalidate(id.KeyID)
-	h.mem.Invalidate(id.UserID)
-	id.Dev = dev
-	slog.Info("设备已认领密钥", "dev", dev, "user", id.UserID)
-	return id, true
+	return cl.Properties.Clean
 }
 
 func (h *Hook) OnACLCheck(cl *mqtt.Client, topic string, write bool) bool {
@@ -127,28 +152,41 @@ func (h *Hook) OnACLCheck(cl *mqtt.Client, topic string, write bool) bool {
 	if !ok {
 		return false
 	}
-	return auth.ACLAllowed(id, topic, write, h.mem)
+	return auth.ACLAllowed(id, topic, write)
 }
 
-// OnSubscribed：设备订阅自己的 usage 主题时，补发一份最新用量。
+// OnSubscribed：设备订阅自己的 pair / usage / frame 主题时，补发当前值。
 //
-// usage 不用 retain（payload 里的 now 会过期），所以设备重连后要靠这里
-// 才能立刻有数，否则得等到 agent 下一次上报（最长 10 分钟）。
+// usage / frame 不用 retain（用量里的 now 会过期、帧版本也会变）；pair
+// 虽然有 retained，但那只存在 broker 内存里，重启就没了，所以也要按
+// 密钥的当前状态补发，否则已配对设备会一直等不到 paired=true。
 // 在 goroutine 里发：hook 回调里同步 Publish 会和 broker 内部的订阅流程抢锁。
 func (h *Hook) OnSubscribed(cl *mqtt.Client, pk packets.Packet, reasonCodes []byte) {
-	if h.usage == nil {
-		return
-	}
 	id, ok := h.ids.get(cl)
 	if !ok || id.Role != auth.RoleDevice {
 		return
 	}
-	want := "printer/" + id.Dev + "/usage"
+	// 待配对密钥只能收 pair；ACL 已经拒绝它订阅 usage/frame，
+	// 这里再挡一层，避免将来 ACL 回归时把数据补发出去。
+	pending := id.Pending
 	for i, f := range pk.Filters {
-		if f.Filter != want || i >= len(reasonCodes) || reasonCodes[i] >= 0x80 {
+		if i >= len(reasonCodes) || reasonCodes[i] >= 0x80 {
 			continue
 		}
-		go h.usage.Resend(id.Dev)
+		switch f.Filter {
+		case "printer/" + id.Dev + "/pair":
+			if h.pair != nil {
+				go h.pair.ResendPair(id.Dev, id.KeyID)
+			}
+		case "printer/" + id.Dev + "/usage":
+			if !pending && h.usage != nil {
+				go h.usage.Resend(id.Dev)
+			}
+		case "printer/" + id.Dev + "/frame":
+			if !pending && h.frame != nil {
+				go h.frame.Resend(id.Dev)
+			}
+		}
 	}
 }
 
@@ -158,15 +196,12 @@ func (h *Hook) OnDisconnect(cl *mqtt.Client, err error, expire bool) {
 
 // OnPublished：设备往自己的 status 主题发心跳，记一笔在线。
 //
-// topic 是经过 ACL 校验的，dev 一律从 topic 取；payload 内容不参与判断——
-// 设备在打印退役后只用心跳维持「在线」这一个状态，作业/打印机字段都已删除。
+// topic 是经过 ACL 校验的，dev 一律从 topic 取；payload 内容不参与判断。
 func (h *Hook) OnPublished(cl *mqtt.Client, pk packets.Packet) {
 	if h.router == nil {
 		return
 	}
 	parts := strings.Split(pk.TopicName, "/")
-	// 主题固定是三段：printer/{dev}/status。不做通配符展开，
-	// 也不接受畸形 dev——否则 "printer/+/status" 会把通配符记成在线设备。
 	if len(parts) != 3 || parts[0] != "printer" || parts[2] != "status" {
 		return
 	}

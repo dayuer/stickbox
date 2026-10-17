@@ -1,5 +1,16 @@
 > **2026-10-17 注**：本文记录的 U 盘探针（`probe/usb-tv/`）已放弃并删除，代码见提交 `d019478`。
-> 结论：U 盘只有软拔插能让电视重读、每次退回首页约 15 秒，改走 DLNA 推流（`probe/dlna-tv/`）。
+> 结论：U 盘只有软拔插能让电视重读、每次退回首页约 15 秒，改走 DLNA 推流（验证工程后来并入 `rom/`）。
+>
+> **DLNA 结论（2026-10-17）**
+>
+> - DLNA 推流是正式路径：引擎已并入 `rom/main/{dlna,stream,jband}.c`，
+>   三星 UA60DU7000 上 1080p MJPEG 正常、无工具条。
+> - 起播：开机突发 8 帧 + 2fps，PLAYING 约 2 秒；6 分钟真实数据长跑无
+>   STOPPED / BrokenPipe / 重连。参数、矩阵与剩余问题见
+>   [`HANDOFF-tv-startup.md`](HANDOFF-tv-startup.md)。
+> - 验证工程 `probe/` 已在 T6b 删除；推流/起播实验脚本在
+>   [`experiments/tvstart/`](experiments/tvstart/)，`render_pages.py` 在
+>   `rom/tools/`。
 > 下面的三星电视能力、Tizen 控制通道等事实仍然有效。
 
 # 虚拟 U 盘探针 — 移交文档

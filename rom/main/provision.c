@@ -30,7 +30,6 @@ static volatile int  s_test_state;
 static char          s_test_err[48];
 static char          s_test_ip[16];
 static char          s_try_ssid[33], s_try_pass[65];
-static char          s_try_key[80];      /* 令牌 45 字符，留足余量 */
 static EventGroupHandle_t s_eg;
 #define EV_OK   BIT0
 #define EV_FAIL BIT1
@@ -67,16 +66,29 @@ static void prov_save(const char *ssid, const char *pass)
     nvs_set_str(h, "pass", pass);
     nvs_commit(h);
     nvs_close(h);
+    ESP_LOGI(TAG, "Wi-Fi 凭据已写入 NVS");
+}
 
-    /* 设备密钥单独一个 namespace：Wi-Fi 可能换，密钥不该跟着丢。
-     * 只在这次真填了才写——留空表示「不动已有的密钥」。 */
-    if (s_try_key[0] && nvs_open(NVS_CLOUD, NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_str(h, "devkey", s_try_key);
-        nvs_commit(h);
-        nvs_close(h);
-        ESP_LOGI(TAG, "设备密钥已写入 NVS（%d 字符）", (int)strlen(s_try_key));
-    }
-    ESP_LOGI(TAG, "凭据已写入 NVS");
+bool prov_save_devkey(const char *key)
+{
+    if (!key || !key[0]) return false;
+    nvs_handle_t h;
+    if (nvs_open(NVS_CLOUD, NVS_READWRITE, &h) != ESP_OK) return false;
+    esp_err_t e = nvs_set_str(h, "devkey", key);
+    if (e == ESP_OK) e = nvs_commit(h);
+    nvs_close(h);
+    if (e == ESP_OK) ESP_LOGI(TAG, "设备密钥已写入 NVS（%d 字符）", (int)strlen(key));
+    return e == ESP_OK;
+}
+
+void prov_erase_devkey(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_CLOUD, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_erase_all(h);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGW(TAG, "已清除设备密钥");
 }
 
 void prov_erase(void)
@@ -235,7 +247,6 @@ static esp_err_t h_connect(httpd_req_t *r)
 
     json_str(body, "s", s_try_ssid, sizeof s_try_ssid);
     json_str(body, "p", s_try_pass, sizeof s_try_pass);
-    json_str(body, "k", s_try_key,  sizeof s_try_key);   /* 设备密钥，可留空 */
     if (!s_try_ssid[0]) {
         httpd_resp_set_type(r, "application/json");
         return httpd_resp_send(r, "{\"ok\":0}", HTTPD_RESP_USE_STRLEN);
@@ -250,8 +261,8 @@ static esp_err_t h_connect(httpd_req_t *r)
 static esp_err_t h_status(httpd_req_t *r)
 {
     /* dev 是 STA MAC 去掉冒号的小写十六进制，与云端协议里的 {dev} 完全一致
-       （API 文档第 0 节）。App 拿它去 POST /api/device/enroll 换设备密钥——
-       没有这个字段配网就走不通。
+       （API 文档第 0 节）。设备拿它去 POST /api/device/register 换设备密钥——
+       没有这个字段注册就走不通。
 
        注意用 ESP_MAC_WIFI_STA，不是热点用的那个 SOFTAP MAC：两者不同，
        所以 SSID 后缀也推不出 dev。 */

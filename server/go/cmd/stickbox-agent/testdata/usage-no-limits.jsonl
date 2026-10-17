@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","model":"claude-opus-5-5","session_id":"00000000-0000-0000-0000-000000000000","cwd":"/Users/example"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"usage"}]},"usage_report":{"session":{"total_cost_usd":0,"total_api_duration_ms":0,"total_duration_ms":27025,"total_lines_added":0,"total_lines_removed":0,"model_usage":{}},"rate_limits":{"limits":null,"extra_usage":null}}}
+{"type":"result","subtype":"success","is_error":false,"result":"usage"}

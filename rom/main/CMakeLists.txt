@@ -1,3 +1,8 @@
-idf_component_register(SRCS "main.c" "usb_printer.c" "cloud_client.c" "netlog.c" "lcd_ui.c" "font_cn_16.c" "provision.c" "joblog.c" "printer_profile.c" "profile_script.c" "usage_http.c"
-                       INCLUDE_DIRS "."
-                       REQUIRES usb driver esp_timer esp_wifi nvs_flash esp_netif esp_http_server mqtt esp_http_client esp-tls json)
+idf_component_register(
+    SRCS "main.c" "cloud_client.c" "netlog.c" "lcd_ui.c" "font_cn_16.c"
+         "provision.c" "dlna.c" "stream.c" "jband.c" "pairband.c"
+    INCLUDE_DIRS "."
+    REQUIRES esp_wifi esp_event nvs_flash esp_netif esp_http_server esp_http_client
+             mqtt json lwip esp_timer esp-tls driver
+    EMBED_FILES "assets/page1.jpg" "assets/page2.jpg" "assets/page3.jpg"
+)

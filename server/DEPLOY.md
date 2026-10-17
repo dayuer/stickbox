@@ -1,10 +1,12 @@
 # stickboxd 部署
 
-StickBox 服务端的部署说明。项目方向与接口约定见
-[`docs/PLAN.md`](../docs/PLAN.md)。
+StickBox 服务端的部署说明。项目方向见
+[`docs/PLAN.md`](../docs/PLAN.md)；HTTP / MQTT 接口约定见
+[`docs/API.md`](../docs/API.md)；日常运维（指标、回滚、告警）见
+[`docs/OPS.md`](../docs/OPS.md)。
 
 **部署物只有两样：一个 Go 二进制和一个 sqlite 文件。**
-不再需要 CUPS、PPD、字体、Python，也不再保存任何打印作业文件。
+没有手机号、短信服务商和 App；设备靠配对码绑定到 agent。
 
 ---
 
@@ -26,25 +28,22 @@ sudo chown -R stickbox:stickbox /opt/stickbox
 ```
 
 数据库文件 `jobs.db` 会在首次启动时自动创建在 `root` 目录下。
-文件名沿用旧版：已有部署的账号与设备都在这只库里，改名等于让升级丢数据。
-
-生成两把密钥：
-
-```bash
-openssl rand -hex 32
-```
+文件名沿用旧版：已有部署的数据都在这只库里，改名等于让升级丢数据。
 
 照 `server/config.example.json` 写 `/opt/stickbox/config.json`，权限 `600`。
+配置里只有服务地址与证书目录。
 
-## 3. 两把密钥的运维含义（这一节最重要）
+## 3. 配对流程（没有 App、没有手机号）
 
-| 密钥 | 换掉的后果 |
-|---|---|
-| `phone_pepper` | **全体用户无法登录**（手机号 HMAC 全部对不上）。**绝不轮换** |
-| `phone_key` | 旧的加密号码解不开，但**登录不受影响**。真要轮换得写一次全表重加密 |
+1. 设备配好 Wi-Fi 后调 `POST /api/device/register {dev}`，拿到设备密钥和
+   一个 6 位配对码，显示在电视和 LCD 上。
+2. 用户在电脑上运行 `stickbox-agent pair 123456`，调
+   `POST /api/agent/pair`。设备归属该 agent 的用户，配对码作废。
+3. 已绑定的 MAC 被擦 NVS 重来时，新密钥处于待配对；只有原主人的 agent
+   输码才能转正（同时吊销旧密钥），其他人输码返回 409。
+4. 解绑用 `POST /api/agent/unpair {dev}`（agent 鉴权）。
 
-两者都在 `config.json` 里，`chmod 600`，不入库。**备份 `config.json` 时它们
-一起走，丢了等于用户全体失联。**
+配对码 10 分钟有效、一次性；注册和配对失败都有进程内限流。
 
 ## 4. 证书
 
@@ -59,14 +58,160 @@ certbot 照旧。**deploy hook 不需要了**——进程按文件 mtime 自己�
 验证热重载生效：
 
 ```bash
-sudo touch /etc/letsencrypt/live/your.host/fullchain.pem && sudo journalctl -u stickboxd -n 20 | grep 热重载
+sudo touch /etc/letsencrypt/live/mqtt.stickbox.ai/fullchain.pem && sudo journalctl -u stickboxd -n 20 | grep 热重载
 ```
+
+## 4b. 容器网络与 nginx 反代
+
+容器用 `network_mode: host`，没有端口映射。`config.json` 里
+`http_addr` 必须是 `127.0.0.1:9443`，MQTT 仍是 `:8883`：
+
+```json
+{
+  "root": "/data",
+  "cert_dir": "/etc/letsencrypt/live/mqtt.stickbox.ai",
+  "http_addr": "127.0.0.1:9443",
+  "mqtt_addr": ":8883",
+  "default_tz": "UTC",
+  "metrics_addr": "127.0.0.1:9090"
+}
+```
+
+`root` 必须指向容器里可写的 `/data`（宿主机 `/opt/stickbox/data`）。
+容器根文件系统是只读的，写成 `/opt/stickbox` 会报
+`attempt to write a readonly database`。
+
+`default_tz` 只在 agent 没上报 IANA 时区时兜底。看板按用户本地时间
+渲染日期与跨天重建；如果用户的 agent 拿不到时区（例如 macOS 的
+`time.Local` 只叫 `Local` 且没有 `TZ`），把它设成用户所在时区，
+例如 `Asia/Bangkok`。服务端二进制已内嵌 tzdata，distroless 镜像里
+也能解析 IANA 名。
+
+```bash
+sudo mkdir -p /opt/stickbox/data
+sudo cp server/deploy/compose.yml /opt/stickbox/
+sudo cp server/config.example.json /opt/stickbox/config.json   # 改成上面的值
+sudo chmod 600 /opt/stickbox/config.json
+cd /opt/stickbox && sudo docker compose up -d
+docker inspect --format '{{.State.Health.Status}}' stickboxd   # 期望 healthy
+```
+
+### 健康检查与指标
+
+- `GET /healthz`（主 HTTPS 端口，不鉴权）只返回 200/503；检查 sqlite
+  可读和 MQTT broker 在监听。compose 的 healthcheck 用
+  `/stickboxd -conf /etc/stickbox/config.json healthcheck`（distroless
+  没有 curl；`-conf` 必须在子命令之前）。
+- `GET /metrics` 只监听 `127.0.0.1:9090`，不经过 nginx：
+  `curl -s http://127.0.0.1:9090/metrics`。不要把 9090 暴露到公网。
+
+宿主机 nginx 在 443 终止 TLS，再反代到本机 9443（反代本身也走 TLS）。
+站点文件 `/etc/nginx/sites-available/mqtt.stickbox.ai`：
+
+```nginx
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name mqtt.stickbox.ai;
+
+    ssl_certificate /etc/letsencrypt/live/mqtt.stickbox.ai/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mqtt.stickbox.ai/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    client_max_body_size 32k;
+
+    # 健康检查不鉴权，只回答 200/503；可以给外部 uptime 监控用。
+    location = /healthz {
+        proxy_pass https://127.0.0.1:9443;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 5s;
+    }
+
+    location /api/ {
+        proxy_pass https://127.0.0.1:9443;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 30s;
+    }
+
+    location / {
+        return 404;
+    }
+}
+```
+
+```bash
+sudo ln -s /etc/nginx/sites-available/mqtt.stickbox.ai /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+要点：
+
+- **不写 80 端口的 server**。证书走 webroot 续期，80 端口的隐式默认
+  server（`conf.d/handmake.ai.conf`）已经给所有主机名提供 acme-challenge。
+- XFF 用 `$remote_addr` **覆盖写**，不追加。服务端 `clientIP` 只在
+  `RemoteAddr` 是 `127.0.0.1`/`::1` 时采用 `X-Forwarded-For`，
+  其余来源一律忽略该头；IPv6 按 /64 作为限流键。
+- 容器用 host 网络正是为了让容器看到的来源是回环地址；桥接网络里
+  会是 docker 网关（如 `172.21.0.1`），XFF 逻辑不会生效。
 
 ## 5. 备份
 
-**`jobs.db` 含个人信息**（加密的手机号与用量）。备份文件必须加密且限权，
-不能随手 `scp` 到本地。文件名虽旧，里面已经没有作业数据——打印表在
-启动时会一次性清掉。
+**`jobs.db` 含设备密钥、配对关系与用量。** 备份必须加密；明文不能留在
+服务器上，也不能随手 `scp`。
+
+### 自动备份
+
+`server/deploy/backup.sh` 每天：
+
+1. 在容器里跑 `stickboxd backup`（`VACUUM INTO`，在线一致性快照；
+   镜像里没有 sqlite3）；
+2. 用 `age` 公钥加密到 `/opt/stickbox/backups/jobs-<UTC时间>.db.age`；
+3. 只保留最近 **14** 份；有锁，cron 重叠会跳过。
+
+安装：
+
+```bash
+sudo cp server/deploy/backup.sh /opt/stickbox/backup.sh
+sudo cp server/deploy/age.pub   /opt/stickbox/age.pub
+sudo chmod 700 /opt/stickbox/backup.sh
+sudo apt install age            # 或发行版对应包
+# cron（避开整点）
+echo '17 3 * * * /opt/stickbox/backup.sh >> /var/log/stickbox-backup.log 2>&1' | sudo tee /etc/cron.d/stickbox-backup
+```
+
+`server/deploy/age.pub` 是仓库里的公钥；**私钥不在服务器上**。生成/轮换：
+
+```bash
+age-keygen -o ~/stickbox-age.key           # 私钥离线保管，绝不入库
+age-keygen -y ~/stickbox-age.key > server/deploy/age.pub
+```
+
+### 恢复
+
+```bash
+cd /opt/stickbox
+sudo docker compose stop stickboxd
+
+# 解密（私钥可以在另一台机器上执行，把明文安全传回）
+age -d -i ~/stickbox-age.key -o /tmp/jobs.db backups/jobs-YYYYMMDDTHHMMSSZ.db.age
+sudo mv /tmp/jobs.db data/jobs.db
+sudo rm -f data/jobs.db-wal data/jobs.db-shm
+
+sudo docker compose up -d stickboxd
+docker inspect --format '{{.State.Health.Status}}' stickboxd
+```
+
+恢复后跑一次 `docker exec stickboxd /stickboxd -conf /etc/stickbox/config.json device list`
+确认库能读。
 
 ## 5b. ⚠ 别用 root 试跑二进制
 
@@ -90,24 +235,20 @@ chown -R stickbox:stickbox /opt/stickbox && systemctl restart stickboxd
 
 ## 6. 从旧服务切换
 
-旧部署里的作业服务与独立 mosquitto 都要停掉；broker 已内嵌，
-设备侧要同步换密钥，不设并行期。
+旧部署里的作业服务与独立 mosquitto 都要停掉；broker 已内嵌。
 
 ```bash
 sudo systemctl stop stickbox-job.service mosquitto.service
 sudo systemctl disable mosquitto.service
-sudo cp server/stickboxd.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now stickboxd.service
 ```
 
-打印功能在本次切换中整条退役：`/api/print`、作业取件、打印机档案与适配
-测试端点都已删除，旧固件不能再打印。
+然后按 4b 用 Docker Compose 起 `stickboxd`。`server/stickboxd.service`
+只保留给不用 Docker 的部署，生产不再使用它。
 
-**MQTT 主题前缀仍然叫 `printer/{dev}/…`。** 打印退役不改变主题名：固件、
-ACL、部署校验脚本都按这个约定写好了，改名会让设备与运维脚本必须同时升
-级，没有收益。现在只使用 `printer/{dev}/status`（心跳）与
-`printer/{dev}/usage`（用量）两个叶子主题。
+打印功能在本次切换中整条退役。**MQTT 主题前缀仍然叫 `printer/{dev}/…`**：
+固件、ACL、部署校验脚本都按这个约定写好了，改名没有收益。现在只使用
+`printer/{dev}/status`（心跳）、`printer/{dev}/usage`（用量）与
+`printer/{dev}/pair`（配对通知）三个叶子主题。
 
 ## 7. 回滚
 
@@ -116,18 +257,25 @@ stickboxd 本身出了问题，换回上一版二进制并恢复 `jobs.db` 备�
 
 ## 8. 上线验证清单
 
-切换后逐条执行。`$DEV` / `$DEVKEY` / `$APPTOK` 按接口文档拿。
-
 ```bash
-ss -lntp | grep -E ':(8883|9443)'
+ss -lntp | grep -E ':(8883|443|9443)'
 ```
 
 ```bash
-openssl s_client -connect mqtt.silkline.id:9443 -servername mqtt.silkline.id </dev/null 2>/dev/null | openssl x509 -noout -dates
+openssl s_client -connect mqtt.stickbox.ai:443 -servername mqtt.stickbox.ai </dev/null 2>/dev/null | openssl x509 -noout -dates
 ```
 
+注册一台测试设备并配对：
+
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' https://mqtt.silkline.id:9443/api/status
+curl -s -X POST https://mqtt.stickbox.ai/api/device/register \
+  -H 'Content-Type: application/json' -d '{"dev":"f412fa87c9e0"}'
+# → {"token":"...","code":"123456","expires_at":...,"now":...,"pending":true}
+curl -s -X POST https://mqtt.stickbox.ai/api/agent/pair \
+  -H 'Content-Type: application/json' -d '{"code":"123456","name":"test"}'
+# → {"dev":"f412fa87c9e0","user_id":"...","token":"..."}
+curl -s https://mqtt.stickbox.ai/api/agent/devices \
+  -H "Authorization: Bearer $AGENTTOK"
 ```
 
 ### 必须为「失败」的检查
@@ -135,36 +283,36 @@ curl -s -o /dev/null -w '%{http_code}\n' https://mqtt.silkline.id:9443/api/statu
 这几条没有用户可见的症状，坏了也不会有人报障，所以必须主动验。
 
 ```bash
-mosquitto_pub -h mqtt.silkline.id -p 8883 --capath /etc/ssl/certs -u $DEV -P 'bogus.key' -t "printer/$DEV/status" -m '{}'; echo "退出码=$? （非 0 才对）"
+mosquitto_pub -h mqtt.stickbox.ai -p 8883 --capath /etc/ssl/certs -u $DEV -P 'bogus.key' -t "printer/$DEV/status" -m '{}'; echo "退出码=$? （非 0 才对）"
 ```
 
 ```bash
-mosquitto_pub -h mqtt.silkline.id -p 8883 --capath /etc/ssl/certs -u $DEV -P "$DEVKEY" -t 'printer/aaaaaaaaaaaa/status' -m '{}'; echo "退出码=$? （非 0 才对）"
+mosquitto_pub -h mqtt.stickbox.ai -p 8883 --capath /etc/ssl/certs -u $DEV -P "$DEVKEY" -t 'printer/aaaaaaaaaaaa/status' -m '{}'; echo "退出码=$? （非 0 才对）"
 ```
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' -X POST https://mqtt.silkline.id:9443/api/print -H "Authorization: Bearer $APPTOK"
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://mqtt.stickbox.ai/api/device/register \
+  -H 'Content-Type: application/json' -d '{"dev":"zz"}'
+# → 400
 ```
 
-依次应当是：连接被拒（非 0）、订阅被拒（非 0）、`404`（打印端点已删除）。
-
-用量链路另验一条：App 读取自己的最新用量应返回 `200`（还没上报过则是
-`404`），agent 用手机号 + 验证码登录后能 `POST /api/usage`。
+依次应当是：连接被拒（非 0）、订阅被拒（非 0）、`400`。
 
 ## 9. 运维子命令
 
 ```bash
-sudo -u stickbox /opt/stickbox/bin/stickboxd -conf /opt/stickbox/config.json device list
+docker exec stickboxd /stickboxd -conf /etc/stickbox/config.json device list
+# 非 Docker 部署：sudo -u stickbox /opt/stickbox/bin/stickboxd -conf ... device list
 ```
 
 | 命令 | 用途 |
 |---|---|
-| `device add <dev> [name]` | 手工签发 device 密钥（调试用；正常走 App 的 enroll） |
-| `device list` | 列出全部密钥 |
+| `healthcheck` | 打一次 `/healthz`，容器 healthcheck 用 |
+| `backup -out <file>` | 在线导出 sqlite 快照，`backup.sh` 用 |
+| `device add <dev> [name]` | 手工签发 device 密钥（调试用；正常走设备注册） |
+| `device list` | 列出全部密钥（含「待配对」状态） |
 | `device revoke <key_id>` | 吊销一把 |
-| `device unbind <dev>` | **强制解绑**，处理「二手转让但原持有人不配合」 |
-| `user list` | 列出用户，只显示手机尾号 |
-| `user phone <user_id>` | 解出完整号码，**每次调用写 `/opt/stickbox/audit.log`** |
+| `device unbind <dev>` | **强制解绑**，处理二手转让 |
+| `user list` | 列出用户（没有手机号） |
 
 `device unbind` 绕过所有权检查，所以只能在服务器上执行，不暴露为 API。
-`user phone` 是唯一能解出完整号码的入口。

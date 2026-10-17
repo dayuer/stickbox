@@ -9,16 +9,15 @@ import (
 )
 
 // 设备用 esp_http_client，**不解 chunked 响应体**。
-// 所有 JSON 响应都必须带 Content-Length（SERVER-REQUIREMENTS 3.3）。
+// 所有 JSON 响应都必须带 Content-Length。
 func TestAllJSONResponsesHaveContentLength(t *testing.T) {
-	h, dep := newTestAPI(t)
-	token := login(t, h, dep, "13800008888")
+	h, _ := newTestAPI(t)
 
 	checks := []*httptest.ResponseRecorder{
-		get(h, "/api/status", nil),                                   // 401
-		post(h, "/api/auth/sms", `{"phone":"12345"}`, nil),           // 400
-		post(h, "/api/auth/sms", `{"phone":"13900001111"}`, nil),     // 200
-		post(h, "/api/device/enroll", `{"dev":"zz"}`, bearer(token)), // 400
+		get(h, "/api/agent/devices", nil),                              // 401
+		post(h, "/api/device/register", `{"dev":"zz"}`, nil),           // 400
+		post(h, "/api/device/register", `{"dev":"f412fa87c9e0"}`, nil), // 200
+		post(h, "/api/agent/pair", `{"code":"123"}`, nil),              // 400
 	}
 	for i, rr := range checks {
 		cl := rr.Header().Get("Content-Length")
@@ -37,14 +36,10 @@ func TestAllJSONResponsesHaveContentLength(t *testing.T) {
 	}
 }
 
-// 任何路径的 POST 都必须读完请求体，即使要返回错误
-// （SERVER-REQUIREMENTS 3.1）。不读会让 HTTP/1.1 长连接失步：
-// 设备发完几 KB 卡住等响应，34 秒后 MQTT 跟着写超时，最后设备重启。
+// 任何路径的 POST 都必须读完请求体，即使要返回错误。
+// 不读会让 HTTP/1.1 长连接失步，设备卡住直到超时重启。
 func TestErrorResponsesDrainRequestBody(t *testing.T) {
-	h, dep := newTestAPI(t)
-	token := login(t, h, dep, "13800008888")
-	devKey := enroll(t, h, token, "f412fa87c9e0")
-
+	h, _ := newTestAPI(t)
 	big := bytes.Repeat([]byte("x"), 7<<10)
 
 	cases := []struct {
@@ -53,14 +48,12 @@ func TestErrorResponsesDrainRequestBody(t *testing.T) {
 		hdr  map[string]string
 	}{
 		{"未知路径", httptest.NewRequest("POST", "/api/nope", bytes.NewReader(big)), nil},
-		{"未授权的用量上报",
+		{"没有令牌上报用量",
 			httptest.NewRequest("POST", "/api/usage", bytes.NewReader(big)), nil},
-		{"app 令牌不能上报用量",
-			httptest.NewRequest("POST", "/api/usage", bytes.NewReader(big)),
-			bearer(token)},
-		{"device 密钥不能 enroll",
-			httptest.NewRequest("POST", "/api/device/enroll", bytes.NewReader(big)),
-			bearer(devKey)},
+		{"配对请求体过大",
+			httptest.NewRequest("POST", "/api/agent/pair", bytes.NewReader(big)), nil},
+		{"注册请求体过大",
+			httptest.NewRequest("POST", "/api/device/register", bytes.NewReader(big)), nil},
 	}
 	for _, c := range cases {
 		rr := do(h, c.req, c.hdr)

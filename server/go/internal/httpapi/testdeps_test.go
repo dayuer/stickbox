@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -16,15 +15,11 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/store"
 )
 
-type fakeSender struct{ last string }
-
-func (f *fakeSender) Send(ctx context.Context, phone, code string) error {
-	f.last = code
-	return nil
+// recPub 记下推给每台设备的最后一份用量和配对通知。
+type recPub struct {
+	usage map[string][]byte
+	pair  map[string][]byte
 }
-
-// recPub 记下推给每台设备的最后一份用量，测试据此断言。
-type recPub struct{ usage map[string][]byte }
 
 func (p *recPub) PublishUsage(dev string, payload []byte) error {
 	if p.usage == nil {
@@ -34,22 +29,30 @@ func (p *recPub) PublishUsage(dev string, payload []byte) error {
 	return nil
 }
 
-type nopMem struct{}
+func (p *recPub) PublishPair(dev string, payload []byte) error {
+	if p.pair == nil {
+		p.pair = map[string][]byte{}
+	}
+	p.pair[dev] = payload
+	return nil
+}
 
-func (nopMem) Invalidate(string) {}
+func (p *recPub) KickDevice(dev string) {} // 测试里没有真连接可踢
 
 type testDeps struct {
-	store  *store.Store
-	phone  *auth.PhoneBox
-	sender *fakeSender
-	reg    *registry.Registry
-	v      *auth.Verifier
-	cfg    *config.Config
-	pub    *recPub
-	clock  time.Time
+	store *store.Store
+	reg   *registry.Registry
+	v     *auth.Verifier
+	cfg   *config.Config
+	pub   *recPub
+	api   *API // 用于在 New 之后注入帧服务
 }
 
 func newTestAPI(t *testing.T) (http.Handler, *testDeps) {
+	return newTestAPIWithHealth(t, nil)
+}
+
+func newTestAPIWithHealth(t *testing.T, h HealthChecker) (http.Handler, *testDeps) {
 	t.Helper()
 	dir := t.TempDir()
 	st, err := store.Open(filepath.Join(dir, "test.db"))
@@ -58,22 +61,16 @@ func newTestAPI(t *testing.T) (http.Handler, *testDeps) {
 	}
 	t.Cleanup(func() { st.Close() })
 
-	pb, err := auth.NewPhoneBox("test-pepper",
-		"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
-	if err != nil {
-		t.Fatal(err)
-	}
-	dep := &testDeps{store: st, phone: pb, sender: &fakeSender{},
-		clock: time.Unix(1_000_000, 0)}
-	sms := auth.NewSMS(st, dep.sender, func() time.Time { return dep.clock })
-	dep.pub = &recPub{}
+	dep := &testDeps{store: st, pub: &recPub{}}
 	reg := registry.New(registry.Options{IdleTimeout: time.Hour})
 	t.Cleanup(reg.Shutdown)
 	dep.reg = reg
 	dep.v = auth.NewVerifier(st)
-
 	dep.cfg = &config.Config{Root: dir}
-	return New(dep.cfg, st, dep.v, pb, sms, reg, nopMem{}, dep.pub).Handler(), dep
+	api := New(dep.cfg, st, dep.v, reg, dep.pub)
+	api.SetHealth(h)
+	dep.api = api
+	return api.Handler(), dep
 }
 
 // —— 请求辅助 ——
@@ -101,55 +98,65 @@ func get(h http.Handler, path string, hdr map[string]string) *httptest.ResponseR
 	return do(h, httptest.NewRequest("GET", path, nil), hdr)
 }
 
-// login 走完整的发码 → 校验流程，返回 app session token。
-func login(t *testing.T, h http.Handler, dep *testDeps, phone string) string {
+// register 调 POST /api/device/register，返回待配对设备密钥和配对码。
+func register(t *testing.T, h http.Handler, dev string) (token, code string) {
 	t.Helper()
-	if rr := post(h, "/api/auth/sms", `{"phone":"`+phone+`"}`, nil); rr.Code != 200 {
-		t.Fatalf("发码失败：%d %s", rr.Code, rr.Body)
-	}
-	rr := post(h, "/api/auth/verify",
-		`{"phone":"`+phone+`","code":"`+dep.sender.last+`","device":"test"}`, nil)
-	var out struct {
-		Token string `json:"token"`
-	}
-	json.Unmarshal(rr.Body.Bytes(), &out)
-	if out.Token == "" {
-		t.Fatalf("登录失败：%d %s", rr.Code, rr.Body)
-	}
-	return out.Token
-}
-
-// agentLogin 为已有账号签发一把 agent 令牌。
-// 发码复用 /api/auth/sms；agent 登录不会新建账号。
-func agentLogin(t *testing.T, h http.Handler, dep *testDeps, phone string) string {
-	t.Helper()
-	// 同一号码 60 秒内不能重发；测试时钟往前拨，绕开短信闸。
-	dep.clock = dep.clock.Add(2 * time.Minute)
-	if rr := post(h, "/api/auth/sms", `{"phone":"`+phone+`"}`, nil); rr.Code != 200 {
-		t.Fatalf("发码失败：%d %s", rr.Code, rr.Body)
-	}
-	rr := post(h, "/api/agent/login",
-		`{"phone":"`+phone+`","code":"`+dep.sender.last+`","name":"mac"}`, nil)
-	var out struct {
-		Token string `json:"token"`
-	}
-	json.Unmarshal(rr.Body.Bytes(), &out)
-	if out.Token == "" {
-		t.Fatalf("agent 登录失败：%d %s", rr.Code, rr.Body)
-	}
-	return out.Token
-}
-
-// enroll 绑一台设备，返回 device 密钥。
-func enroll(t *testing.T, h http.Handler, token, dev string) string {
-	t.Helper()
-	rr := post(h, "/api/device/enroll", `{"dev":"`+dev+`"}`, bearer(token))
+	rr := post(h, "/api/device/register", `{"dev":"`+dev+`"}`, nil)
 	if rr.Code != 200 {
-		t.Fatalf("enroll 失败：%d %s", rr.Code, rr.Body)
+		t.Fatalf("register = %d %s", rr.Code, rr.Body)
 	}
 	var out struct {
-		DeviceKey string `json:"device_key"`
+		Token string `json:"token"`
+		Code  string `json:"code"`
 	}
 	json.Unmarshal(rr.Body.Bytes(), &out)
-	return out.DeviceKey
+	if out.Token == "" || len(out.Code) != 6 {
+		t.Fatalf("register 响应异常：%s", rr.Body)
+	}
+	return out.Token, out.Code
+}
+
+func tryPair(h http.Handler, code, agentToken string) *httptest.ResponseRecorder {
+	hdr := map[string]string{"Content-Type": "application/json"}
+	if agentToken != "" {
+		hdr = bearer(agentToken)
+	}
+	return post(h, "/api/agent/pair", `{"code":"`+code+`","name":"test-mac"}`, hdr)
+}
+
+// mustPair 配对并返回 agent 令牌、dev、user_id。
+func mustPair(t *testing.T, h http.Handler, code, agentToken string) (token, dev, userID string) {
+	t.Helper()
+	rr := tryPair(h, code, agentToken)
+	if rr.Code != 200 {
+		t.Fatalf("pair = %d %s", rr.Code, rr.Body)
+	}
+	var out struct {
+		Token  string `json:"token"`
+		Dev    string `json:"dev"`
+		UserID string `json:"user_id"`
+	}
+	json.Unmarshal(rr.Body.Bytes(), &out)
+	return out.Token, out.Dev, out.UserID
+}
+
+func agentDevices(t *testing.T, h http.Handler, tok string) []struct {
+	Dev    string `json:"dev"`
+	Name   string `json:"name"`
+	Online bool   `json:"online"`
+} {
+	t.Helper()
+	rr := get(h, "/api/agent/devices", bearer(tok))
+	if rr.Code != 200 {
+		t.Fatalf("devices = %d %s", rr.Code, rr.Body)
+	}
+	var out struct {
+		Devices []struct {
+			Dev    string `json:"dev"`
+			Name   string `json:"name"`
+			Online bool   `json:"online"`
+		} `json:"devices"`
+	}
+	json.Unmarshal(rr.Body.Bytes(), &out)
+	return out.Devices
 }

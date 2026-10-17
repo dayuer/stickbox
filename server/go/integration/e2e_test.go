@@ -1,9 +1,13 @@
 package integration
 
 import (
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
+
+	"github.com/dayuer/stickbox/server/go/internal/frame"
 )
 
 type deviceUsage struct {
@@ -43,23 +47,54 @@ func parseUsage(t *testing.T, raw []byte) deviceUsage {
 	return u
 }
 
-// 完整用量链路：agent 上报 → 服务端落库 → MQTT printer/{dev}/usage → 设备。
-//
-// 单测都过不代表串起来能用——mochi 的 Serve() 非阻塞那个 bug 就是
-// 只有真跑起来才暴露的。
-func TestEndToEndUsageDelivery(t *testing.T) {
-	const phone, code = "13800000000", "424242"
-	e := startServerWithDevLogin(t, phone, code)
-	appTok := e.loginWithCode(phone, code)
-	devKey := e.enroll(appTok, "f412fa87c9e0")
-	dev := e.connectDevice("f412fa87c9e0", devKey)
-	dev.heartbeat("ready")
-
-	if err := dev.subscribeUsage(); err != nil {
-		t.Fatalf("订阅用量 = %v", err)
+func pairPayload(t *testing.T, raw []byte) bool {
+	t.Helper()
+	var p struct {
+		Paired bool `json:"paired"`
 	}
-	e.sendCode(phone)
-	agentTok := e.agentLoginWithCode(phone, code)
+	if err := json.Unmarshal(raw, &p); err != nil {
+		t.Fatalf("配对通知不是合法 JSON：%v（%s）", err, raw)
+	}
+	return p.Paired
+}
+
+// 完整链路：设备注册 → 出码 → 设备连 MQTT 等配对 → agent 输码 →
+// 设备收到 paired=true → 用新身份重连 → agent 上报用量 → 设备收到。
+//
+// 待配对密钥按 ACL 不能订阅 usage；服务端在配对成功后会踢掉旧连接，
+// 固件自动重连后用 active 身份重新订阅。这里模拟那次重连。
+func TestEndToEndRegisterPairUsage(t *testing.T) {
+	e := startServer(t)
+	devKey, code := e.register("f412fa87c9e0")
+
+	dev := e.connectDevice("f412fa87c9e0", devKey)
+	dev.heartbeat()
+	if err := dev.subscribePair(); err != nil {
+		t.Fatalf("订阅配对 = %v", err)
+	}
+	if err := dev.subscribeUsage(); err == nil {
+		t.Fatal("pending 密钥订阅了 usage——ACL 没生效")
+	}
+
+	agentTok, pairedDev, _ := e.pair(code, "")
+	if pairedDev != "f412fa87c9e0" {
+		t.Fatalf("配对的 dev = %q", pairedDev)
+	}
+
+	// 配对后服务端立即踢掉旧连接（旧身份还是 pending）；重连后用 active
+	// 身份订阅，retained 的 paired=true 会补发。
+	time.Sleep(500 * time.Millisecond)
+	dev.disconnect()
+	dev = e.connectDevice("f412fa87c9e0", devKey)
+	if err := dev.subscribePair(); err != nil {
+		t.Fatalf("配对后订阅配对 = %v", err)
+	}
+	if !pairPayload(t, dev.waitPair(5*time.Second)) {
+		t.Error("配对通知不是 paired=true")
+	}
+	if err := dev.subscribeUsage(); err != nil {
+		t.Fatalf("配对后订阅用量 = %v", err)
+	}
 
 	before := time.Now().Unix()
 	e.reportUsage(agentTok, usageReport(time.Now(), 12.5))
@@ -69,74 +104,139 @@ func TestEndToEndUsageDelivery(t *testing.T) {
 	if got.FiveHour == nil || got.FiveHour.UsedPercentage != 12.5 {
 		t.Errorf("five_hour = %+v，期望 12.5", got.FiveHour)
 	}
-	if got.SevenDay == nil || got.SevenDay.UsedPercentage != 6.25 {
-		t.Errorf("seven_day = %+v，期望 6.25", got.SevenDay)
-	}
 	if got.Now < before || got.Now > after {
-		t.Errorf("now = %d，不在 [%d,%d]——设备要靠它和服务端对表", got.Now, before, after)
+		t.Errorf("now = %d，不在 [%d,%d]", got.Now, before, after)
 	}
 	if got.TS < before || got.TS > after {
 		t.Errorf("ts = %d，不在 [%d,%d]", got.TS, before, after)
 	}
+
+	// agent 能查到自己的设备和用量。
+	st, b := e.req("GET", "/api/agent/devices", "",
+		map[string]string{"Authorization": "Bearer " + agentTok})
+	if st != 200 {
+		t.Fatalf("agent devices = %d %s", st, b)
+	}
+	var list struct {
+		Devices []struct {
+			Dev    string `json:"dev"`
+			Online bool   `json:"online"`
+		} `json:"devices"`
+	}
+	json.Unmarshal(b, &list)
+	if len(list.Devices) != 1 || !list.Devices[0].Online {
+		t.Errorf("设备列表 = %s", b)
+	}
+	st, b = e.req("GET", "/api/agent/usage", "",
+		map[string]string{"Authorization": "Bearer " + agentTok})
+	if st != 200 {
+		t.Errorf("agent usage = %d %s", st, b)
+	}
 }
 
-// 设备重连并重新订阅时，应立即收到补发。
-//
-// usage 没有 retain（payload 的 now 会过期），所以补发必须由 OnSubscribed
-// 现场生成一份新 now；ts 仍是服务端最初收到数据的时间。
-func TestEndToEndUsageResendOnReconnect(t *testing.T) {
-	const phone, code = "13800000000", "424242"
-	e := startServerWithDevLogin(t, phone, code)
-	appTok := e.loginWithCode(phone, code)
-	devKey := e.enroll(appTok, "f412fa87c9e0")
+// usage 没有 retain：设备晚订阅时靠 OnSubscribed 补发，now 现场盖。
+func TestEndToEndUsageResendOnSubscribe(t *testing.T) {
+	e := startServer(t)
+	devKey, code := e.register("f412fa87c9e0")
+	agentTok, _, _ := e.pair(code, "")
 
-	first := e.connectDevice("f412fa87c9e0", devKey)
-	first.heartbeat("ready")
-	if err := first.subscribeUsage(); err != nil {
-		t.Fatalf("首次订阅 = %v", err)
-	}
-	first.disconnect()
-
-	e.sendCode(phone)
-	agentTok := e.agentLoginWithCode(phone, code)
-	before := time.Now().Unix()
+	// 设备还没连；agent 先上报。配对后注册时那把密钥已经是有效密钥。
 	e.reportUsage(agentTok, usageReport(time.Now(), 33))
-	after := time.Now().Unix()
-
-	// 隔开一秒，确保补发的 now 一定大于最初收到的 ts。
 	time.Sleep(1200 * time.Millisecond)
 
-	second := e.connectDevice("f412fa87c9e0", devKey)
-	second.heartbeat("ready")
-	if err := second.subscribeUsage(); err != nil {
-		t.Fatalf("重连订阅 = %v", err)
+	dev := e.connectDevice("f412fa87c9e0", devKey)
+	if err := dev.subscribeUsage(); err != nil {
+		t.Fatalf("订阅 = %v", err)
 	}
-	got := parseUsage(t, second.waitUsage(5*time.Second))
-
-	if got.TS < before || got.TS > after {
-		t.Errorf("ts = %d，期望是服务端最初收到的时间 [%d,%d]", got.TS, before, after)
+	got := parseUsage(t, dev.waitUsage(5*time.Second))
+	if got.FiveHour == nil || got.FiveHour.UsedPercentage != 33 {
+		t.Errorf("补发内容 = %+v", got.FiveHour)
 	}
 	if got.Now <= got.TS {
-		t.Errorf("now = %d 不晚于 ts = %d——补发必须现场盖 now", got.Now, got.TS)
-	}
-	if got.FiveHour == nil || got.FiveHour.UsedPercentage != 33 {
-		t.Errorf("five_hour = %+v，期望 33", got.FiveHour)
+		t.Errorf("now=%d 不晚于 ts=%d，补发没有现场盖时间", got.Now, got.TS)
 	}
 }
 
-// ACL：设备不能订阅别人的 topic。
+// 已绑定的 MAC 重新注册：别人 409，原主人转正，旧密钥作废。
+func TestEndToEndReRegisterOwnership(t *testing.T) {
+	e := startServer(t)
+	oldKey, code1 := e.register("f412fa87c9e0")
+	agentA, _, _ := e.pair(code1, "")
+
+	// 另一个用户 B。
+	_, codeB := e.register("aabbccddeeff")
+	agentB, _, _ := e.pair(codeB, "")
+
+	newKey, code2 := e.register("f412fa87c9e0")
+	if st, b := e.tryPair(code2, agentB); st != 409 {
+		t.Fatalf("别人配对 = %d，期望 409：%s", st, b)
+	}
+	if st, b := e.tryPair(code2, agentA); st != 200 {
+		t.Fatalf("原主人配对 = %d %s", st, b)
+	}
+
+	if _, err := e.tryConnectDevice("f412fa87c9e0", oldKey); err == nil {
+		t.Error("旧设备密钥仍能连 MQTT")
+	}
+	d, err := e.tryConnectDevice("f412fa87c9e0", newKey)
+	if err != nil {
+		t.Errorf("新设备密钥连不上：%v", err)
+	} else {
+		d.disconnect()
+	}
+}
+
+// 解绑：设备收到 paired=false，旧密钥失效，可重新注册出码。
+func TestEndToEndUnpair(t *testing.T) {
+	e := startServer(t)
+	devKey, code := e.register("f412fa87c9e0")
+	dev := e.connectDevice("f412fa87c9e0", devKey)
+	if err := dev.subscribePair(); err != nil {
+		t.Fatalf("订阅配对 = %v", err)
+	}
+
+	agentTok, pairedDev, _ := e.pair(code, "")
+	// 配对后旧连接被踢；重连拿 retained 的 paired=true。
+	time.Sleep(500 * time.Millisecond)
+	dev.disconnect()
+	dev = e.connectDevice("f412fa87c9e0", devKey)
+	if err := dev.subscribePair(); err != nil {
+		t.Fatalf("重连订阅配对 = %v", err)
+	}
+	if !pairPayload(t, dev.waitPair(5*time.Second)) {
+		t.Fatal("没收到 paired=true")
+	}
+	e.unpair(agentTok, pairedDev)
+	if pairPayload(t, dev.waitPair(5*time.Second)) {
+		t.Error("解绑通知不是 paired=false")
+	}
+
+	if _, err := e.tryConnectDevice("f412fa87c9e0", devKey); err == nil {
+		t.Error("解绑后旧设备密钥仍能连 MQTT")
+	}
+	_, newCode := e.register("f412fa87c9e0")
+	if len(newCode) != 6 {
+		t.Error("解绑后没有重新出码")
+	}
+}
+
+// ACL：设备不能订阅别人的 usage / pair。
 func TestEndToEndACLBlocksCrossDevice(t *testing.T) {
 	e := startServer(t)
-	token := e.login("13800008888")
-	devKey := e.enroll(token, "f412fa87c9e0")
+	devKey, _ := e.register("f412fa87c9e0")
 	dev := e.connectDevice("f412fa87c9e0", devKey)
 
-	if err := dev.subscribe("printer/aaaaaaaaaaaa/usage"); err == nil {
-		t.Error("设备订阅了别人的 topic——ACL 没生效")
+	for _, topic := range []string{
+		"printer/aabbccddeeff/usage",
+		"printer/aabbccddeeff/pair",
+		"printer/aabbccddeeff/frame",
+	} {
+		if err := dev.subscribe(topic); err == nil {
+			t.Errorf("设备订阅了 %s——ACL 没生效", topic)
+		}
 	}
 }
 
-// 认证失败必须被拒，不能是「连上了但收不到消息」那种半死状态。
 func TestEndToEndRejectsBadKey(t *testing.T) {
 	e := startServer(t)
 	if _, err := e.tryConnectDevice("f412fa87c9e0", "bogus.key"); err == nil {
@@ -144,40 +244,227 @@ func TestEndToEndRejectsBadKey(t *testing.T) {
 	}
 }
 
-// device 角色的 username 必须等于密钥里的 dev，防止拿 A 的密钥冒充 B。
 func TestEndToEndRejectsMismatchedUsername(t *testing.T) {
 	e := startServer(t)
-	token := e.login("13800008888")
-	devKey := e.enroll(token, "f412fa87c9e0")
-	if _, err := e.tryConnectDevice("aaaaaaaaaaaa", devKey); err == nil {
+	devKey, _ := e.register("f412fa87c9e0")
+	if _, err := e.tryConnectDevice("aabbccddeeff", devKey); err == nil {
 		t.Error("用别的 username 拿着 A 的密钥连上了")
 	}
 }
 
-// agent 令牌只能走 HTTP，不能连 MQTT。
+// agent 只走 HTTP，不能连 MQTT。
 func TestEndToEndAgentCannotConnectMQTT(t *testing.T) {
-	const phone, code = "13800000000", "424242"
-	e := startServerWithDevLogin(t, phone, code)
-	e.loginWithCode(phone, code)
-	e.sendCode(phone)
-	agentTok := e.agentLoginWithCode(phone, code)
+	e := startServer(t)
+	_, code := e.register("f412fa87c9e0")
+	agentTok, _, _ := e.pair(code, "")
 	if _, err := e.tryConnectDevice("f412fa87c9e0", agentTok); err == nil {
 		t.Error("agent 令牌连上了 MQTT")
 	}
 }
 
-// 固定手机号：不发短信也能登录，测试链路不依赖短信服务商。
-func TestEndToEndDevLogin(t *testing.T) {
-	e := startServerWithDevLogin(t, "13800000000", "424242")
-	token := e.loginWithCode("13800000000", "424242")
-	if token == "" {
-		t.Fatal("固定手机号登录失败")
+// 知道 MAC 的人可以注册一把 pending 密钥，但它只能收配对通知：
+// 不能读 usage / frame，也不能影响原主人的密钥。
+func TestEndToEndPendingKeyCannotReadUserData(t *testing.T) {
+	e := startServer(t)
+	ownerKey, code := e.register("f412fa87c9e0")
+	agentTok, _, _ := e.pair(code, "")
+
+	// 同一 MAC 再注册：新增一把 pending 密钥，原有效密钥不受影响。
+	pendingKey, _ := e.register("f412fa87c9e0")
+	p := e.connectDevice("f412fa87c9e0", pendingKey)
+	if err := p.subscribePair(); err != nil {
+		t.Fatalf("pending 应能读配对通知：%v", err)
 	}
-	if e.sender.last != "" {
-		t.Errorf("固定号码发了真短信：%q", e.sender.last)
+	if err := p.subscribeUsage(); err == nil {
+		t.Error("pending 密钥订阅了 usage——ACL 没生效")
 	}
-	// 连续登录不该被 60 秒闸挡住
-	if e.loginWithCode("13800000000", "424242") == "" {
-		t.Error("连续登录被限流了，测试没法用")
+	if err := p.subscribe("printer/f412fa87c9e0/frame"); err == nil {
+		t.Error("pending 密钥订阅了 frame——ACL 没生效")
+	}
+
+	// 原主人的密钥仍能正常收用量。
+	owner := e.connectDevice("f412fa87c9e0", ownerKey)
+	if err := owner.subscribeUsage(); err != nil {
+		t.Fatalf("原密钥订阅 usage：%v", err)
+	}
+	e.reportUsage(agentTok, usageReport(time.Now(), 17))
+	got := parseUsage(t, owner.waitUsage(5*time.Second))
+	if got.FiveHour == nil || got.FiveHour.UsedPercentage != 17 {
+		t.Errorf("原主人收到 = %+v", got.FiveHour)
+	}
+	select {
+	case b := <-p.usage:
+		t.Errorf("pending 密钥收到了用量：%s", b)
+	case <-time.After(500 * time.Millisecond):
+	}
+}
+
+// 旧固件只在 MQTT_EVENT_CONNECTED 时订阅 usage，配对时密钥原地转正、
+// 连接不断开就会一直停在配对页。服务端踢连接后，paho 自动重连并重订。
+func TestEndToEndPairKicksLegacyDevice(t *testing.T) {
+	e := startServer(t)
+	devKey, code := e.register("f412fa87c9e0")
+
+	legacy, err := e.connectLegacyDevice("f412fa87c9e0", devKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// pending 时 usage 订阅必须被拒，不能出现 subscribed 信号。
+	select {
+	case <-legacy.subscribed:
+		t.Fatal("pending 时 usage 订阅成功——ACL 没生效")
+	case <-time.After(700 * time.Millisecond):
+	}
+
+	agentTok, pairedDev, _ := e.pair(code, "")
+	if pairedDev != "f412fa87c9e0" {
+		t.Fatalf("配对的 dev = %q", pairedDev)
+	}
+
+	// 服务端踢连接后，旧固件自动重连，OnConnect 里重新订阅 usage。
+	select {
+	case <-legacy.subscribed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("配对后没有自动重连并重新订阅 usage")
+	}
+
+	e.reportUsage(agentTok, usageReport(time.Now(), 23))
+	got := parseUsage(t, legacy.waitUsage(5*time.Second))
+	if got.FiveHour == nil || got.FiveHour.UsedPercentage != 23 {
+		t.Errorf("旧固件收到 = %+v", got.FiveHour)
+	}
+}
+
+// 帧分发全链路：配对出帧 → 设备订阅收到版本 → 上报用量后版本前进 →
+// GET 拿到帧包（meta 可解析） → ETag/304 → 重连订阅补发当前版本。
+func TestEndToEndFrameDistribution(t *testing.T) {
+	e := startServer(t)
+	devKey, code := e.register("f412fa87c9e0")
+	agentTok, _, _ := e.pair(code, "")
+
+	dev := e.connectDevice("f412fa87c9e0", devKey)
+	if err := dev.subscribeFrame(); err != nil {
+		t.Fatalf("订阅 frame = %v", err)
+	}
+	ver1 := dev.waitFrameVer(10 * time.Second)
+
+	e.reportUsage(agentTok, usageReport(time.Now(), 21.5))
+	ver2 := dev.waitFrameVer(10 * time.Second)
+	if ver2 <= ver1 {
+		t.Fatalf("上报用量后版本没有前进：%d → %d", ver1, ver2)
+	}
+
+	st, body, etag := e.getFrame(devKey, "")
+	if st != 200 {
+		t.Fatalf("GET frame = %d %s", st, body)
+	}
+	if want := fmt.Sprintf(`"%d"`, ver2); etag != want {
+		t.Errorf("ETag = %q，期望 %q", etag, want)
+	}
+	if len(body) < 16 || string(body[:4]) != "SBF1" {
+		t.Fatalf("帧包头部不对：%d 字节，%.4s", len(body), body)
+	}
+	bl := int(binary.BigEndian.Uint32(body[4:8]))
+	al := int(binary.BigEndian.Uint32(body[8:12]))
+	if 16+bl+al > len(body) {
+		t.Fatalf("帧包长度非法：base=%d atlas=%d total=%d", bl, al, len(body))
+	}
+	meta, err := frame.ParseMeta(body[16+bl+al:])
+	if err != nil {
+		t.Fatalf("ParseMeta: %v", err)
+	}
+	if meta.V != frame.Version || meta.Band.MaxBandBytes == 0 {
+		t.Errorf("meta = v%d max_band=%d", meta.V, meta.Band.MaxBandBytes)
+	}
+
+	st, body304, _ := e.getFrame(devKey, etag)
+	if st != 304 || len(body304) != 0 {
+		t.Errorf("If-None-Match = %d，body %d 字节", st, len(body304))
+	}
+
+	// 重连后订阅 frame，应补发当前版本（不依赖重新上报）。
+	dev.disconnect()
+	dev2 := e.connectDevice("f412fa87c9e0", devKey)
+	if err := dev2.subscribeFrame(); err != nil {
+		t.Fatalf("重连订阅 frame = %v", err)
+	}
+	if got := dev2.waitFrameVer(10 * time.Second); got != ver2 {
+		t.Errorf("重连补发版本 = %d，期望 %d", got, ver2)
+	}
+}
+
+// 合法设备在线时，拿到 MAC 的 pending 密钥不能顶号（会话接管 DoS）。
+func TestEndToEndPendingCannotTakeOverActive(t *testing.T) {
+	e := startServer(t)
+	activeKey, code := e.register("f412fa87c9e0")
+	agentTok, _, _ := e.pair(code, "")
+	active := e.connectDevice("f412fa87c9e0", activeKey)
+	if err := active.subscribeUsage(); err != nil {
+		t.Fatalf("合法设备订阅 usage：%v", err)
+	}
+
+	pendingKey, _ := e.register("f412fa87c9e0")
+	if _, err := e.tryConnectDevice("f412fa87c9e0", pendingKey); err == nil {
+		t.Fatal("pending 密钥用同一个 client id 顶掉了在线设备")
+	}
+
+	// 合法设备仍在，能正常收到用量。
+	e.reportUsage(agentTok, usageReport(time.Now(), 11))
+	got := parseUsage(t, active.waitUsage(5*time.Second))
+	if got.FiveHour == nil || got.FiveHour.UsedPercentage != 11 {
+		t.Errorf("合法设备收到 = %+v", got.FiveHour)
+	}
+}
+
+// 合法设备不在线时，pending 可以连上，但只能读 pair。
+func TestEndToEndPendingAllowedWithoutActive(t *testing.T) {
+	e := startServer(t)
+	key, _ := e.register("f412fa87c9e0")
+	p := e.connectDevice("f412fa87c9e0", key)
+	if err := p.subscribePair(); err != nil {
+		t.Fatalf("pending 应能读 pair：%v", err)
+	}
+	if err := p.subscribeUsage(); err == nil {
+		t.Error("pending 订阅了 usage——ACL 没生效")
+	}
+}
+
+// 合法设备重新上线时，可以接管在线的 pending 连接。
+func TestEndToEndActiveTakesOverPending(t *testing.T) {
+	e := startServer(t)
+	activeKey, code := e.register("f412fa87c9e0")
+	agentTok, _, _ := e.pair(code, "")
+	pendingKey, _ := e.register("f412fa87c9e0")
+
+	p := e.connectDevice("f412fa87c9e0", pendingKey)
+	if err := p.subscribePair(); err != nil {
+		t.Fatalf("pending 应能读 pair：%v", err)
+	}
+
+	// 同一个 client id，active 身份：允许接管。
+	active := e.connectDevice("f412fa87c9e0", activeKey)
+	if err := active.subscribeUsage(); err != nil {
+		t.Fatalf("active 接管后订阅 usage：%v", err)
+	}
+	e.reportUsage(agentTok, usageReport(time.Now(), 13))
+	got := parseUsage(t, active.waitUsage(5*time.Second))
+	if got.FiveHour == nil || got.FiveHour.UsedPercentage != 13 {
+		t.Errorf("接管后收到 = %+v", got.FiveHour)
+	}
+}
+
+// 同一 dev 的 pending 连接每分钟最多 6 次。
+func TestEndToEndPendingConnectRateLimited(t *testing.T) {
+	e := startServer(t)
+	key, _ := e.register("f412fa87c9e0")
+	for i := 0; i < 6; i++ {
+		d, err := e.tryConnectDevice("f412fa87c9e0", key)
+		if err != nil {
+			t.Fatalf("第 %d 次 pending 连接被拒：%v", i+1, err)
+		}
+		d.disconnect()
+	}
+	if _, err := e.tryConnectDevice("f412fa87c9e0", key); err == nil {
+		t.Fatal("第 7 次 pending 连接没有被限流")
 	}
 }

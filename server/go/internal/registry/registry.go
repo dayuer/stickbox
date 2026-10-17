@@ -96,6 +96,12 @@ func (r *Registry) Online() []string {
 	return out
 }
 
+func (r *Registry) OnlineCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.lastSeen)
+}
+
 func (r *Registry) IsOnline(dev string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()

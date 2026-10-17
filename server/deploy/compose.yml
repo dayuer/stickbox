@@ -1,0 +1,33 @@
+# 生产部署：服务器上 /opt/stickbox/ 下放本文件、config.json（600）与 data/。
+#   docker compose -f /opt/stickbox/compose.yml up -d
+#
+# 证书由宿主机 certbot 签发与续期；stickboxd 按文件 mtime 自己热重载，
+# 不需要 deploy hook，也不需要重启容器。
+#
+# 以容器内 root 运行：letsencrypt 的 privkey 是 root 600。
+# 用只读根文件系统 + 去掉全部 capability + no-new-privileges 收口。
+services:
+  stickboxd:
+    image: stickboxd:${STICKBOX_TAG:-latest}
+    container_name: stickboxd
+    restart: unless-stopped
+    # 宿主机网络：nginx 从 127.0.0.1 转发过来时容器看到的就是回环地址，
+    # stickboxd 才能放心采用 X-Forwarded-For。9443 由 config.json 绑定在 127.0.0.1。
+    network_mode: host
+    volumes:
+      - ./config.json:/etc/stickbox/config.json:ro
+      - ./data:/data
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # 镜像里没有 curl/wget：让 stickboxd 自己打一次 /healthz。
+    healthcheck:
+      test: ["CMD", "/stickboxd", "-conf", "/etc/stickbox/config.json", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }

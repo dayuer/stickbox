@@ -1,107 +1,134 @@
 package httpapi
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"math/big"
 	"net/http"
+	"time"
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
+	"github.com/dayuer/stickbox/server/go/internal/store"
 )
 
-// handleEnroll 为一台设备签发 device 密钥。
+const pairCodeTTL = 10 * time.Minute
+
+// newPairCode 生成 6 位数字码（允许前导 0）和它的 sha256。
+func newPairCode() (code, hash string, err error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
+	if err != nil {
+		return "", "", err
+	}
+	code = fmt.Sprintf("%06d", n.Int64())
+	sum := sha256.Sum256([]byte(code))
+	return code, hex.EncodeToString(sum[:]), nil
+}
+
+// issuePairCode 给一台设备写一个新配对码。code_hash 有唯一约束：
+// 撞上别的设备的码就换一个重试。
+func (a *API) issuePairCode(dev, keyID string, now time.Time) (string, int64, error) {
+	a.store.DeleteExpiredPairCodes(now.Unix())
+	expires := now.Add(pairCodeTTL).Unix()
+	for i := 0; i < 10; i++ {
+		code, hash, err := newPairCode()
+		if err != nil {
+			return "", 0, err
+		}
+		err = a.store.PutPairCode(store.PairCode{
+			Dev: dev, CodeHash: hash, KeyID: keyID,
+			Expires: expires, Created: now.Unix(),
+		})
+		if err == nil {
+			return code, expires, nil
+		}
+	}
+	return "", 0, errors.New("pair code collision")
+}
+
+// handleDeviceRegister：POST /api/device/register {dev}
 //
-// 「重置」不另设机制：给一个已属于本用户的 dev 重新 enroll，就是重置。
-// 用户按住按键恢复出厂时设备清了 NVS，服务端全程不知情——落在 enroll 上
-// 才不需要任何额外协调。
-func (a *API) handleEnroll(w http.ResponseWriter, r *http.Request, id auth.Identity) {
+// 不鉴权。设备被擦掉 NVS 后重新注册时，旧密钥**不吊销**：
+// 新密钥处于待配对，只有原主人的 agent 输码才能转正；否则知道 MAC
+// 就能把别人的屏顶掉。
+func (a *API) handleDeviceRegister(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Dev  string `json:"dev"`
-		Name string `json:"name"`
+		Dev string `json:"dev"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	// dev 可选。
-	//
-	// 不带 dev 时签发一把**待认领**的密钥：App 在还没连上设备热点的时候就能
-	// 拿到它，连一次热点写进去就完事。设备首次连 MQTT 时用自己的 dev 做
-	// username，服务端从那里学到 MAC 并完成绑定——服务端本来就能知道，
-	// 让 App 先去问设备要是多余的，而那一步正是「配网要连两次热点」的根源。
-	//
-	// 带 dev 时是老路径：立刻绑定，抢绑冲突当场就能报 409。
-	if in.Dev != "" && !auth.ValidDev(in.Dev) {
+	if !auth.ValidDev(in.Dev) {
 		fail(w, 400, "bad dev", "dev 必须是 12 位小写十六进制的 MAC")
 		return
 	}
 
-	owner, bound, err := a.store.OwnerOfDevice(in.Dev)
+	ip := rateKeyIP(r)
+	if a.regDev.exceeded(in.Dev) || a.regIP.exceeded(ip) {
+		fail(w, 429, "rate limited", "")
+		return
+	}
+	a.regDev.hit(in.Dev)
+	a.regIP.hit(ip)
+
+	token, keyID, err := auth.IssueDeviceKey(a.store, "", in.Dev, "", true)
 	if err != nil {
 		fail(w, 500, "server error", "")
 		return
 	}
-	if in.Dev == "" {
-		bound = false // 待认领的密钥没有「重置」一说
-	}
-	// 抢绑防护：服务端无法验证 App 是否真的物理接触了设备，
-	// 不设防的话任何人拿别人的 MAC 就能重置别人的设备。
-	if bound && owner != id.UserID {
-		fail(w, 409, "device bound", "该设备已绑定到其他账号，需原持有人先解绑")
-		return
-	}
-	if bound {
-		if err := auth.RevokeDeviceKeys(a.store, a.v, in.Dev); err != nil {
-			fail(w, 500, "server error", "")
-			return
-		}
-	}
-	token, err := auth.IssueDeviceKey(a.store, id.UserID, in.Dev, in.Name)
+	// 同一台设备反复重注册时，旧的待配对密钥作废，别越堆越多。
+	revoked, err := a.store.DisablePendingDeviceKeysExcept(in.Dev, keyID)
 	if err != nil {
 		fail(w, 500, "server error", "")
 		return
 	}
-	a.mem.Invalidate(id.UserID) // 否则新绑的设备最多要等 5 分钟才能订阅成功
+	for _, id := range revoked {
+		a.v.Invalidate(id)
+	}
+
+	now := time.Now()
+	code, expires, err := a.issuePairCode(in.Dev, keyID, now)
+	if err != nil {
+		fail(w, 500, "server error", "")
+		return
+	}
 	writeJSON(w, 200, map[string]any{
-		"device_key": token, "dev": in.Dev, "reset": bound,
+		"token": token, "code": code, "expires_at": expires,
+		"now": now.Unix(), "pending": true,
 	})
 }
 
-func (a *API) handleUnbind(w http.ResponseWriter, r *http.Request, id auth.Identity) {
-	dev := r.PathValue("dev")
-	owner, bound, err := a.store.OwnerOfDevice(dev)
+// handleDevicePairCode：POST /api/device/pair-code（device 鉴权）
+//
+// 电视/LCD 上的码过期后，设备用当前待配对密钥换一个新码。
+func (a *API) handleDevicePairCode(w http.ResponseWriter, r *http.Request, id auth.Identity) {
+	if !auth.ValidDev(id.Dev) {
+		fail(w, 400, "bad dev", "")
+		return
+	}
+	if !a.pairCodeDev.allow(id.Dev) {
+		fail(w, 429, "rate limited", "")
+		return
+	}
+	k, ok, err := a.store.KeyByID(id.KeyID)
 	if err != nil {
 		fail(w, 500, "server error", "")
 		return
 	}
-	if !bound {
-		writeJSON(w, 200, map[string]int{"ok": 1}) // 幂等
+	if !ok || k.Role != string(auth.RoleDevice) || k.Dev != id.Dev ||
+		k.Disabled || !k.Pending {
+		fail(w, 409, "already paired", "")
 		return
 	}
-	if owner != id.UserID {
-		fail(w, 403, "forbidden", "")
-		return
-	}
-	if err := auth.RevokeDeviceKeys(a.store, a.v, dev); err != nil {
+	now := time.Now()
+	code, expires, err := a.issuePairCode(id.Dev, id.KeyID, now)
+	if err != nil {
 		fail(w, 500, "server error", "")
 		return
 	}
-	a.mem.Invalidate(id.UserID)
-	writeJSON(w, 200, map[string]int{"ok": 1})
-}
-
-// handleStatus 返回设备是否在线。在线判据是最近 120 秒内收到过 MQTT 心跳。
-//
-// App 用 X-Device 查自己名下的设备；设备角色只能查自己。
-func (a *API) handleStatus(w http.ResponseWriter, r *http.Request, id auth.Identity) {
-	dev := id.Dev
-	if id.Role == auth.RoleApp {
-		dev = r.Header.Get("X-Device")
-		if !a.ownDevice(id, dev) {
-			fail(w, 403, "forbidden", "")
-			return
-		}
-	}
 	writeJSON(w, 200, map[string]any{
-		"device": map[string]any{
-			"dev":    dev,
-			"online": a.reg.IsOnline(dev),
-		},
+		"code": code, "expires_at": expires, "now": now.Unix(),
 	})
 }

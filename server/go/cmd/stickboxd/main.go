@@ -4,19 +4,23 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+	_ "time/tzdata" // 镜像里没有 tzdata；按用户 IANA 时区渲染需要内嵌一份
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/broker"
 	"github.com/dayuer/stickbox/server/go/internal/config"
+	"github.com/dayuer/stickbox/server/go/internal/frames"
 	"github.com/dayuer/stickbox/server/go/internal/httpapi"
+	"github.com/dayuer/stickbox/server/go/internal/metrics"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
-	"github.com/dayuer/stickbox/server/go/internal/sms"
+	"github.com/dayuer/stickbox/server/go/internal/render"
 	"github.com/dayuer/stickbox/server/go/internal/store"
 	"github.com/dayuer/stickbox/server/go/internal/tlsx"
 	"github.com/dayuer/stickbox/server/go/internal/version"
@@ -56,23 +60,7 @@ func serve(cfg *config.Config) error {
 	}
 	defer st.Close()
 
-	pb, err := auth.NewPhoneBox(cfg.PhonePepper, cfg.PhoneKey)
-	if err != nil {
-		return err
-	}
-	sender, err := newSender(cfg)
-	if err != nil {
-		return err
-	}
 	v := auth.NewVerifier(st)
-	mem := broker.NewMembership(st)
-	smsSvc := auth.NewSMS(st, sender, time.Now)
-	if cfg.DevLogin.Enabled() {
-		smsSvc.SetDevLogin(pb.HMAC(cfg.DevLogin.Phone), cfg.DevLogin.Code)
-		// 每次启动都喊一遍。后门最危险的形态是「配上去之后没人记得」。
-		slog.Warn("⚠ 固定手机号登录已启用——这是登录后门，生产环境必须移除",
-			"phone", cfg.DevLogin.Phone)
-	}
 
 	reloader, err := tlsx.New(cfg.CertPath(), cfg.KeyPath())
 	if err != nil {
@@ -84,15 +72,38 @@ func serve(cfg *config.Config) error {
 	reg := registry.New(registry.Options{IdleTimeout: 120 * time.Second})
 	defer reg.Shutdown()
 
-	br, err := broker.New(cfg.MQTTAddr, reloader.Config(), v, mem, reg, st)
+	br, err := broker.New(cfg.MQTTAddr, reloader.Config(), v, reg)
 	if err != nil {
 		return err
 	}
 
-	api := httpapi.New(cfg, st, v, pb, smsSvc, reg, mem, br)
+	api := httpapi.New(cfg, st, v, reg, br)
+	// /healthz 用它检查 broker 是否还在监听。
+	api.SetHealth(br)
 	// 设备订阅 usage 时补发最新一份；usage.Service 要用 broker 发消息，
 	// 所以只能在两边都构造完之后接上。
 	br.SetUsageResender(api.Usage())
+	// 设备订阅 pair 时按密钥当前状态补发：retained 只存在 broker 内存里。
+	br.SetPairResender(api)
+
+	// 帧服务：渲染器加载内嵌字体；帧包落盘到 root/frames，重启直接加载。
+	rr, err := render.New()
+	if err != nil {
+		return fmt.Errorf("初始化渲染器：%w", err)
+	}
+	fs, err := frames.New(cfg.Root, st, api.Usage(), br, frames.RenderBuilder{R: rr}, frames.Options{
+		DefaultTZ: cfg.DefaultTZ,
+		Now:       time.Now,
+	})
+	if err != nil {
+		return fmt.Errorf("初始化帧服务：%w", err)
+	}
+	defer fs.Close()
+	api.SetFrames(fs)
+	br.SetFrameResender(fs)
+	dailyCtx, dailyStop := context.WithCancel(context.Background())
+	defer dailyStop()
+	go fs.Run(dailyCtx)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -109,6 +120,19 @@ func serve(cfg *config.Config) error {
 		return err
 	}
 	slog.Info("MQTT/TLS 监听", "addr", cfg.MQTTAddr)
+
+	// 指标只监听回环地址，不经过 nginx。online / mqtt 连接数在 scrape 时现查。
+	if cfg.MetricsAddr != "" {
+		metrics.Default.SetGaugeProviders(reg.OnlineCount, br.ClientCount)
+		metrics.Default.SetFramePendingProvider(fs.PendingUsers)
+		msrv, err := metrics.Default.Serve(cfg.MetricsAddr)
+		if err != nil {
+			br.Close()
+			return err
+		}
+		defer msrv.Close()
+		slog.Info("metrics 监听", "addr", cfg.MetricsAddr)
+	}
 
 	errc := make(chan error, 1)
 	go func() {
@@ -134,19 +158,6 @@ func serve(cfg *config.Config) error {
 		br.Close()
 		return nil
 	}
-}
-
-func newSender(cfg *config.Config) (auth.Sender, error) {
-	if cfg.SMS.Provider == "aliyun" && cfg.SMS.AccessKeyID != "" {
-		return sms.NewAliyun(sms.AliyunConfig{
-			AccessKeyID:     cfg.SMS.AccessKeyID,
-			AccessKeySecret: cfg.SMS.AccessKeySecret,
-			SignName:        cfg.SMS.SignName,
-			TemplateCode:    cfg.SMS.TemplateCode,
-		})
-	}
-	slog.Warn("短信未配置，验证码只打日志——生产环境必须配 sms.*")
-	return sms.Logger{}, nil
 }
 
 func envOr(k, def string) string {
