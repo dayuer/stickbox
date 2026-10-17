@@ -9,5 +9,6 @@
  *   #define STICKBOX_INSECURE_TLS 1
  * 正式固件不要定义它。 */
 
-#define MQTT_URI   "mqtts://your.host:8883"
-#define API_BASE   "https://your.host:9443/api"
+#define MQTT_URI   "mqtts://mqtt.stickbox.ai:8883"
+/* HTTPS 走 nginx 443 反代，不再直接暴露 9443。 */
+#define API_BASE   "https://mqtt.stickbox.ai/api"

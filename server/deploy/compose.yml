@@ -12,8 +12,8 @@ services:
     container_name: stickboxd
     restart: unless-stopped
     ports:
-      - "8883:8883"   # MQTT over TLS（设备）
-      - "9443:9443"   # HTTPS API（agent / 配对）
+      - "8883:8883"              # MQTT over TLS（设备直连）
+      - "127.0.0.1:9443:9443"    # HTTPS API 只给本机 nginx 反代，不对外
     volumes:
       - ./config.json:/etc/stickbox/config.json:ro
       - ./data:/data

@@ -56,8 +56,43 @@ certbot 照旧。**deploy hook 不需要了**——进程按文件 mtime 自己�
 验证热重载生效：
 
 ```bash
-sudo touch /etc/letsencrypt/live/your.host/fullchain.pem && sudo journalctl -u stickboxd -n 20 | grep 热重载
+sudo touch /etc/letsencrypt/live/mqtt.stickbox.ai/fullchain.pem && sudo journalctl -u stickboxd -n 20 | grep 热重载
 ```
+
+## 4b. nginx 反代（HTTPS 不再直接暴露 9443）
+
+`compose.yml` 只把容器端口绑到 `127.0.0.1:9443`，外网 HTTPS 由宿主机
+nginx 在 443 终止 TLS，再反代到本机：
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name mqtt.stickbox.ai;
+
+    ssl_certificate     /etc/letsencrypt/live/mqtt.stickbox.ai/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mqtt.stickbox.ai/privkey.pem;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:9443;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        # 覆盖写，不追加：服务端只在来源是回环时信这个头
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+```bash
+sudo ln -s /etc/nginx/sites-available/mqtt.stickbox.ai /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+服务端 `clientIP` 只在 `RemoteAddr` 是 `127.0.0.1`/`::1` 时采用
+`X-Forwarded-For`，其余来源一律忽略该头；IPv6 按 /64 作为限流键。
+
+> **T6**：服务器上的 `/etc/nginx/sites-available/mqtt.stickbox.ai` 是最终
+> 版本，如与本段不同，以服务器文件为准并原样抄回这里。
 
 ## 5. 备份
 
@@ -110,23 +145,23 @@ stickboxd 本身出了问题，换回上一版二进制并恢复 `jobs.db` 备�
 ## 8. 上线验证清单
 
 ```bash
-ss -lntp | grep -E ':(8883|9443)'
+ss -lntp | grep -E ':(8883|443|9443)'
 ```
 
 ```bash
-openssl s_client -connect your.host:9443 -servername your.host </dev/null 2>/dev/null | openssl x509 -noout -dates
+openssl s_client -connect mqtt.stickbox.ai:443 -servername mqtt.stickbox.ai </dev/null 2>/dev/null | openssl x509 -noout -dates
 ```
 
 注册一台测试设备并配对：
 
 ```bash
-curl -s -X POST https://your.host:9443/api/device/register \
+curl -s -X POST https://mqtt.stickbox.ai/api/device/register \
   -H 'Content-Type: application/json' -d '{"dev":"f412fa87c9e0"}'
 # → {"token":"...","code":"123456","expires_at":...}
-curl -s -X POST https://your.host:9443/api/agent/pair \
+curl -s -X POST https://mqtt.stickbox.ai/api/agent/pair \
   -H 'Content-Type: application/json' -d '{"code":"123456","name":"test"}'
 # → {"dev":"f412fa87c9e0","user_id":"...","token":"..."}
-curl -s https://your.host:9443/api/agent/devices \
+curl -s https://mqtt.stickbox.ai/api/agent/devices \
   -H "Authorization: Bearer $AGENTTOK"
 ```
 
@@ -135,15 +170,15 @@ curl -s https://your.host:9443/api/agent/devices \
 这几条没有用户可见的症状，坏了也不会有人报障，所以必须主动验。
 
 ```bash
-mosquitto_pub -h your.host -p 8883 --capath /etc/ssl/certs -u $DEV -P 'bogus.key' -t "printer/$DEV/status" -m '{}'; echo "退出码=$? （非 0 才对）"
+mosquitto_pub -h mqtt.stickbox.ai -p 8883 --capath /etc/ssl/certs -u $DEV -P 'bogus.key' -t "printer/$DEV/status" -m '{}'; echo "退出码=$? （非 0 才对）"
 ```
 
 ```bash
-mosquitto_pub -h your.host -p 8883 --capath /etc/ssl/certs -u $DEV -P "$DEVKEY" -t 'printer/aaaaaaaaaaaa/status' -m '{}'; echo "退出码=$? （非 0 才对）"
+mosquitto_pub -h mqtt.stickbox.ai -p 8883 --capath /etc/ssl/certs -u $DEV -P "$DEVKEY" -t 'printer/aaaaaaaaaaaa/status' -m '{}'; echo "退出码=$? （非 0 才对）"
 ```
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' -X POST https://your.host:9443/api/device/register \
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://mqtt.stickbox.ai/api/device/register \
   -H 'Content-Type: application/json' -d '{"dev":"zz"}'
 # → 400
 ```

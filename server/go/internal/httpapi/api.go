@@ -182,12 +182,37 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
+// clientIP 返回请求的真实来源地址。
+//
+// 生产环境 HTTPS 走本机 nginx 反代，RemoteAddr 全是 127.0.0.1；只有
+// 来源是回环时才采用 X-Forwarded-For（nginx 用 $remote_addr 覆盖写，
+// 只有一个值）。其余情况一律用 RemoteAddr，绝不信任客户端自带的头。
 func clientIP(r *http.Request) string {
+	if ip := addrIP(r.RemoteAddr); ip != nil && ip.IsLoopback() {
+		if xff := firstForwardedFor(r.Header.Get("X-Forwarded-For")); xff != "" {
+			return xff
+		}
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+func addrIP(addr string) net.IP {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	return net.ParseIP(host)
+}
+
+func firstForwardedFor(v string) string {
+	if i := strings.IndexByte(v, ','); i >= 0 {
+		v = v[:i]
+	}
+	return strings.TrimSpace(v)
 }
 
 // rateKeyIP 把来源地址归一化后作为限流键：
