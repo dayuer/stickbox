@@ -59,6 +59,11 @@ func (l *rateLimiter) prune(key string) []time.Time {
 			keep = append(keep, t)
 		}
 	}
+	if len(keep) == 0 {
+		// 只在访问时修剪；空键必须删掉，否则来源 IP 越多 map 越涨。
+		delete(l.hits, key)
+		return nil
+	}
 	l.hits[key] = keep
 	return keep
 }

@@ -48,8 +48,8 @@ func TestIssueDeviceKeyPendingThenActivate(t *testing.T) {
 		t.Errorf("待配对身份 = %+v", id)
 	}
 
-	if err := st.ActivateDeviceKey(keyID, "u1"); err != nil {
-		t.Fatal(err)
+	if ok, err := st.ActivateDeviceKey(keyID, "u1"); err != nil || !ok {
+		t.Fatalf("转正 ok=%v err=%v", ok, err)
 	}
 	v.Invalidate(keyID)
 	id, err = v.Verify(token)
@@ -74,8 +74,8 @@ func TestRevokeDeviceKeysExcept(t *testing.T) {
 	v.Verify(old)
 	v.Verify(freshToken)
 
-	if err := st.ActivateDeviceKey(freshID, "u1"); err != nil {
-		t.Fatal(err)
+	if ok, err := st.ActivateDeviceKey(freshID, "u1"); err != nil || !ok {
+		t.Fatalf("转正 ok=%v err=%v", ok, err)
 	}
 	if err := RevokeDeviceKeysExcept(st, v, "dev1", freshID); err != nil {
 		t.Fatal(err)

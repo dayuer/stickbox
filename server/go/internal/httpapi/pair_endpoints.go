@@ -37,7 +37,7 @@ func (a *API) handleAgentPair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := clientIP(r)
+	ip := rateKeyIP(r)
 	if a.pairFailIP.exceeded(ip) || a.pairFailWorld.exceeded("global") {
 		fail(w, 429, "rate limited", "")
 		return
@@ -57,16 +57,13 @@ func (a *API) handleAgentPair(w http.ResponseWriter, r *http.Request) {
 	}
 	sum := sha256.Sum256([]byte(in.Code))
 	hash := hex.EncodeToString(sum[:])
-	pc, ok, err := a.store.PairCodeByHash(hash)
+	// 先原子消费再验归属：两个请求同时带同一个码时只有一个能拿到行。
+	pc, ok, err := a.store.ConsumePairCode(hash, time.Now().Unix())
 	if err != nil {
 		fail(w, 500, "server error", "")
 		return
 	}
-	now := time.Now()
-	if !ok || pc.Expires < now.Unix() {
-		if ok {
-			a.store.DeletePairCode(pc.Dev)
-		}
+	if !ok {
 		badCode(404)
 		return
 	}
@@ -77,7 +74,6 @@ func (a *API) handleAgentPair(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok || k.Disabled || !k.Pending || k.Role != string(auth.RoleDevice) ||
 		k.Dev != pc.Dev {
-		a.store.DeletePairCode(pc.Dev)
 		badCode(409)
 		return
 	}
@@ -91,6 +87,7 @@ func (a *API) handleAgentPair(w http.ResponseWriter, r *http.Request) {
 	var userID, newToken string
 	if agent != nil {
 		if bound && owner != agent.UserID {
+			a.store.RestorePairCode(pc) // 别人输错码不该把原主人的码烧掉
 			failPair()
 			fail(w, 409, "device bound", "该屏已绑定到其他用户")
 			return
@@ -98,6 +95,7 @@ func (a *API) handleAgentPair(w http.ResponseWriter, r *http.Request) {
 		userID = agent.UserID
 	} else {
 		if bound {
+			a.store.RestorePairCode(pc)
 			failPair()
 			fail(w, 409, "device bound",
 				"该屏已绑定；请用原主人的 agent 配对")
@@ -123,8 +121,14 @@ func (a *API) handleAgentPair(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := a.store.ActivateDeviceKey(pc.KeyID, userID); err != nil {
+	activated, err := a.store.ActivateDeviceKey(pc.KeyID, userID)
+	if err != nil {
 		fail(w, 500, "server error", "")
+		return
+	}
+	if !activated {
+		// 并发请求已经把同一把待配对密钥转正/吊销了。
+		badCode(409)
 		return
 	}
 	// 旧主人的密钥作废，刚转正的那把留着。
@@ -133,7 +137,6 @@ func (a *API) handleAgentPair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.v.Invalidate(pc.KeyID) // 缓存里那把还是 UserID="" 的待配对身份
-	a.store.DeletePairCode(pc.Dev)
 
 	// 带上 key_id：设备只认发给「自己这把密钥」的通知，
 	// 避免上一轮配对 retain 的消息被下一轮注册误读。

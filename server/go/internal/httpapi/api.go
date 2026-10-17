@@ -189,3 +189,20 @@ func clientIP(r *http.Request) string {
 	}
 	return host
 }
+
+// rateKeyIP 把来源地址归一化后作为限流键：
+// IPv4 用完整地址，IPv6 按 /64 聚合——否则换一个地址就能绕过每 IP 限制。
+func rateKeyIP(r *http.Request) string {
+	raw := clientIP(r)
+	ip := net.ParseIP(raw)
+	if ip == nil {
+		return raw
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4.String()
+	}
+	if v6 := ip.To16(); v6 != nil {
+		return v6.Mask(net.CIDRMask(64, 128)).String()
+	}
+	return raw
+}

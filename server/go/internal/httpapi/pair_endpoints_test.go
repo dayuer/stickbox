@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -88,6 +89,39 @@ func TestPairCodeIsSingleUse(t *testing.T) {
 
 	if rr := tryPair(h, code, ""); rr.Code == 200 {
 		t.Error("配对码被重复使用了")
+	}
+}
+
+// 两个请求同时带同一个有效码：只有一个能成功。
+func TestPairCodeConcurrentOnlyOneWins(t *testing.T) {
+	h, _ := newTestAPI(t)
+	_, code := register(t, h, "f412fa87c9e0")
+
+	var wg sync.WaitGroup
+	results := make(chan int, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results <- tryPair(h, code, "").Code
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	ok := 0
+	for code := range results {
+		switch code {
+		case 200:
+			ok++
+		case 404, 409:
+			// 码已被另一个请求消费
+		default:
+			t.Errorf("意外状态码 %d", code)
+		}
+	}
+	if ok != 1 {
+		t.Fatalf("成功次数 = %d，期望恰好 1", ok)
 	}
 }
 

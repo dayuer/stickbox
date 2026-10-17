@@ -88,8 +88,8 @@ func TestActivateAndRevokeExcept(t *testing.T) {
 	s.InsertKey(Key{KeyID: "old", Dev: "d1", Role: "device", UserID: "u1", Hash: "h"})
 	s.InsertKey(Key{KeyID: "new", Dev: "d1", Role: "device", UserID: "", Hash: "h", Pending: true})
 
-	if err := s.ActivateDeviceKey("new", "u1"); err != nil {
-		t.Fatal(err)
+	if ok, err := s.ActivateDeviceKey("new", "u1"); err != nil || !ok {
+		t.Fatalf("转正 ok=%v err=%v", ok, err)
 	}
 	ids, err := s.DisableDeviceKeysExcept("d1", "new")
 	if err != nil {

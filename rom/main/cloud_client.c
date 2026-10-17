@@ -38,6 +38,10 @@ static const char *TAG = "cloud";
 #error "cloud_creds.h 需要 API_BASE（例如 https://host:9443/api）"
 #endif
 
+#ifdef STICKBOX_INSECURE_TLS
+#warning "STICKBOX_INSECURE_TLS is enabled: TLS certificate verification is disabled (local test only)"
+#endif
+
 #define BACKOFF_MIN_MS  2000
 #define BACKOFF_MAX_MS 60000
 #define HEARTBEAT_S       30

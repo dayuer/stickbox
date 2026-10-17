@@ -65,7 +65,7 @@ func (a *API) handleDeviceRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := clientIP(r)
+	ip := rateKeyIP(r)
 	if a.regDev.exceeded(in.Dev) || a.regIP.exceeded(ip) {
 		fail(w, 429, "rate limited", "")
 		return

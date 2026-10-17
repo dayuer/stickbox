@@ -92,13 +92,19 @@ func (s *Store) TouchKey(keyID string) error {
 }
 
 // ActivateDeviceKey 把待配对密钥转正：绑定用户、清掉 pending。
-func (s *Store) ActivateDeviceKey(keyID, userID string) error {
+// 第二个返回值表示是否真的改到了一行——并发配对时只有一把能转正。
+func (s *Store) ActivateDeviceKey(keyID, userID string) (bool, error) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	_, err := s.db.Exec(
-		`UPDATE devices SET user_id=?, pending=0 WHERE key_id=? AND disabled=0`,
+	res, err := s.db.Exec(
+		`UPDATE devices SET user_id=?, pending=0
+		 WHERE key_id=? AND disabled=0 AND pending=1`,
 		userID, keyID)
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 func (s *Store) DisableKeysOfDevice(dev, role string) ([]string, error) {
