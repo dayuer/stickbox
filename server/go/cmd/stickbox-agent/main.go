@@ -41,11 +41,12 @@ import (
 )
 
 const (
-	version       = "0.1.0"
-	defaultServer = "https://mqtt.stickbox.ai"
-	usageInterval = 10 * time.Minute
-	claudeTimeout = 3 * time.Minute
-	httpTimeout   = 20 * time.Second
+	version           = "0.1.0"
+	defaultServer     = "https://mqtt.stickbox.ai"
+	usageInterval     = 10 * time.Minute
+	authRetryInterval = time.Hour
+	claudeTimeout     = 3 * time.Minute
+	httpTimeout       = 20 * time.Second
 )
 
 // agentConfig 是用户配置目录里保存的全部状态。
@@ -736,38 +737,78 @@ func cmdRun(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	c, err := loadConfig()
-	if err != nil {
-		return err
-	}
-	if err := requireToken(c); err != nil {
-		return err
-	}
-
 	logf := func(format string, a ...any) { log.Printf(format, a...) }
+
 	if *once {
+		c, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		if err := requireToken(c); err != nil {
+			return err
+		}
 		return runRound(c, logf)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("stickbox-agent %s 启动，每 %s 上报一次", version, usageInterval)
-	if err := runRound(c, logf); err != nil {
-		log.Printf("本轮失败：%v（%s 后重试）", err, usageInterval)
-	}
-	ticker := time.NewTicker(usageInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			log.Printf("收到退出信号，停止")
-			return nil
-		case <-ticker.C:
-			if err := runRound(c, logf); err != nil {
-				log.Printf("本轮失败：%v", err)
-			}
+	log.Printf("stickbox-agent %s 启动，每 %s 上报一次（未配对或令牌失效时 %s 后重试）",
+		version, usageInterval, authRetryInterval)
+	return runDaemon(ctx, logf, daemonRound(logf), sleepCtx)
+}
+
+// daemonRound 每轮重新读配置：用户重新 pair 之后不用重启服务。
+func daemonRound(logf func(string, ...any)) func() error {
+	return func() error {
+		c, err := loadConfig()
+		if err != nil {
+			return err
 		}
+		if err := requireToken(c); err != nil {
+			return err
+		}
+		return runRound(c, logf)
+	}
+}
+
+// retryDelay：没配对/401 是用户还没操作完，不是服务故障，1 小时后再看；
+// 别的错误按正常上报间隔重试。
+func retryDelay(err error) time.Duration {
+	if errors.Is(err, errNotPaired) || isUnauthorized(err) {
+		return authRetryInterval
+	}
+	return usageInterval
+}
+
+// runDaemon 常驻循环。sleep 注入是为了单测里不真的等 1 小时。
+func runDaemon(
+	ctx context.Context,
+	logf func(string, ...any),
+	round func() error,
+	sleep func(context.Context, time.Duration) bool,
+) error {
+	for {
+		err := round()
+		wait := retryDelay(err)
+		if err != nil {
+			logf("本轮失败：%v（%s 后重试）", err, wait)
+		}
+		if !sleep(ctx, wait) {
+			logf("收到退出信号，停止")
+			return nil
+		}
+	}
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
 	}
 }
 
@@ -807,7 +848,8 @@ func cmdInstall(args []string) error {
 	if exe, err = filepath.Abs(exe); err != nil {
 		return err
 	}
-	return installService(exe)
+	// install 在临时配置目录里跑过时，服务也必须读同一份配置。
+	return installService(exe, os.Getenv("STICKBOX_CONFIG_DIR"))
 }
 
 func cmdUninstall(args []string) error {
@@ -889,14 +931,14 @@ func cmdLogout(args []string) error {
 
 // ---- 后台服务 ----
 
-func installService(exe string) error {
+func installService(exe, configDir string) error {
 	switch runtime.GOOS {
 	case "darwin":
-		return installLaunchd(exe)
+		return installLaunchd(exe, configDir)
 	case "linux":
-		return installSystemd(exe)
+		return installSystemd(exe, configDir)
 	case "windows":
-		return installSchtasks(exe)
+		return installSchtasks(exe, configDir)
 	default:
 		return fmt.Errorf("暂不支持 %s 的后台服务安装", runtime.GOOS)
 	}
@@ -941,7 +983,15 @@ func serviceInstalled() (bool, string) {
 
 const launchdLabel = "ai.stickbox.agent"
 
-func launchdPlist(exe, logPath string) string {
+func launchdPlist(exe, logPath, configDir string) string {
+	envBlock := ""
+	if configDir != "" {
+		envBlock = fmt.Sprintf(`  <key>EnvironmentVariables</key>
+  <dict>
+    <key>STICKBOX_CONFIG_DIR</key><string>%s</string>
+  </dict>
+`, xmlEscape(configDir))
+	}
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -953,14 +1003,17 @@ func launchdPlist(exe, logPath string) string {
     <string>run</string>
   </array>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key><false/>
+  </dict>
   <key>ThrottleInterval</key><integer>10</integer>
   <key>ProcessType</key><string>Background</string>
-  <key>StandardOutPath</key><string>%s</string>
+%s  <key>StandardOutPath</key><string>%s</string>
   <key>StandardErrorPath</key><string>%s</string>
 </dict>
 </plist>
-`, xmlEscape(launchdLabel), xmlEscape(exe), xmlEscape(logPath), xmlEscape(logPath))
+`, xmlEscape(launchdLabel), xmlEscape(exe), envBlock, xmlEscape(logPath), xmlEscape(logPath))
 }
 
 func xmlEscape(s string) string {
@@ -985,7 +1038,7 @@ func uidString() string {
 	return strings.TrimSpace(string(out))
 }
 
-func installLaunchd(exe string) error {
+func installLaunchd(exe, configDir string) error {
 	plistPath, err := launchdPlistPath()
 	if err != nil {
 		return err
@@ -1002,7 +1055,7 @@ func installLaunchd(exe string) error {
 	// 已加载时先卸掉，否则 bootstrap 会报 already loaded。
 	_ = exec.Command("launchctl", "bootout", domain, plistPath).Run()
 
-	if err := os.WriteFile(plistPath, []byte(launchdPlist(exe, logPath)), 0o644); err != nil {
+	if err := os.WriteFile(plistPath, []byte(launchdPlist(exe, logPath, configDir)), 0o644); err != nil {
 		return err
 	}
 	if out, err := exec.Command("launchctl", "bootstrap", domain, plistPath).CombinedOutput(); err != nil {
@@ -1036,7 +1089,11 @@ func uninstallLaunchd() error {
 	return nil
 }
 
-func systemdUnit(exe string) string {
+func systemdUnit(exe, configDir string) string {
+	envLine := ""
+	if configDir != "" {
+		envLine = "Environment=" + systemdQuote("STICKBOX_CONFIG_DIR="+configDir) + "\n"
+	}
 	return fmt.Sprintf(`[Unit]
 Description=StickBox usage agent
 After=network-online.target
@@ -1046,10 +1103,17 @@ Type=simple
 ExecStart=%s run
 Restart=on-failure
 RestartSec=10
-
+%s
 [Install]
 WantedBy=default.target
-`, exe)
+`, exe, envLine)
+}
+
+// systemd 的单位文件用双引号包裹整个 Environment 赋值。
+func systemdQuote(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return `"` + s + `"`
 }
 
 func systemdUnitPath() (string, error) {
@@ -1060,7 +1124,7 @@ func systemdUnitPath() (string, error) {
 	return filepath.Join(dir, "systemd", "user", "stickbox-agent.service"), nil
 }
 
-func installSystemd(exe string) error {
+func installSystemd(exe, configDir string) error {
 	unitPath, err := systemdUnitPath()
 	if err != nil {
 		return err
@@ -1068,7 +1132,7 @@ func installSystemd(exe string) error {
 	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(unitPath, []byte(systemdUnit(exe)), 0o644); err != nil {
+	if err := os.WriteFile(unitPath, []byte(systemdUnit(exe, configDir)), 0o644); err != nil {
 		return err
 	}
 	if out, err := exec.Command("systemctl", "--user", "daemon-reload").CombinedOutput(); err != nil {
@@ -1097,12 +1161,38 @@ func uninstallSystemd() error {
 	return nil
 }
 
-const taskName = "StickBoxAgent"
+const (
+	taskName           = "StickBoxAgent"
+	windowsWrapperName = "stickbox-agent-run.cmd"
+)
 
-func installSchtasks(exe string) error {
-	tr := fmt.Sprintf(`"%s" run`, exe)
+// windowsWrapper：schtasks 不能直接带环境变量，用批处理包装器。
+func windowsWrapper(configDir, exe string) string {
+	var b strings.Builder
+	b.WriteString("@echo off\r\n")
+	if configDir != "" {
+		// 批处理里 % 是变量展开符，路径里的 % 要写成 %%。
+		fmt.Fprintf(&b, "set \"STICKBOX_CONFIG_DIR=%s\"\r\n",
+			strings.ReplaceAll(configDir, "%", "%%"))
+	}
+	fmt.Fprintf(&b, "\"%s\" run\r\n", exe)
+	return b.String()
+}
+
+func installSchtasks(exe, configDir string) error {
+	target := fmt.Sprintf(`"%s" run`, exe)
+	if configDir != "" {
+		if err := os.MkdirAll(configDir, 0o700); err != nil {
+			return err
+		}
+		wrapper := filepath.Join(configDir, windowsWrapperName)
+		if err := os.WriteFile(wrapper, []byte(windowsWrapper(configDir, exe)), 0o600); err != nil {
+			return err
+		}
+		target = fmt.Sprintf(`"%s"`, wrapper)
+	}
 	out, err := exec.Command("schtasks", "/Create", "/SC", "ONLOGON",
-		"/TN", taskName, "/TR", tr, "/F").CombinedOutput()
+		"/TN", taskName, "/TR", target, "/F").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("创建计划任务失败：%v %s", err, strings.TrimSpace(string(out)))
 	}
@@ -1115,6 +1205,9 @@ func uninstallSchtasks() error {
 	out, err := exec.Command("schtasks", "/Delete", "/TN", taskName, "/F").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("删除计划任务失败：%v %s", err, strings.TrimSpace(string(out)))
+	}
+	if dir := os.Getenv("STICKBOX_CONFIG_DIR"); dir != "" {
+		_ = os.Remove(filepath.Join(dir, windowsWrapperName))
 	}
 	fmt.Printf("已卸载计划任务：%s\n", taskName)
 	return nil

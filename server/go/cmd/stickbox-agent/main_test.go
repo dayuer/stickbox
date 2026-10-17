@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -367,7 +371,7 @@ func TestPairDeviceSendsExistingToken(t *testing.T) {
 }
 
 func TestLaunchdPlistUsesAbsolutePaths(t *testing.T) {
-	p := launchdPlist("/opt/stickbox/agent", "/Users/x/Library/Logs/stickbox-agent.log")
+	p := launchdPlist("/opt/stickbox/agent", "/Users/x/Library/Logs/stickbox-agent.log", "")
 	for _, want := range []string{
 		"<string>ai.stickbox.agent</string>",
 		"<string>/opt/stickbox/agent</string>",
@@ -381,8 +385,125 @@ func TestLaunchdPlistUsesAbsolutePaths(t *testing.T) {
 }
 
 func TestSystemdUnitUsesAbsolutePath(t *testing.T) {
-	u := systemdUnit("/opt/stickbox/agent")
+	u := systemdUnit("/opt/stickbox/agent", "")
 	if !strings.Contains(u, "ExecStart=/opt/stickbox/agent run") {
 		t.Errorf("unit 缺少绝对路径 ExecStart：\n%s", u)
+	}
+}
+
+// 未配对时 install 必须直接拒绝，否则 launchd 会装一个永远失败的服务。
+func TestInstallRequiresPairing(t *testing.T) {
+	t.Setenv("STICKBOX_CONFIG_DIR", t.TempDir())
+	err := cmdInstall(nil)
+	if !errors.Is(err, errNotPaired) {
+		t.Fatalf("未配对时 install = %v，期望 errNotPaired", err)
+	}
+}
+
+// KeepAlive 只在异常退出时拉起；Run/ThrottleInterval 不再造成 10 秒死循环。
+func TestLaunchdPlistKeepAliveOnlyOnFailure(t *testing.T) {
+	p := launchdPlist("/opt/stickbox/agent", "/tmp/agent.log", "")
+	if !strings.Contains(p, "<key>KeepAlive</key>") ||
+		!strings.Contains(p, "<key>SuccessfulExit</key><false/>") {
+		t.Errorf("plist 的 KeepAlive 应为 SuccessfulExit=false：\n%s", p)
+	}
+	if strings.Contains(p, "<key>KeepAlive</key><true/>") {
+		t.Errorf("plist 仍在无条件 KeepAlive：\n%s", p)
+	}
+}
+
+// 临时配置目录必须带进 launchd，否则服务读的是另一份配置。
+func TestLaunchdPlistPropagatesConfigDir(t *testing.T) {
+	p := launchdPlist("/opt/stickbox/agent", "/tmp/agent.log", "/tmp/cfg dir")
+	for _, want := range []string{
+		"<key>EnvironmentVariables</key>",
+		"<key>STICKBOX_CONFIG_DIR</key>",
+		"<string>/tmp/cfg dir</string>",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("plist 缺少 %q：\n%s", want, p)
+		}
+	}
+	if bare := launchdPlist("/opt/stickbox/agent", "/tmp/agent.log", ""); strings.Contains(bare, "STICKBOX_CONFIG_DIR") {
+		t.Errorf("未设置 STICKBOX_CONFIG_DIR 时不该写进 plist：\n%s", bare)
+	}
+}
+
+// 生成的 plist 必须能被 launchd 解析。
+func TestLaunchdPlistIsValidPlist(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("plutil 只在 macOS 上可用")
+	}
+	path := filepath.Join(t.TempDir(), "agent.plist")
+	plist := launchdPlist("/opt/stickbox/agent", "/tmp/agent.log", "/tmp/cfg dir")
+	if err := os.WriteFile(path, []byte(plist), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("plutil", "-lint", path).CombinedOutput(); err != nil {
+		t.Fatalf("plutil -lint 失败：%v %s", err, out)
+	}
+}
+
+func TestSystemdUnitPropagatesConfigDir(t *testing.T) {
+	u := systemdUnit("/opt/stickbox/agent", "/tmp/cfg dir")
+	for _, want := range []string{
+		`Environment="STICKBOX_CONFIG_DIR=/tmp/cfg dir"`,
+		"Restart=on-failure",
+	} {
+		if !strings.Contains(u, want) {
+			t.Errorf("unit 缺少 %q：\n%s", want, u)
+		}
+	}
+	if bare := systemdUnit("/opt/stickbox/agent", ""); strings.Contains(bare, "STICKBOX_CONFIG_DIR") {
+		t.Errorf("未设置 STICKBOX_CONFIG_DIR 时不该写进 unit：\n%s", bare)
+	}
+}
+
+// Windows 用批处理包装器传环境变量（schtasks 本身不支持）。
+func TestWindowsWrapperPropagatesConfigDir(t *testing.T) {
+	w := windowsWrapper(`C:\Users\x\stickbox`, `C:\Program Files\stickbox-agent.exe`)
+	for _, want := range []string{
+		`set "STICKBOX_CONFIG_DIR=C:\Users\x\stickbox"`,
+		`"C:\Program Files\stickbox-agent.exe" run`,
+	} {
+		if !strings.Contains(w, want) {
+			t.Errorf("包装器缺少 %q：\n%s", want, w)
+		}
+	}
+	if bare := windowsWrapper("", `C:\agent.exe`); strings.Contains(bare, "STICKBOX_CONFIG_DIR") {
+		t.Errorf("未设置 STICKBOX_CONFIG_DIR 时不该写进包装器：\n%s", bare)
+	}
+}
+
+// run 遇到 401 / 未配对不能退出（launchd 会重启），而是 1 小时后再试。
+func TestRunDaemonRetryDelays(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want time.Duration
+	}{
+		{"unauthorized", fmt.Errorf("上报失败：%w", &apiError{Status: http.StatusUnauthorized}), authRetryInterval},
+		{"not paired", errNotPaired, authRetryInterval},
+		{"other", errors.New("boom"), usageInterval},
+		{"success", nil, usageInterval},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var got time.Duration
+			sleep := func(_ context.Context, d time.Duration) bool {
+				got = d
+				return false // 第一轮之后退出循环
+			}
+			err := runDaemon(context.Background(),
+				func(string, ...any) {},
+				func() error { return c.err },
+				sleep)
+			if err != nil {
+				t.Fatalf("runDaemon 返回错误：%v", err)
+			}
+			if got != c.want {
+				t.Errorf("重试间隔 = %s，期望 %s", got, c.want)
+			}
+		})
 	}
 }
