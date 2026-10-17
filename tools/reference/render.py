@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """把任意文档渲染成打印机认的 URF。
 
+⚠ 不再部署。服务端已改为纯管道，光栅由 App 用手机算力完成（见
+docs/superpowers/specs/2026-08-30-go-print-server-design.md 第 7 节）。
+
+留档的理由只有一个：下面的 fix_page_count 是客户端 URF 编码器的参考实现。
+Debian 版 cupsfilter 把 URF 头部页数字段写成 0，打印机据此认为文档为空——
+自己写编码器一样会踩这个坑。移植它，不要重新发现它。
+
+
 用法: render.py <输入文件> <输出.urf>
 
 Debian 版 cupsfilter 产出的 URF 头部页数字段是 0（macOS 版给的是实际页数），
@@ -8,7 +16,7 @@ Debian 版 cupsfilter 产出的 URF 头部页数字段是 0（macOS 版给的是
 """
 import subprocess, sys, struct, os
 
-PPD = '/opt/airprint/ppd/hp136a.ppd'
+PPD = '/opt/stickbox/ppd/hp136a.ppd'
 
 def is_text(path):
     """能按 UTF-8 解码且无控制字符 = 当文本处理"""
@@ -27,7 +35,7 @@ def to_urf(src):
         if is_text(src):
             # 文本走 PangoCairo：CUPS 的 texttopdf 不带 CJK 字体，
             # Debian 的 paps 0.6.7 又写死 /Helvetica，两者中文都是方框。
-            subprocess.run(['python3', '/opt/airprint/bin/text2pdf.py', src, pdf],
+            subprocess.run(['python3', '/opt/stickbox/bin/text2pdf.py', src, pdf],
                            capture_output=True, check=True)
         else:
             with open(pdf, 'wb') as f:

@@ -1,5 +1,12 @@
-menu "AirPrint Bridge"
+menu "StickBox"
 config BRIDGE_DIAG_NO_USB
     bool "Diagnostic mode: keep USB serial, skip host switch"
     default n
+
+config STICKBOX_LCD_ROTATE_180
+    bool "Rotate the LCD 180 degrees (board plugged in upside down)"
+    default y
+    help
+        USB 口只能倒插，板子装上后屏幕是倒的。打开后用 ST7789 硬件镜像翻转，
+        不占额外渲染时间。
 endmenu
