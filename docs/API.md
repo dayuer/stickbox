@@ -218,8 +218,10 @@ device 鉴权，且密钥必须已配对（pending 密钥返回 `403`）。
 控制。只认 `{Root}/fw` 下的文件名。
 
 > 自托管注意：设备的 TLS 接收缓冲是 8KB，而 nginx 默认 `ssl_buffer_size`
-> 是 16k，两者都不支持 MFL 协商——必须给这个路径设 `ssl_buffer_size 4k`，
-> 否则 OTA 下载直接失败。见 `server/DEPLOY.md`。
+> 是 16k，两者都不支持 MFL 协商——必须在 nginx 的 `http`/`server` 层设
+> `ssl_buffer_size 4k`（写进 `location` 会让 `nginx -t` 报错），否则
+> OTA 下载直接失败。另需给 `location /fw/` 配 https 反代到 9443。见
+> `server/DEPLOY.md` 与 `server/deploy/nginx-stickbox.conf`。
 
 ### 2.7 MQTT 连接
 
