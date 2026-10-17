@@ -28,6 +28,7 @@ type FrameResender interface {
 
 type Hook struct {
 	mqtt.HookBase
+	srv    *mqtt.Server
 	v      *auth.Verifier
 	router Router
 	// ids 记录每个连接校验通过的身份，ACL 判定时直接取，不重复跑 argon2。
@@ -86,12 +87,54 @@ func (h *Hook) OnConnectAuthenticate(cl *mqtt.Client, pk packets.Packet) bool {
 			slog.Warn("pending 连接试图顶掉在线设备", "dev", id.Dev, "remote", cl.Net.Remote)
 			return false
 		}
+		h.evictStale(id.Dev)
 		return true
 	}
 	if !h.ids.admit(cl, id) {
 		return false
 	}
+	h.evictStale(id.Dev)
 	return true
+}
+
+// evictStale 在 mochi 走会话接管之前，把同 client ID 的旧连接踢掉并等它
+// 从 Clients 里消失。
+//
+// mochi v2.7.9 的 inheritClientSession 有竞态：被顶掉的旧连接可能在
+// isTakenOver 置位之前进入清理流程，于是它在 Clients.Add(新连接) 之后
+// 仍会按 client ID 执行 Clients.Delete，把新连接从路由表里删掉。表现是
+// 连接没断、订阅也 SUBACK 了，但之后所有消息都送不到，直到设备重连。
+// 先同步踢掉旧连接并等它清完，新连接就不会再走接管路径。
+func (h *Hook) evictStale(dev string) {
+	if h.srv == nil {
+		return
+	}
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		old, ok := h.srv.Clients.Get(dev)
+		if !ok || old.Net.Inline {
+			return
+		}
+		// 非 clean 会话断线后 mochi 不会删 Clients 条目，不存在上面的
+		// 竞态；接管时它也会保留订阅，直接交给 mochi 处理。
+		if !sessionExpiresOnDisconnect(old) {
+			return
+		}
+		_ = h.srv.DisconnectClient(old, packets.ErrSessionTakenOver)
+		if !time.Now().Before(deadline) {
+			slog.Warn("旧连接未在期限内退出", "dev", dev)
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// sessionExpiresOnDisconnect 与 mochi 清理连接时的 expire 判断一致。
+func sessionExpiresOnDisconnect(cl *mqtt.Client) bool {
+	if cl.Properties.ProtocolVersion == 5 {
+		return cl.Properties.Props.SessionExpiryInterval == 0
+	}
+	return cl.Properties.Clean
 }
 
 func (h *Hook) OnACLCheck(cl *mqtt.Client, topic string, write bool) bool {

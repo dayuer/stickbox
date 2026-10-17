@@ -90,7 +90,7 @@ func New(addr string, tlsCfg *tls.Config, v *auth.Verifier, r Router) (*Broker, 
 		})),
 	})
 	h := &Hook{
-		v: v, router: r, ids: newIDTable(),
+		srv: srv, v: v, router: r, ids: newIDTable(),
 		pending: newPendingLimiter(6, time.Minute),
 	}
 	if err := srv.AddHook(h, nil); err != nil {
