@@ -37,7 +37,7 @@ type Config struct {
 	StateDir   string // 密钥/配对码持久化目录
 	Insecure   bool
 	StreamAddr string // MJPEG/AVI 监听地址；留空不启流
-	TV         string // 可选：DLNA 电视 IP；留空只起流不推送
+	TV         string // 可选：DLNA 电视 IP/主机名（--push-tv）；留空只起流不推送
 	FPS        int
 	Burst      int
 	Dev        string // 可选：固定设备 ID（默认随机生成并持久化）
