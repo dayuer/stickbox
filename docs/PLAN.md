@@ -45,7 +45,7 @@
 | T12 | 换 N16R8 板：开 PSRAM、删 BSP 与 LCD、板级引脚抽象 | esp | T9–T11 | **降级为可选**：先用现板（T13） |
 | T13 | 渲染位置决策 | 用户 | T8 | **完成：服务端渲染，先用现板** |
 | T13a | 服务端渲染器 + 数据源插件（纯 Go） | esp | T13 | 完成 |
-| T13c | 服务端帧分发：按用户渲染帧包、GET /api/device/frame、MQTT 通知 | esp1 | T13a | 进行中 |
+| T13c | 服务端帧分发：按用户渲染帧包、GET /api/device/frame、MQTT 通知 | esp1 | T13a | 完成 |
 | T13b | 固件取帧：flash 帧缓存环 + 离线兜底帧 | 项目改名 StickBox | T9、T11、T13a | 进行中 |
 | T15a | 浏览器烧录页（ESP Web Tools 自托管） | esp1 | — | 完成 |
 | T15b | 发布流水线：签名固件、镜像、agent 多平台 Release | esp1 | T15a | 暂停（让位 T13c） |
