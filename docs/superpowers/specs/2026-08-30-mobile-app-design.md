@@ -42,8 +42,8 @@ app/
 │   ├─ packbits.{h,cpp}
 │   └─ tests/
 ├─ ios/
-│   ├─ StickBox/        主 app
-│   ├─ StickBoxShare/   Share Extension target
+│   ├─ AirPrint/        主 app
+│   ├─ AirPrintShare/   Share Extension target
 │   └─ RasterKit/       ObjC++ TurboModule
 ├─ android/
 │   ├─ app/             主 app（含 ACTION_SEND intent-filter）
