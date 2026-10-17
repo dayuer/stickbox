@@ -449,8 +449,18 @@ void stream_start(const frame_t *frames, int n, int fps, int band_row0, int band
             ESP_LOGE(TAG, "页面 %d 分辨率与首页不同——电视会出错", i);
         maxf = MAX(maxf, frames[i].len + BAND_CAP + 8);
     }
+    /* 这里必须按**帧包底帧**算上界，而不是按内置预置页算。
+     *
+     * AVI 头只在连接建立时发一次，而之后随时可能切进帧包模式——切换不
+     * 重连（那正是「全程不断流」要的），所以头里的 dwSuggestedBufferSize
+     * 和 dwMaxBytesPerSec 从第一秒起就得覆盖两种模式里最大的那一帧。
+     * blank.jpg 只有 33KB，按它算出来是 50KB；帧包底帧约 180KB，是它的
+     * 三倍多。按解码器拿这个值预分配缓冲的常见做法，报小了就是缓冲不够。
+     *
+     * 报大了只是让电视多分配一点，报小了是读到一半发现装不下。 */
+    maxf = MAX(maxf, (uint32_t)(FP_MAX_PACK + BAND_CAP + 8));
     build_header(w, h, maxf);
-    ESP_LOGI(TAG, "%d 页，%dx%d，%d fps，带 = MCU 行 %d..%d", s_n, w, h, fps, band_row0,
-             band_row0 + band_rows - 1);
+    ESP_LOGI(TAG, "%d 页，%dx%d，%d fps，带 = MCU 行 %d..%d，头里报单帧上限 %u 字节",
+             s_n, w, h, fps, band_row0, band_row0 + band_rows - 1, (unsigned)maxf);
     xTaskCreate(server_task, "avi_srv", 3072, NULL, 5, NULL);
 }
