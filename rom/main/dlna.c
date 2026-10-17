@@ -15,6 +15,7 @@
 
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "lwip/inet.h"
 #include "lwip/sockets.h"
 
@@ -221,6 +222,13 @@ bool dlna_stop(const dlna_tv_t *tv)
 
 bool dlna_push(const dlna_tv_t *tv, const char *url, const char *mime, const char *title)
 {
+    /* 这三步各自耗时都要能看见。「首推后约 4 秒断流」有两个说得通的原因，
+     * 只有把这里的时刻和 stream 的「电视开始拉流」对上才能分清：
+     *   - Play 打断加载：电视在 SetURI 之后就来连 :8080，而我们紧接着又发
+     *     Play，它在 TRANSITIONING 里被要求 Play，于是重起一次加载；
+     *   - 电视自己就要断：第一条连接只是探流，断开是它的正常流程。
+     * 判据：「电视开始拉流」出现在下面 Play 那行之前还是之后。 */
+    const int64_t t_begin = esp_timer_get_time();
     dlna_stop(tv);
 
     const bool video = strncmp(mime, "video/", 6) == 0;
@@ -241,9 +249,14 @@ bool dlna_push(const dlna_tv_t *tv, const char *url, const char *mime, const cha
     int st = soap(tv, "SetAVTransportURI", args, NULL);
     free(esc); free(args);
     if (st != 200) return false;
+    const int64_t t_seturi = esp_timer_get_time();
+    ESP_LOGW(TAG, "SetAVTransportURI 返回 200（Stop+SetURI 共 %lld 毫秒），接着发 Play",
+             (t_seturi - t_begin) / 1000);
 
     bool e701;
     st = soap(tv, "Play", "<InstanceID>0</InstanceID><Speed>1</Speed>", &e701);
+    ESP_LOGW(TAG, "Play 返回 %d%s，距 SetURI %lld 毫秒", st, e701 ? "（701，电视仍在加载）" : "",
+             (esp_timer_get_time() - t_seturi) / 1000);
     if (st != 200 && !e701) return false;
     ESP_LOGW(TAG, "已推送到「%s」：%s", tv->name, url);
     return true;

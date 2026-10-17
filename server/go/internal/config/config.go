@@ -18,6 +18,27 @@ type Config struct {
 	// DefaultTZ 是 agent 没上报时区时的兜底（IANA 名，如 Asia/Bangkok）。
 	DefaultTZ   string `json:"default_tz"`
 	MetricsAddr string `json:"metrics_addr"`
+
+	Firmware Firmware `json:"firmware"`
+}
+
+// Firmware 是 OTA 通道要下发的版本。Version 或 URL 为空 = 不下发任何升级。
+type Firmware struct {
+	Version string `json:"version"`
+	URL     string `json:"url"`
+	SHA256  string `json:"sha256"`
+	Size    int64  `json:"size"`
+
+	// 分阶段放量百分比（0–100）。字段缺省按 100 处理；显式写 0 则谁也不推。
+	// 用指针是为了把「没写这个字段」和「写了 0」分开——两者后果相反。
+	RolloutPercent *int `json:"rollout_percent"`
+}
+
+func (f Firmware) RolloutPercentOrDefault() int {
+	if f.RolloutPercent == nil {
+		return 100
+	}
+	return *f.RolloutPercent
 }
 
 func Load(path string) (*Config, error) {

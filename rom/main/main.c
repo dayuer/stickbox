@@ -26,20 +26,19 @@
 #include "nvs_flash.h"
 
 #include "cloud_client.h"
+#include "coredump.h"
 #include "dlna.h"
 #include "lcd_ui.h"
+#include "memdiag.h"
+#include "ota.h"
 #include "pairband.h"
 #include "provision.h"
 #include "stream.h"
 
 static const char *TAG = "stickbox";
 
-extern const uint8_t f1_start[] asm("_binary_page1_jpg_start");
-extern const uint8_t f1_end[] asm("_binary_page1_jpg_end");
-extern const uint8_t f2_start[] asm("_binary_page2_jpg_start");
-extern const uint8_t f2_end[] asm("_binary_page2_jpg_end");
-extern const uint8_t f3_start[] asm("_binary_page3_jpg_start");
-extern const uint8_t f3_end[] asm("_binary_page3_jpg_end");
+extern const uint8_t blank_start[] asm("_binary_blank_jpg_start");
+extern const uint8_t blank_end[]   asm("_binary_blank_jpg_end");
 
 static EventGroupHandle_t s_evt;
 #define EVT_GOT_IP BIT0
@@ -88,8 +87,48 @@ static void services_task(void *arg)
 
     uint8_t mac[6];
     esp_wifi_get_mac(WIFI_IF_STA, mac);
+    memdiag_heap("cloud_client_start 之前");
     cloud_client_start(mac);
     ESP_LOGI(TAG, "云端服务已启动，堆=%u", (unsigned)esp_get_free_heap_size());
+    memdiag_heap("cloud_client_start 之后（含 MQTT TLS 长连接）");
+
+    char devid[24];
+    snprintf(devid, sizeof devid, "%02x%02x%02x%02x%02x%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    ota_start(devid);
+    memdiag_heap("ota 定时器建好之后");
+    coredump_start();
+    memdiag_heap("coredump 检查之后");
+    vTaskDelete(NULL);
+}
+
+/* OTA 试运行的健康检查：拿到 IP + MQTT 已连上，两项成立就算这版固件能用。
+ *
+ * 判据只能用**设备自己能决定**的条件。早先这里还要求「已配对」和「电视在
+ * 拉流」，那是错的：电视关着、或者设备还没配对时，180 秒内必然过不了，
+ * 而没通过就一直卡在 PENDING_VERIFY——之后 esp_ota_begin() 会直接返回
+ * ROLLBACK_INVALID_STATE，连修复版都推不进来，哪天断电还会悄悄回滚。
+ * 用户把电视关了一晚上，就能把整批设备锁死在这个状态里。
+ *
+ * 超时也必须有动作：主动 mark_invalid 并重启回滚，而不是打条日志就算了。
+ * 「不确认」和「确认失败」在 bootloader 眼里不是一回事，前者会一直悬着。 */
+static void health_task(void *arg)
+{
+    (void)arg;
+    const int deadline_s = 180;
+    for (int t = 1; t <= deadline_s; t++) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        bool online = (xEventGroupGetBits(s_evt) & EVT_GOT_IP) != 0;
+        if (online && cloud_connected()) {
+            ESP_LOGI(TAG, "健康检查通过（%d 秒）：已联网 + 云端已连上", t);
+            ota_mark_healthy();
+            vTaskDelete(NULL);
+        }
+    }
+    ESP_LOGE(TAG, "健康检查 %d 秒未通过，判定这版固件不可用，回滚上一槽", deadline_s);
+    lcd_ui_cloud("新固件不可用，回滚");
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    ota_rollback_now();   /* 不返回 */
     vTaskDelete(NULL);
 }
 
@@ -154,26 +193,6 @@ static void supervisor_task(void *arg)
     }
 }
 
-static void cycle_task(void *arg)
-{
-    (void)arg;
-    int elapsed = 0;
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        if (!cloud_paired()) {
-            /* 还没配对：停在第 1 页，配对码条带要一直留在画面上。 */
-            if (stream_current() != 0) stream_set(0);
-            elapsed = 0;
-            continue;
-        }
-        if (++elapsed >= CONFIG_STICKBOX_DLNA_CYCLE_S) {
-            elapsed = 0;
-            stream_set(stream_current() + 1);
-            ESP_LOGI(TAG, "换到第 %d 页", stream_current() + 1);
-        }
-    }
-}
-
 static void sntp_start(void)
 {
     setenv("TZ", "CST-8", 1);
@@ -184,9 +203,29 @@ static void sntp_start(void)
     esp_sntp_init();
 }
 
+#if CONFIG_STICKBOX_OTA_SUICIDE
+static void suicide_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(10000));
+    ESP_LOGE(TAG, "OTA 回滚测试固件：现在 abort()");
+    abort();
+}
+#endif
+
 void app_main(void)
 {
-    ESP_LOGI(TAG, "=== StickBox 电视看板（T3）===");
+    ESP_LOGI(TAG, "=== StickBox 电视看板 ===");
+    ota_boot_check();     /* 尽早：要先知道本次是不是 OTA 后的试运行 */
+#if CONFIG_STICKBOX_OTA_SUICIDE
+    /* 只为验证 OTA 回滚而存在的测试版本。
+     *
+     * 延迟崩溃而不是立刻 abort()：abort() 是 noreturn，编译器会把它之后的
+     * 整个 app_main 当死代码消掉，固件从 2MB 缩到 214KB——那样既测不到真实
+     * 大小的 OTA 下载，也测不到「启动正常、随后崩溃」这个更常见的故障形态。
+     * 10 秒远小于健康检查的 180 秒窗口，所以这一版永远不会被标记为可用。 */
+    xTaskCreate(suicide_task, "suicide", 2048, NULL, 1, NULL);
+#endif
     ESP_LOGI(TAG, "堆@启动=%u", (unsigned)esp_get_free_heap_size());
     lcd_ui_init();
     ESP_LOGI(TAG, "堆@LCD后=%u", (unsigned)esp_get_free_heap_size());
@@ -246,24 +285,29 @@ void app_main(void)
     ESP_LOGI(TAG, "连接 Wi-Fi \"%s\"…", s_ssid);
     lcd_ui_wifi(s_ssid);
 
-    static frame_t frames[3];
-    frames[0] = (frame_t){ f1_start, f1_end - f1_start };
-    frames[1] = (frame_t){ f2_start, f2_end - f2_start };
-    frames[2] = (frame_t){ f3_start, f3_end - f3_start };
+    /* 固件里只带一张**纯色底图**，没有任何演示数据。电视上要么是真实看板
+     * （帧包到手之后），要么是功能性画面（配对码 / 连接中），不会出现任何
+     * 看起来像数据却不是数据的东西。 */
+    static frame_t frames[1];
+    frames[0] = (frame_t){ blank_start, blank_end - blank_start };
     /* 配对码条带占 MCU 行 46..51；未配对时停在第 1 页显示它。 */
-    stream_start(frames, 3, CONFIG_STICKBOX_DLNA_FPS, PAIR_ROW0, PAIR_ROWS);
+    memdiag_heap("stream_start 之前");
+    stream_start(frames, 1, CONFIG_STICKBOX_DLNA_FPS, PAIR_ROW0, PAIR_ROWS);
+    memdiag_heap("stream_start 之后（含带缓冲与页面解析）");
 
     sntp_start();
     xTaskCreate(services_task, "svc", 8192, NULL, 4, NULL);
     /* T8：实测栈余量 3.0KB，4096 仍留约 1KB。 */
     xTaskCreate(supervisor_task, "dlna_sup", 4096, NULL, 4, NULL);
-    if (CONFIG_STICKBOX_DLNA_CYCLE_S > 0)
-        /* 4096：cycle_task 每 10 秒打一条 ESP_LOGI，而 netlog 装上的
-         * vprintf 钩子会在调用任务栈上再拼一次日志——2048 实测会爆栈。 */
-        xTaskCreate(cycle_task, "cycle", 4096, NULL, 3, NULL);
+    /* 只有 OTA 后的试运行才需要盯健康状态；平时这个任务根本不建，不占堆。 */
+    if (ota_pending_verify())
+        xTaskCreate(health_task, "ota_health", 3072, NULL, 2, NULL);
 
     EventBits_t bits = xEventGroupWaitBits(s_evt, EVT_GOT_IP, pdFALSE, pdFALSE,
                                            pdMS_TO_TICKS(30000));
     ESP_LOGI(TAG, "Wi-Fi 阶段结果: %s", (bits & EVT_GOT_IP) ? "已联网" : "30 秒超时，继续启动");
     ESP_LOGI(TAG, "启动完成，堆=%u", (unsigned)esp_get_free_heap_size());
+    memdiag_heap("启动完成");
+    memdiag_tasks("启动完成");
+    memdiag_start();
 }

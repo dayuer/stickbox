@@ -20,5 +20,16 @@ bool prov_save_devkey(const char *key);
 /* 只清设备密钥，保留 Wi-Fi。密钥被吊销/解绑后回到注册流程时用。 */
 void prov_erase_devkey(void);
 
+/* 读自托管服务器地址（NVS namespace "cloud" / key "mqtt_uri"、"api_base"）。
+ * 没配过的那一项填空串——调用方回落到 cloud_creds.h 的编译期默认值。
+ * 两项独立，只改其中一个也成立。
+ *
+ * 地址必须能在运行期改，否则发不出一个所有人都能用的预编译固件，
+ * 「浏览器一键烧录」就不成立。见 docs/PRODUCT.md 4.1。 */
+void prov_load_server(char *mqtt_uri, size_t mcap, char *api_base, size_t acap);
+
+/* 写自托管服务器地址。传空串或 NULL 表示删掉该项，回到默认值。 */
+bool prov_save_server(const char *mqtt_uri, const char *api_base);
+
 /* 清空已保存的凭据（开机时按住 MENU 键触发）。Wi-Fi 和设备密钥一起清。 */
 void prov_erase(void);

@@ -5,6 +5,8 @@
 
 #include "jband.h"
 
+struct fp_index;
+
 #define STREAM_PORT 8080
 
 /* 时钟条带的单块缓冲上限，双缓冲共 32KB。
@@ -47,6 +49,22 @@ bool stream_band_publish(uint8_t *buf, size_t len, int page);
 
 /* 单块带缓冲的容量。加载帧包时拿它和 meta 里的 max_band_bytes 比对。 */
 size_t stream_band_cap(void);
+
+/* ---- 帧包模式（T13b）----
+ *
+ * 切进来之后推流不再发预置页，改发「底帧 + 12 个行段」的段序列。底帧那些
+ * 段直接指向 flash 映射地址，整帧从不在 RAM 里拼起来。
+ *
+ * base 必须在整个帧包生效期间保持有效（framepack 的 mmap 地址）。 */
+void stream_use_framepack(const struct fp_index *ix, const uint8_t *base, size_t base_len);
+
+/* 退回预置页。没有帧包、或帧包失效时调用——画面停在配对页，不黑屏。 */
+void stream_use_presets(void);
+
+/* 发布一块帧包模式的时钟带，附带每行在缓冲里的偏移与长度。
+ * 长度超过 BAND_CAP 时拒绝发布并返回 false，画面保持上一帧。 */
+bool stream_band_publish_rows(uint8_t *buf, size_t len,
+                              const uint32_t row_off[12], const uint32_t row_len[12]);
 
 int stream_clients(void);
 uint32_t stream_frames_sent(void);
