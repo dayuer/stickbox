@@ -64,6 +64,24 @@ func (t *idTable) admit(cl *mqtt.Client, id auth.Identity) bool {
 	return true
 }
 
+// dropWhere 移除满足 match 的身份，返回对应的连接。
+//
+// 用于「密钥已经被 CLI 吊销，但连接还挂着」：CLI 直接改库、不和 broker
+// 同进程，没法主动踢线；下一次认证或心跳时由这里把失效身份清掉。
+func (t *idTable) dropWhere(match func(auth.Identity) bool) []*mqtt.Client {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var out []*mqtt.Client
+	for cl, id := range t.m {
+		if !match(id) {
+			continue
+		}
+		delete(t.m, cl)
+		out = append(out, cl)
+	}
+	return out
+}
+
 // put 只给测试夹具直接登记身份用；生产路径走 admit。
 func (t *idTable) put(cl *mqtt.Client, id auth.Identity) {
 	t.mu.Lock()
