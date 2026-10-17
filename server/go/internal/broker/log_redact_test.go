@@ -2,10 +2,12 @@ package broker
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/packets"
@@ -52,5 +54,33 @@ func TestAuthFailureLogDoesNotLeakToken(t *testing.T) {
 	}
 	if strings.Contains(logs, "Bearer") {
 		t.Errorf("日志出现了 Authorization 头内容:\n%s", logs)
+	}
+}
+
+// mochi 在 ACL 拒绝时会以 WARN 打出整个 packet（含 payload），每包几 KB。
+// 处理器要把 pk 替换掉，但保留 error/client 这些排障信息。
+func TestPacketRedactHandlerDropsPayload(t *testing.T) {
+	var buf bytes.Buffer
+	h := packetRedactHandler{slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	})}
+	r := slog.NewRecord(time.Now(), slog.LevelWarn, "error processing packet", 0)
+	r.AddAttrs(
+		slog.String("error", "not authorized"),
+		slog.String("client", "f412fa87c9e0"),
+		slog.String("pk", strings.Repeat("SECRET-PAYLOAD-", 500)),
+	)
+	if err := h.Handle(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "SECRET-PAYLOAD") {
+		t.Errorf("日志仍然包含 payload：\n%s", out)
+	}
+	if !strings.Contains(out, "pk=<redacted>") {
+		t.Errorf("pk 没有被替换：\n%s", out)
+	}
+	if !strings.Contains(out, "not authorized") || !strings.Contains(out, "f412fa87c9e0") {
+		t.Errorf("排障字段被误删：\n%s", out)
 	}
 }

@@ -38,7 +38,8 @@ func TestACLMatrix(t *testing.T) {
 		{"pending 不能伪造配对", pending, "printer/aaa/pair", true, false},
 		{"pending 不能读别人的配对", pending, "printer/bbb/pair", false, false},
 		// 用受害者 MAC 注册出来的 pending 密钥 dev 完全相同，而 tracker 只
-		// 比对 dev——放它写 ack 就能替受害设备伪造回执。
+		// 比对 dev——放它写 ack 就能替受害设备伪造回执。解绑后无法 ACK 的
+		// 旧指令由服务端的 CancelDevice 结案，不靠放开 ACL。
 		{"pending 不能回 ACK", pending, "printer/aaa/ack", true, false},
 
 		// T18：下行指令回执。设备写自己的 ack，不能写别人的、也不能订阅

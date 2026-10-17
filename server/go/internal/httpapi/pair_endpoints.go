@@ -140,6 +140,11 @@ func (a *API) handleAgentPair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.v.Invalidate(pc.KeyID) // 缓存里那把还是 UserID="" 的待配对身份
+	// 旧密钥名下的未确认指令不能投给新密钥：设备换 key_id 了，旧 cid
+	// 对它没有意义。先作废，再发新的 pair/usage。
+	if n := a.pub.CancelDevice(pc.Dev, "key_replaced"); n > 0 {
+		slog.Info("换密钥后作废旧指令", "dev", pc.Dev, "count", n)
+	}
 
 	// 带上 key_id：设备只认发给「自己这把密钥」的通知，
 	// 避免上一轮配对 retain 的消息被下一轮注册误读。
@@ -248,6 +253,11 @@ func (a *API) handleAgentUnpair(w http.ResponseWriter, r *http.Request, id auth.
 	a.pairMu.Unlock()
 	// 解绑后旧密钥已失效，连接不应该继续挂着。先让 pair=false 送达
 	// （设备要清掉密钥并重新注册），再踢；直接踢会丢掉这条通知。
+	// 设备换密钥/重新注册后，旧连接名下的 usage/frame cid 不应再重投；
+	// pair 本身已经是 noAck + retained，不在这里处理。
+	if n := a.pub.CancelDevice(in.Dev, "unpaired"); n > 0 {
+		slog.Info("解绑后作废旧指令", "dev", in.Dev, "count", n)
+	}
 	go func(dev string) {
 		time.Sleep(300 * time.Millisecond)
 		a.pub.KickDevice(dev)

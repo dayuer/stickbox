@@ -494,18 +494,26 @@ func pairAndReconnect(t *testing.T, e *env, dev, devKey, code string) (*fakeDevi
 	return d, agentTok
 }
 
-// 设备转正重连后收到 retained 的 paired=true，确认它，服务端结案。
-func TestEndToEndPairAckAfterReconnect(t *testing.T) {
+// pair 是 retained 状态通知，不做 ACK 跟踪：消息里没有 cid，服务端也不会
+// 为一个重新注册的新密钥重投旧解绑指令。
+func TestEndToEndPairIsNotTracked(t *testing.T) {
 	e := startServer(t)
 	devKey, code := e.register("f412fa87c9e0")
 	dev, _ := pairAndReconnect(t, e, "f412fa87c9e0", devKey, code)
 
-	cid := cidOf(t, dev.waitPair(5*time.Second))
-	dev.ack(cid, true, "")
-
-	waitPendingZero(t, e, "f412fa87c9e0")
-	if o, ok := e.cmd.LastOutcome("f412fa87c9e0"); !ok || !o.OK {
-		t.Errorf("结局 = %+v ok=%v", o, ok)
+	payload := dev.waitPair(5 * time.Second)
+	var m map[string]any
+	if err := json.Unmarshal(payload, &m); err != nil {
+		t.Fatalf("pair 不是 JSON：%s", payload)
+	}
+	if _, ok := m["cid"]; ok {
+		t.Errorf("pair 不应带 cid：%s", payload)
+	}
+	if m["paired"] != true {
+		t.Errorf("pair payload = %s", payload)
+	}
+	if n := e.cmd.Pending("f412fa87c9e0"); n != 0 {
+		t.Errorf("pair 不应被跟踪：pending=%d", n)
 	}
 }
 
@@ -514,7 +522,6 @@ func TestEndToEndUsageAckClearsPending(t *testing.T) {
 	e := startServer(t)
 	devKey, code := e.register("f412fa87c9e0")
 	dev, agentTok := pairAndReconnect(t, e, "f412fa87c9e0", devKey, code)
-	dev.ack(cidOf(t, dev.waitPair(5*time.Second)), true, "")
 	if err := dev.subscribeUsage(); err != nil {
 		t.Fatalf("转正后订阅用量 = %v", err)
 	}
@@ -533,8 +540,13 @@ func TestEndToEndNackStopsRetry(t *testing.T) {
 	e := startServer(t)
 	devKey, code := e.register("f412fa87c9e0")
 	dev, _ := pairAndReconnect(t, e, "f412fa87c9e0", devKey, code)
-
-	cid := cidOf(t, dev.waitPair(5*time.Second))
+	if err := dev.subscribeUsage(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.cmd.Send("f412fa87c9e0", "printer/f412fa87c9e0/usage", []byte(`{"now":1}`), false); err != nil {
+		t.Fatal(err)
+	}
+	cid := cidOf(t, dev.waitUsage(5*time.Second))
 	dev.ack(cid, false, "stale_key")
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -559,8 +571,13 @@ func TestEndToEndDuplicateAckIsHarmless(t *testing.T) {
 	e := startServer(t)
 	devKey, code := e.register("f412fa87c9e0")
 	dev, _ := pairAndReconnect(t, e, "f412fa87c9e0", devKey, code)
-
-	cid := cidOf(t, dev.waitPair(5*time.Second))
+	if err := dev.subscribeUsage(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.cmd.Send("f412fa87c9e0", "printer/f412fa87c9e0/usage", []byte(`{"now":1}`), false); err != nil {
+		t.Fatal(err)
+	}
+	cid := cidOf(t, dev.waitUsage(5*time.Second))
 	dev.ack(cid, true, "")
 	dev.ack(cid, true, "") // 重投撞上在途回执时会出现
 
@@ -573,7 +590,13 @@ func TestEndToEndPendingKeyCannotForgeAck(t *testing.T) {
 	e := startServer(t)
 	devKey, code := e.register("f412fa87c9e0")
 	dev, _ := pairAndReconnect(t, e, "f412fa87c9e0", devKey, code)
-	cid := cidOf(t, dev.waitPair(5*time.Second))
+	if err := dev.subscribeUsage(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.cmd.Send("f412fa87c9e0", "printer/f412fa87c9e0/usage", []byte(`{"now":1}`), false); err != nil {
+		t.Fatal(err)
+	}
+	cid := cidOf(t, dev.waitUsage(5*time.Second))
 
 	// 知道 MAC 的人注册一把 pending 密钥，连上来想替它回执。
 	// 用不同的 client id：同 id 会触发 MQTT 会话接管，把合法设备顶掉，
