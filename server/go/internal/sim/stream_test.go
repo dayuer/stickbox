@@ -16,7 +16,7 @@ func TestAVIStreamT17Parameters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := newStreamServer("127.0.0.1:0", 2, 8, func() []byte { return jpg })
+	s := NewStreamServer("127.0.0.1:0", 2, 8, func() []byte { return jpg })
 	if err := s.Start(); err != nil {
 		t.Fatal(err)
 	}

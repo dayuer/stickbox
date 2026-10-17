@@ -193,3 +193,9 @@ func mathFloor(v float64) float64 {
 	}
 	return float64(int64(v) - 1)
 }
+
+// FontMedium 返回内嵌的 Noto Sans SC Medium，供其他工具（tvcheck）绘制中文。
+// 字体只解析一次的开销由调用方承担；这里只暴露原始字节。
+func FontMedium() ([]byte, error) {
+	return fontFS.ReadFile("fonts/NotoSansSC-Medium.ttf")
+}

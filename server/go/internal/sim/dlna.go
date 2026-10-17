@@ -177,43 +177,55 @@ func soapCall(ctx context.Context, controlURL, action string, args [][2]string) 
 	return err
 }
 
-// soapDo 发 SOAP 请求并返回响应体。
-func soapDo(ctx context.Context, controlURL, action string, args [][2]string) ([]byte, error) {
+// SoapCallRaw 发 SOAP 请求，原样返回 HTTP 状态码和响应体。
+//
+// 兼容性工具（cmd/stickbox-tvcheck）要记录电视回来的真实状态码，所以
+// 这里不做 701 特判；模拟器自己的 soapDo 在其上保留原来的语义。
+func SoapCallRaw(ctx context.Context, controlURL, action string, args [][2]string) (int, []byte, error) {
 	env := soapEnvelope(action, args)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, controlURL, strings.NewReader(env))
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", `text/xml; charset="utf-8"`)
 	req.Header.Set("SOAPACTION", `"`+avtService+`#`+action+`"`)
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-	if resp.StatusCode >= 300 {
+	return resp.StatusCode, raw, nil
+}
+
+// soapDo 发 SOAP 请求并返回响应体。
+func soapDo(ctx context.Context, controlURL, action string, args [][2]string) ([]byte, error) {
+	status, raw, err := SoapCallRaw(ctx, controlURL, action, args)
+	if err != nil {
+		return nil, err
+	}
+	if status >= 300 {
 		// 图片/直播流没有可 Play 的状态迁移时电视回 701，不算失败。
 		if (action == "Play" || action == "Stop" || action == "Next") &&
 			bytes.Contains(raw, []byte("<errorCode>701<")) {
 			return raw, nil
 		}
-		return raw, fmt.Errorf("sim: %s 失败 %d：%s", action, resp.StatusCode, strings.TrimSpace(string(raw)))
+		return raw, fmt.Errorf("sim: %s 失败 %d：%s", action, status, strings.TrimSpace(string(raw)))
 	}
 	return raw, nil
 }
 
-// xmlEscape 只转义 & < >。不能用 xml.EscapeText：它会把引号写成
+// XMLEscape 只转义 & < >。不能用 xml.EscapeText：它会把引号写成
 // &#34; / &#39;，三星 Room C 的 SOAP 解析器不认数字实体（402）。
 // 这里与 T17 dlna_push.py 用的 saxutils.escape 一致。
-var xmlEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+var XMLEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 
-func xmlEscape(s string) string {
-	return xmlEscaper.Replace(s)
+func XMLEscape(s string) string {
+	return XMLEscaper.Replace(s)
 }
 
-// transportState 读 AVTransport 当前状态（PLAYING / STOPPED / …）。
-func transportState(ctx context.Context, controlURL string) (string, error) {
+// TransportState 读 AVTransport 当前状态（PLAYING / STOPPED / …）。
+func TransportState(ctx context.Context, controlURL string) (string, error) {
 	raw, err := soapDo(ctx, controlURL, "GetTransportInfo", [][2]string{{"InstanceID", "0"}})
 	if err != nil {
 		return "", err
@@ -230,7 +242,7 @@ func transportState(ctx context.Context, controlURL string) (string, error) {
 	return r.State, nil
 }
 
-func didl(url, title, mime string) string {
+func DIDL(url, title, mime string) string {
 	class := "object.item.imageItem.photo"
 	if strings.HasPrefix(mime, "video/") {
 		class = "object.item.videoItem"
@@ -239,11 +251,11 @@ func didl(url, title, mime string) string {
 		`xmlns:dc="http://purl.org/dc/elements/1.1/" ` +
 		`xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">` +
 		`<item id="0" parentID="-1" restricted="1">` +
-		`<dc:title>` + xmlEscape(title) + `</dc:title>` +
+		`<dc:title>` + XMLEscape(title) + `</dc:title>` +
 		`<upnp:class>` + class + `</upnp:class>` +
-		`<res protocolInfo="http-get:*:` + mime + `:*">` + xmlEscape(url) + `</res>` +
+		`<res protocolInfo="http-get:*:` + mime + `:*">` + XMLEscape(url) + `</res>` +
 		`</item></DIDL-Lite>`
-	return xmlEscape(item)
+	return XMLEscape(item)
 }
 
 // pushDLNA 把直播流地址推给电视（Stop → SetAVTransportURI → Play），
@@ -266,8 +278,8 @@ func pushToControl(ctx context.Context, controlURL, streamURL string, probe stre
 	}
 	if err := soapCall(ctx, controlURL, "SetAVTransportURI", [][2]string{
 		{"InstanceID", "0"},
-		{"CurrentURI", xmlEscape(streamURL)},
-		{"CurrentURIMetaData", didl(streamURL, "StickBox", "video/avi")},
+		{"CurrentURI", XMLEscape(streamURL)},
+		{"CurrentURIMetaData", DIDL(streamURL, "StickBox", "video/avi")},
 	}); err != nil {
 		return err
 	}
@@ -287,7 +299,7 @@ func waitForPlaying(ctx context.Context, controlURL string, probe streamProbe, p
 	var last string
 	var lastErr error
 	for {
-		state, err := transportState(ctx, controlURL)
+		state, err := TransportState(ctx, controlURL)
 		if err == nil {
 			last, lastErr = state, nil
 			switch state {

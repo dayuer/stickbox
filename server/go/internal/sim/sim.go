@@ -79,7 +79,7 @@ type Device struct {
 	dataSubscribed bool // 当前连接是否已订阅 usage/frame（配对后才订）
 
 	frameReady chan struct{}
-	stream     *streamServer
+	stream     *StreamServer
 }
 
 func New(cfg Config) (*Device, error) {
@@ -507,7 +507,7 @@ func (d *Device) Run(ctx context.Context) error {
 	}
 
 	if d.cfg.StreamAddr != "" {
-		s := newStreamServer(d.cfg.StreamAddr, d.cfg.FPS, d.cfg.Burst, d.CurrentJPEG)
+		s := NewStreamServer(d.cfg.StreamAddr, d.cfg.FPS, d.cfg.Burst, d.CurrentJPEG)
 		if err := s.Start(); err != nil {
 			return err
 		}
@@ -894,7 +894,7 @@ func (d *Device) pushToTV(ctx context.Context) {
 	if d.stream == nil || d.cfg.TV == "" {
 		return
 	}
-	u, pushed, err := pushWithRetry(ctx, d.cfg.TV, d.stream.Addr(), localIPToward,
+	u, pushed, err := pushWithRetry(ctx, d.cfg.TV, d.stream.Addr(), LocalIPToward,
 		pushDLNA, d.stream, pushRetryDelays, d.logf)
 	if err != nil {
 		if ctx.Err() == nil {
@@ -923,7 +923,7 @@ func pushWithRetry(
 ) (string, bool, error) {
 	var last error
 	for attempt := 0; ; attempt++ {
-		u, err := buildStreamURL(listenAddr, tv, ipFor)
+		u, err := BuildStreamURL(listenAddr, tv, ipFor)
 		if err != nil {
 			last = err
 		} else {

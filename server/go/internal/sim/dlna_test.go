@@ -18,10 +18,10 @@ import (
 func TestXmlEscapeOnlyAmpLtGt(t *testing.T) {
 	in := `a&b<c>d "q" 'p'`
 	want := `a&amp;b&lt;c&gt;d "q" 'p'`
-	if got := xmlEscape(in); got != want {
-		t.Errorf("xmlEscape(%q) = %q，期望 %q", in, got, want)
+	if got := XMLEscape(in); got != want {
+		t.Errorf("XMLEscape(%q) = %q，期望 %q", in, got, want)
 	}
-	if got := xmlEscape(in); strings.Contains(got, "&#") {
+	if got := XMLEscape(in); strings.Contains(got, "&#") {
 		t.Errorf("输出里不能出现数字实体：%q", got)
 	}
 }
@@ -36,8 +36,8 @@ func TestSoapSetAVTransportURIMatchesPythonGolden(t *testing.T) {
 	const url = "http://192.168.3.237:8091/live.avi"
 	got := soapEnvelope("SetAVTransportURI", [][2]string{
 		{"InstanceID", "0"},
-		{"CurrentURI", xmlEscape(url)},
-		{"CurrentURIMetaData", didl(url, "StickBox", "video/avi")},
+		{"CurrentURI", XMLEscape(url)},
+		{"CurrentURIMetaData", DIDL(url, "StickBox", "video/avi")},
 	})
 	if got != string(gold) {
 		i := 0
@@ -70,7 +70,7 @@ func TestTransportStateParsesAVTransport1Response(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	state, err := transportState(context.Background(), srv.URL)
+	state, err := TransportState(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
