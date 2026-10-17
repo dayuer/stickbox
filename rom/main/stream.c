@@ -16,6 +16,7 @@
 #include <sys/param.h>
 
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -444,6 +445,9 @@ void stream_start(const frame_t *frames, int n, int fps, int band_row0, int band
         s_band[0] = malloc(BAND_CAP);
         s_band[1] = malloc(BAND_CAP);
         if (!s_band[0] || !s_band[1]) ESP_LOGE(TAG, "带缓冲分配失败");
+        /* memdiag 对账用：这块是 T13b 相对 v0.9.3 的主要常驻开销。 */
+        ESP_LOGI(TAG, "带缓冲 2×%d = %d B，分配后堆 %u",
+                 BAND_CAP, 2 * BAND_CAP, (unsigned)esp_get_free_heap_size());
     }
 
     int w = 0, h = 0;

@@ -93,7 +93,12 @@ static void services_task(void *arg)
     ESP_LOGI(TAG, "云端服务已启动，堆=%u", (unsigned)esp_get_free_heap_size());
     memdiag_heap("cloud_client_start 之后（含 MQTT TLS 长连接）");
 
-    /* 密钥与服务器地址都就位了，立刻拉一次最新帧。排在 ota_start 之前：
+    /* 等 MQTT 连上再拉第一帧：MQTT 和取帧各要一次 TLS 握手，同时开会让
+     * 开机堆最低点再掉约 20KB（v0.9.4 实测 14KB）。MQTT 迟迟连不上时
+     * 最多等 5 秒，避免完全不出帧。 */
+    for (int i = 0; i < 50 && !cloud_connected(); i++)
+        vTaskDelay(pdMS_TO_TICKS(100));
+    /* 密钥与服务器地址都就位了，拉一次最新帧。排在 ota_start 之前：
      * 两边都要开 TLS，先把看板起来，升级检查本来就推迟到开机 10 分钟后。 */
     framefetch_start();
 

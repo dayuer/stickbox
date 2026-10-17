@@ -13,6 +13,9 @@ KEY="${2:?用法: release_build.sh <tag> <ota_key.pem>}"
 
 cd "$(dirname "$0")/.."   # rom/
 
+# 编译前静态检查：MQTT 重连绝不能再用 esp_mqtt_set_config（会清空 TLS 配置）。
+python3 tools/check_mqtt_config.py
+
 if [ ! -f sdkconfig.release ]; then
     echo "rom/sdkconfig.release 不存在：T9/M0 尚未合并，发布构建无法开启 OTA 签名" >&2
     exit 1
@@ -52,6 +55,11 @@ idf.py -B build-release \
     -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.release" \
     -DPROJECT_VER="$TAG" \
     build
+
+# 防呆：编进去的服务器地址必须是官方主机。cloud_creds.h 是 gitignore 的
+# 本地文件，开发机指向旧服务器时构建照样成功，设备上板才 DNS 失败。
+EXPECTED_HOST="${STICKBOX_EXPECTED_HOST:-mqtt.stickbox.ai}"
+python3 tools/check_embedded_hosts.py build-release/stickbox.bin "$EXPECTED_HOST"
 
 # 防呆：签名开关必须真的落到这个独立 sdkconfig 里。
 grep -q '^CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y$' build-release/sdkconfig || {
