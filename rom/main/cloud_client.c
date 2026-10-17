@@ -319,7 +319,13 @@ static void pair_code_task(void *arg)
     (void)arg;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(5000));
-        if (s_paired || !s_devkey[0] || !s_pair_expire_us) continue;
+        if (s_paired) {
+            /* 配对完成后不再需要换码；8KB 栈不能在看板运行期常驻。 */
+            ESP_LOGI(TAG, "已配对，换码任务退出");
+            vTaskDelete(NULL);
+            return;
+        }
+        if (!s_devkey[0] || !s_pair_expire_us) continue;
         if (esp_timer_get_time() > s_pair_expire_us) {
             ESP_LOGI(TAG, "配对码过期，换新码");
             pair_code_refresh();
