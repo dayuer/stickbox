@@ -1120,12 +1120,13 @@ func installLaunchd(exe, configDir string) error {
 	if err != nil {
 		return err
 	}
-	home, _ := os.UserHomeDir()
-	logDir := filepath.Join(home, "Library", "Logs")
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
+	logPath, err := agentLogPath()
+	if err != nil {
 		return err
 	}
-	logPath := filepath.Join(logDir, "stickbox-agent.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return err
+	}
 
 	uid := uidString()
 	domain := "gui/" + uid
@@ -1180,6 +1181,8 @@ Type=simple
 ExecStart=%s run
 Restart=on-failure
 RestartSec=10
+StandardOutput=append:%%h/.local/state/stickbox-agent.log
+StandardError=append:%%h/.local/state/stickbox-agent.log
 %s
 [Install]
 WantedBy=default.target
@@ -1208,6 +1211,11 @@ func installSystemd(exe, configDir string) error {
 	}
 	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
 		return err
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if err := os.MkdirAll(filepath.Join(home, ".local", "state"), 0o755); err != nil {
+			return err
+		}
 	}
 	if err := os.WriteFile(unitPath, []byte(systemdUnit(exe, configDir)), 0o644); err != nil {
 		return err
@@ -1303,6 +1311,7 @@ func usage() {
   stickbox-agent install
   stickbox-agent uninstall
   stickbox-agent status
+  stickbox-agent doctor
   stickbox-agent logout
 
 示例：
@@ -1342,6 +1351,8 @@ func main() {
 		err = cmdUninstall(args)
 	case "status":
 		err = cmdStatus(args)
+	case "doctor":
+		err = cmdDoctor(args)
 	case "logout":
 		err = cmdLogout(args)
 	case "version", "-v", "--version":
