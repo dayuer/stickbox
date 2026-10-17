@@ -26,6 +26,18 @@ static const char *TAG = "stream";
 
 #define BIG 0x7FFFFFF0u
 
+/* 起播 burst：电视刚连上时先不按 fps 节拍，连发这么多帧再回到稳态。
+ *
+ * 为什么要 burst：稳态是 2fps，电视的 MJPEG 解码器拿到第一帧并不等于
+ * 就出画——它要先攒够内部缓冲才开始送显。按 2fps 喂，攒缓冲这段时间
+ * 全花在等下一帧上，「连上到出画」被节拍白白拖长好几秒。burst 把这段
+ * 等待压成一次连续传输，之后再回到 2fps 省带宽。
+ *
+ * 为什么是 8 而不是更多：帧约 180KB，8 帧就是 1.4MB，按实测吞吐大约
+ * 0.4~1 秒发完。再多只是多占 Wi-Fi，电视那边早就开始显示了；而 burst
+ * 期间这个连接任务是不睡的，会一直占着发送路径。 */
+#define BURST_FRAMES 8
+
 static const frame_t *s_frames;
 static jb_page_t s_pages[4];
 static int s_n, s_fps, s_row0, s_rows;
@@ -226,6 +238,10 @@ static void client_task(void *arg)
     ESP_LOGW(TAG, "电视开始拉流（连接数 %d）", s_clients);
     int64_t t0 = esp_timer_get_time();
     uint32_t n = 0;
+    /* 稳态节拍的原点。burst 结束时重置成「那一刻」，否则后面每一帧的
+     * due 都比现在早，wait 恒为负，等于再也不睡——整条流会一直全速跑。 */
+    int64_t  pace_t0 = t0;
+    uint32_t pace_n0 = 0;
     bool ok = send_all(fd, s_hdr, s_hdr_len);
     while (ok) {
         /* 取一块当前有效的带（帧包模式下只有一页，编号 0）。s_busy 保证
@@ -296,7 +312,15 @@ static void client_task(void *arg)
         }
         if (!ok) break;
         n++; s_sent++; s_last_us = esp_timer_get_time();
-        int64_t due = t0 + (int64_t)n * 1000000 / s_fps;
+
+        if (n < BURST_FRAMES) continue;        /* burst 期间完全不睡 */
+        if (n == BURST_FRAMES) {
+            pace_t0 = esp_timer_get_time();
+            pace_n0 = n;
+            ESP_LOGW(TAG, "起播 burst 发完 %d 帧（用了 %.1f 秒），回到 %d fps 稳态",
+                     BURST_FRAMES, (pace_t0 - t0) / 1e6, s_fps);
+        }
+        int64_t due = pace_t0 + (int64_t)(n - pace_n0) * 1000000 / s_fps;
         int64_t wait = due - esp_timer_get_time();
         if (wait > 0) vTaskDelay(pdMS_TO_TICKS(wait / 1000));
     }
