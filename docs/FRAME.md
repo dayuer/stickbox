@@ -220,6 +220,9 @@ for slot in 0..3:
 3. 帧分发端点（`GET /api/device/frame` + MQTT 版本通知）等 T9 合并后另开任务
 4. 量化表固定在 q=82；若以后调质量，底帧与图集必须同批重出
 5. 设备逐行缓冲：`BAND_CAP = 16KB`（双缓冲共 32KB）；整带不可用。
-   加载帧包时校验 `max_band_bytes ≤ BAND_CAP`，每次拼接再做长度断言
+   加载帧包时校验 `max_band_bytes ≤ BAND_CAP`，每次拼接再做长度断言。
+   **合并顺序**：`rom/main/stream.h:10` 当前仍是 T7 的 12288；必须等 T13b
+   把 `BAND_CAP` 改成 16KB 并落地两道校验后，才能让设备拉 T13a 的帧包。
+   服务端 `frame.BandCap` 现在就是 16384，两边在 T13b 落地前故意不一致。
 6. T9/T10 合并后有 8KB 常驻栈（ota），上板时的最低空闲堆要重测，
    不能直接拿 T8 的 63.5KB 当现值

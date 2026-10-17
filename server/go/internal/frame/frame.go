@@ -33,8 +33,11 @@ const (
 	Quality = 82
 
 	// BandCap 是设备侧逐行时钟缓冲（单块）的上限。必须与
-	// rom/main/stream.h 的 BAND_CAP 保持一致；Build 在这里先硬失败，
+	// rom/main/stream.h:10 的 BAND_CAP 保持一致；Build 在这里先硬失败，
 	// 避免服务端出了设备装不下的帧包、到板上才拒包。
+	//
+	// 注意合并顺序：设备侧当前仍是 T7 的 12288。T13b 把它改成 16KB、
+	// 并加上「加载时校验 + 拼接断言」之前，不要把 T13a 的帧包下发给设备。
 	BandCap = 16 << 10
 )
 
