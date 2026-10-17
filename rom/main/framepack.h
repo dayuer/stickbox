@@ -11,6 +11,31 @@
  *   - 上半部分是设备侧的存取与生命周期，依赖 IDF。
  */
 
+/* ---- flash 槽布局 ----
+ *
+ * frames 分区 1.5MB 划 6 个 256KB 槽，环形轮换写（磨损均衡，见
+ * rom/partitions.csv 的注释）。每槽：
+ *
+ *   [0:4]   "SBFS"      槽魔数
+ *   [4:6]   ver (u16)   槽格式版本 = 1
+ *   [6:8]   保留
+ *   [8:12]  seq (u32)   单调递增，最大的那个有效槽是当前帧
+ *   [12:16] pack_len    帧包字节数
+ *   [16:20] crc32       帧包的 CRC32
+ *   [20:32] 保留，擦除值 0xFF
+ *   [32:]   帧包（T13c 的 SBF1 容器）
+ *
+ * 头部**最后写**：中途掉电时魔数写不全，这个槽自然失效，不会被当成
+ * 一个完整的帧。
+ *
+ * 全部多字节字段用大端，和 T13c 的 SBF1 一致。 */
+#define FP_SLOT_SIZE   (256 * 1024)
+#define FP_SLOT_HEADER 32
+#define FP_SLOT_COUNT  6
+/* 一个帧包最大能有多少字节。服务端的构建上限必须 ≤ 这个数，否则会产出
+ * 没有任何设备存得下的帧包。 */
+#define FP_MAX_PACK    (FP_SLOT_SIZE - FP_SLOT_HEADER)
+
 #define FP_SLOTS      4    /* HH:MM 四个数字槽 */
 #define FP_BAND_ROWS 12    /* 时钟带占 12 个 MCU 行 */
 #define FP_DIGITS    10

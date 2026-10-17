@@ -68,6 +68,8 @@ static int  s_rx_kind;
 static int  s_rx_len;
 static char s_rx_buf[RX_MAX + 1];
 
+static void subscribe_paired_topics(void);
+
 bool cloud_paired(void) { return s_paired; }
 
 // set_devkey 记住令牌并取出 key_id：配对通知要按 key_id 过滤，
@@ -281,6 +283,7 @@ static void handle_pair(const char *json, int len)
         lcd_ui_pair("", true);
         lcd_ui_cloud("已配对");
         pairband_clear();
+        subscribe_paired_topics();
         ESP_LOGI(TAG, "配对成功，切到看板");
     } else {
         ESP_LOGW(TAG, "设备已解绑，清密钥重新注册");
@@ -333,6 +336,20 @@ static void pair_code_task(void *arg)
     }
 }
 
+/* 配对之后才有权订阅的主题。
+ *
+ * 必须在「配对成功」这个时刻补订一次，不能只在连接建立时订：密钥是原地
+ * 转正的，配对前后是同一条 MQTT 连接，不会重连。只在连接时订的话，设备
+ * 配对成功后永远收不到用量，电视就停在配对页——而两端都不报错。
+ *
+ * 重复订阅是无害的，所以不必记状态。 */
+static void subscribe_paired_topics(void)
+{
+    if (!s_mqtt) return;
+    esp_mqtt_client_subscribe(s_mqtt, s_topic_usage, 1);
+    ESP_LOGI(TAG, "已订阅用量");
+}
+
 static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     esp_mqtt_event_handle_t e = data;
@@ -343,8 +360,11 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
         s_backoff_ms = BACKOFF_MIN_MS;
         esp_mqtt_set_config(s_mqtt, &(esp_mqtt_client_config_t){
             .network.reconnect_timeout_ms = s_backoff_ms });
-        esp_mqtt_client_subscribe(s_mqtt, s_topic_usage, 1);
+        /* pair 永远要订：待配对设备靠它收「已配对」。
+         * usage 只有已配对才订——服务端的 ACL 不允许待配对密钥读 usage，
+         * 订了也是被拒。配对成功时再补订，见 subscribe_paired_topics()。 */
         esp_mqtt_client_subscribe(s_mqtt, s_topic_pair, 1);
+        if (s_paired) subscribe_paired_topics();
         break;
 
     case MQTT_EVENT_DISCONNECTED:
