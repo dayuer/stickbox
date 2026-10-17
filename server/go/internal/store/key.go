@@ -84,6 +84,15 @@ func (s *Store) DisableKey(keyID string) error {
 	return err
 }
 
+// UpdateKeyHash 在旧 argon2 记录校验成功后原地迁移成 HMAC。
+// 只改哈希，不动密钥的身份/归属/状态。
+func (s *Store) UpdateKeyHash(keyID, hash string) error {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	_, err := s.db.Exec(`UPDATE devices SET key_hash=? WHERE key_id=?`, hash, keyID)
+	return err
+}
+
 func (s *Store) TouchKey(keyID string) error {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()

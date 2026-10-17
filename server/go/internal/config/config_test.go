@@ -15,7 +15,7 @@ func write(t *testing.T, body string) string {
 	return p
 }
 
-const minimal = `{"cert_dir":"/etc/le/live/x"}`
+const minimal = `{"cert_dir":"/etc/le/live/x","token_pepper":"0123456789abcdef"}`
 
 func TestLoadAppliesDefaults(t *testing.T) {
 	c, err := Load(write(t, minimal))
@@ -31,16 +31,32 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if c.MQTTAddr != ":8883" {
 		t.Errorf("MQTTAddr = %q，期望默认 :8883", c.MQTTAddr)
 	}
+	if c.MQTTMaxWritesPending != 64 || c.MQTTMaxInflight != 32 || c.MQTTReceiveMaximum != 32 {
+		t.Errorf("MQTT 缓冲默认 = %d/%d/%d，期望 64/32/32",
+			c.MQTTMaxWritesPending, c.MQTTMaxInflight, c.MQTTReceiveMaximum)
+	}
+	if c.BackfillPerSec != 2 || c.FrameCacheMaxBytes == 0 {
+		t.Errorf("帧缓存/补帧默认没生效：%+v", c)
+	}
+}
+
+func TestLoadRejectsMissingPepper(t *testing.T) {
+	if _, err := Load(write(t, `{"cert_dir":"/c"}`)); err == nil {
+		t.Error("缺 token_pepper 时应当拒绝启动")
+	}
+	if _, err := Load(write(t, `{"cert_dir":"/c","token_pepper":"short"}`)); err == nil {
+		t.Error("token_pepper 太短时应当拒绝启动")
+	}
 }
 
 func TestLoadRejectsMissingCertDir(t *testing.T) {
-	if _, err := Load(write(t, `{"root":"/srv/ap"}`)); err == nil {
+	if _, err := Load(write(t, `{"root":"/srv/ap","token_pepper":"0123456789abcdef"}`)); err == nil {
 		t.Error("缺 cert_dir 时应当报错")
 	}
 }
 
 func TestDerivedPaths(t *testing.T) {
-	c, err := Load(write(t, `{"cert_dir":"/c","root":"/srv/ap"}`))
+	c, err := Load(write(t, `{"cert_dir":"/c","root":"/srv/ap","token_pepper":"0123456789abcdef"}`))
 	if err != nil {
 		t.Fatal(err)
 	}

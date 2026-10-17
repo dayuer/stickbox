@@ -19,6 +19,25 @@ type Config struct {
 	DefaultTZ   string `json:"default_tz"`
 	MetricsAddr string `json:"metrics_addr"`
 
+	// TokenPepper 是令牌哈希的服务端密钥（HMAC-SHA256）。必填：
+	// 缺了就不启动，避免退回无 pepper 的哈希。
+	// 生成：openssl rand -base64 32；只放 config.json（0600），不进仓库。
+	TokenPepper string `json:"token_pepper"`
+
+	// MQTT 每连接缓冲上限。设备只有 3 个订阅、流量很低；
+	// mochi 默认 8192/8192/1024 每连接约 1.4MB。
+	MQTTMaxWritesPending int32  `json:"mqtt_max_writes_pending"`
+	MQTTMaxInflight      uint16 `json:"mqtt_max_inflight"`
+	MQTTReceiveMaximum   uint16 `json:"mqtt_receive_maximum"`
+	// MQTTAdmitPerSec 是全局新连接准入（每秒），超过直接拒绝。
+	MQTTAdmitPerSec int `json:"mqtt_admit_per_sec"`
+
+	// 帧缓存：磁盘总量与常驻内存上限，都按最近取用淘汰。
+	FrameCacheMaxBytes  int64 `json:"frame_cache_max_bytes"`
+	FrameMemoryMaxBytes int64 `json:"frame_memory_max_bytes"`
+	// BackfillPerSec 是启动后补帧速率（用户/秒），避免重连风暴。
+	BackfillPerSec int `json:"backfill_users_per_sec"`
+
 	Firmware Firmware `json:"firmware"`
 }
 
@@ -68,6 +87,30 @@ func Load(path string) (*Config, error) {
 	if c.MetricsAddr == "" {
 		// 只监听回环：指标不经过 nginx，也不对公网开放。
 		c.MetricsAddr = "127.0.0.1:9090"
+	}
+	if len(c.TokenPepper) < 16 {
+		return nil, errors.New("config: token_pepper 必填且至少 16 字符（openssl rand -base64 32）")
+	}
+	if c.MQTTMaxWritesPending <= 0 {
+		c.MQTTMaxWritesPending = 64
+	}
+	if c.MQTTMaxInflight == 0 {
+		c.MQTTMaxInflight = 32
+	}
+	if c.MQTTReceiveMaximum == 0 {
+		c.MQTTReceiveMaximum = 32
+	}
+	if c.MQTTAdmitPerSec <= 0 {
+		c.MQTTAdmitPerSec = 50
+	}
+	if c.FrameCacheMaxBytes <= 0 {
+		c.FrameCacheMaxBytes = 256 << 20
+	}
+	if c.FrameMemoryMaxBytes <= 0 {
+		c.FrameMemoryMaxBytes = 64 << 20
+	}
+	if c.BackfillPerSec <= 0 {
+		c.BackfillPerSec = 2
 	}
 	return &c, nil
 }

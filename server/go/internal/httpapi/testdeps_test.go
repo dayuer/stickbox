@@ -65,7 +65,7 @@ func newTestAPIWithHealth(t *testing.T, h HealthChecker) (http.Handler, *testDep
 	reg := registry.New(registry.Options{IdleTimeout: time.Hour})
 	t.Cleanup(reg.Shutdown)
 	dep.reg = reg
-	dep.v = auth.NewVerifier(st)
+	dep.v = auth.NewVerifier(st, "test-pepper-0123456789abcdef")
 	dep.cfg = &config.Config{Root: dir}
 	api := New(dep.cfg, st, dep.v, reg, dep.pub)
 	api.SetHealth(h)

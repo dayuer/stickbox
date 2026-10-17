@@ -4,5 +4,16 @@
   "http_addr": "127.0.0.1:9443",
   "mqtt_addr": ":8883",
   "default_tz": "UTC",
-  "metrics_addr": "127.0.0.1:9090"
+  "metrics_addr": "127.0.0.1:9090",
+
+  "token_pepper": "请用 openssl rand -base64 32 生成，至少 16 字符；不进仓库",
+
+  "mqtt_max_writes_pending": 64,
+  "mqtt_max_inflight": 32,
+  "mqtt_receive_maximum": 32,
+  "mqtt_admit_per_sec": 50,
+
+  "frame_cache_max_bytes": 268435456,
+  "frame_memory_max_bytes": 67108864,
+  "backfill_users_per_sec": 2
 }

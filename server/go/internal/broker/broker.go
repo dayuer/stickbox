@@ -109,11 +109,41 @@ type Broker struct {
 	cmd     CommandTracker
 }
 
-func New(addr string, tlsCfg *tls.Config, v *auth.Verifier, r Router) (*Broker, error) {
+// Options 是 broker 的容量参数。零值用下面的默认值。
+type Options struct {
+	// MaximumClientWritesPending 是每连接待写队列长度，直接决定每连接内存。
+	MaximumClientWritesPending int32
+	// MaximumInflight / ReceiveMaximum 是 QoS>0 在途消息上限。
+	MaximumInflight uint16
+	ReceiveMaximum  uint16
+	// AdmitPerSec 是全局新连接准入（每秒），0 表示默认 50。
+	AdmitPerSec int
+}
+
+func New(addr string, tlsCfg *tls.Config, v *auth.Verifier, r Router, opt Options) (*Broker, error) {
+	if opt.MaximumClientWritesPending <= 0 {
+		opt.MaximumClientWritesPending = 64
+	}
+	if opt.MaximumInflight == 0 {
+		opt.MaximumInflight = 32
+	}
+	if opt.ReceiveMaximum == 0 {
+		opt.ReceiveMaximum = 32
+	}
+	if opt.AdmitPerSec <= 0 {
+		opt.AdmitPerSec = 50
+	}
+	// mochi 默认 8192/8192/1024，每连接实测约 1.4MB；设备只有
+	// 3 个订阅、QoS1 流量很低，压到 64/32/32 足够。
+	caps := mqtt.NewDefaultServerCapabilities()
+	caps.MaximumClientWritesPending = opt.MaximumClientWritesPending
+	caps.MaximumInflight = opt.MaximumInflight
+	caps.ReceiveMaximum = opt.ReceiveMaximum
 	srv := mqtt.New(&mqtt.Options{
 		// 服务端要能直接 Publish 推用量，这个开关是前提；
 		// 不开的话 Publish 返回「please set Options.InlineClient=true」。
 		InlineClient: true,
+		Capabilities: caps,
 		// broker 自己的日志走 slog，别另起一套格式
 		Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 			Level: slog.LevelWarn,
@@ -122,6 +152,7 @@ func New(addr string, tlsCfg *tls.Config, v *auth.Verifier, r Router) (*Broker, 
 	h := &Hook{
 		srv: srv, v: v, router: r, ids: newIDTable(),
 		pending: newPendingLimiter(6, time.Minute),
+		admit:   newAdmission(opt.AdmitPerSec),
 	}
 	if err := srv.AddHook(h, nil); err != nil {
 		return nil, err

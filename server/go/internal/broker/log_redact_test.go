@@ -29,7 +29,7 @@ func TestAuthFailureLogDoesNotLeakToken(t *testing.T) {
 	}
 	defer st.Close()
 
-	h := &Hook{v: auth.NewVerifier(st)}
+	h := &Hook{v: auth.NewVerifier(st, "test-pepper-0123456789abcdef")}
 	token := "a3f91c04bd77.kJ8xQ2mN4pL7vR1sT6wY9zA0bC3dE5fH"
 	pk := packets.Packet{Connect: packets.ConnectParams{
 		Username: []byte("f412fa87c9e0"),

@@ -143,7 +143,7 @@ tail -20 /var/log/stickbox-backup.log
 | `stickbox_render_failures_total` | 渲染失败累计 | `increase(...[10m]) > 0` |
 | `stickbox_frame_package_bytes` | 帧包大小直方图 | 接近 256KB（flash 槽上限） |
 | `stickbox_pair_total{result="ok"/"fail"}` | 配对成功/失败 | 失败比例突增（扫号/限流） |
-| `stickbox_rate_limited_total{limiter=...}` | 限流命中 | 突增说明被刷；看 nginx 来源 |
+| `stickbox_rate_limited_total{limiter=...}` | 限流命中；`mqtt_admit` 是新连接准入 | 突增说明被刷或重连风暴 |
 | `stickbox_pending_takeover_rejected_total` | pending 密钥试图顶掉在线设备被拒 | 突增可能是顶号攻击/旧设备重连 |
 | `stickbox_frame_pending_users` | 帧渲染排队或防抖中的用户数 | 持续堆积说明渲染慢/锁竞争 |
 

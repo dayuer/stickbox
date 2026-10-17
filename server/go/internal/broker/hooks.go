@@ -50,6 +50,8 @@ type Hook struct {
 	cmd CommandTracker
 	// pending 限制同一 dev 的 pending 连接频率。
 	pending *pendingLimiter
+	// admit 是全局新连接准入（每秒）。
+	admit *admission
 }
 
 func (h *Hook) ID() string { return "stickbox-auth" }
@@ -64,6 +66,11 @@ func (h *Hook) Provides(b byte) bool {
 }
 
 func (h *Hook) OnConnectAuthenticate(cl *mqtt.Client, pk packets.Packet) bool {
+	// 先做全局准入，再做（可能很贵的）令牌校验，避免重连风暴把认证队列打满。
+	if h.admit != nil && !h.admit.allow() {
+		slog.Warn("MQTT 连接被准入限流", "remote", cl.Net.Remote)
+		return false
+	}
 	user := string(pk.Connect.Username)
 	id, err := h.v.Verify(string(pk.Connect.Password))
 	if err != nil {

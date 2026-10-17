@@ -12,8 +12,8 @@ type SessionStore interface {
 
 // IssueAgentKey 为用户的一台电脑签发 agent 令牌。
 // 不设过期，靠 logout / 吊销下线；name 是电脑名。
-func IssueAgentKey(st SessionStore, userID, name string) (string, error) {
-	token, _, err := issueKey(st, store.Key{
+func IssueAgentKey(v *Verifier, st SessionStore, userID, name string) (string, error) {
+	token, _, err := issueKey(v, st, store.Key{
 		Role: string(RoleAgent), UserID: userID, Name: name,
 	})
 	return token, err
@@ -24,16 +24,16 @@ func IssueAgentKey(st SessionStore, userID, name string) (string, error) {
 // pending=true 时密钥还没完成配对：它属于 dev，但 user_id 为空，
 // 不能拿到任何用量，只能收配对通知。配对成功后由
 // store.ActivateDeviceKey 转正。
-func IssueDeviceKey(st SessionStore, userID, dev, name string, pending bool) (token, keyID string, err error) {
-	return issueKey(st, store.Key{
+func IssueDeviceKey(v *Verifier, st SessionStore, userID, dev, name string, pending bool) (token, keyID string, err error) {
+	return issueKey(v, st, store.Key{
 		Dev: dev, Role: string(RoleDevice), UserID: userID, Name: name,
 		Pending: pending,
 	})
 }
 
-func issueKey(st SessionStore, k store.Key) (token, keyID string, err error) {
+func issueKey(v *Verifier, st SessionStore, k store.Key) (token, keyID string, err error) {
 	keyID, secret, token := NewToken()
-	hash, err := HashSecret(secret)
+	hash, err := v.HashSecret(secret)
 	if err != nil {
 		return "", "", err
 	}

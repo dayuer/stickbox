@@ -61,7 +61,7 @@ func serve(cfg *config.Config) error {
 	}
 	defer st.Close()
 
-	v := auth.NewVerifier(st)
+	v := auth.NewVerifier(st, cfg.TokenPepper)
 
 	reloader, err := tlsx.New(cfg.CertPath(), cfg.KeyPath())
 	if err != nil {
@@ -73,7 +73,12 @@ func serve(cfg *config.Config) error {
 	reg := registry.New(registry.Options{IdleTimeout: 120 * time.Second})
 	defer reg.Shutdown()
 
-	br, err := broker.New(cfg.MQTTAddr, reloader.Config(), v, reg)
+	br, err := broker.New(cfg.MQTTAddr, reloader.Config(), v, reg, broker.Options{
+		MaximumClientWritesPending: cfg.MQTTMaxWritesPending,
+		MaximumInflight:            cfg.MQTTMaxInflight,
+		ReceiveMaximum:             cfg.MQTTReceiveMaximum,
+		AdmitPerSec:                cfg.MQTTAdmitPerSec,
+	})
 	if err != nil {
 		return err
 	}
@@ -93,8 +98,11 @@ func serve(cfg *config.Config) error {
 		return fmt.Errorf("初始化渲染器：%w", err)
 	}
 	fs, err := frames.New(cfg.Root, st, api.Usage(), br, frames.RenderBuilder{R: rr}, frames.Options{
-		DefaultTZ: cfg.DefaultTZ,
-		Now:       time.Now,
+		DefaultTZ:         cfg.DefaultTZ,
+		CacheMaxBytes:     cfg.FrameCacheMaxBytes,
+		MemoryMaxBytes:    cfg.FrameMemoryMaxBytes,
+		BackfillPerSec:    cfg.BackfillPerSec,
+		Now:               time.Now,
 	})
 	if err != nil {
 		return fmt.Errorf("初始化帧服务：%w", err)
