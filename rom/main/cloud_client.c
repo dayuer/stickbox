@@ -97,6 +97,7 @@ static int  s_rx_len;
 static char s_rx_buf[RX_MAX + 1];
 
 static void subscribe_paired_topics(void);
+static void schedule_cleanup_restart(void);
 
 bool cloud_paired(void) { return s_paired; }
 
@@ -466,10 +467,9 @@ static void handle_pair(const char *json, int len)
          * 也是留给 MQTT 把这条 ACK 冲刷出去的时间——顺序反了服务端就永远
          * 等不到回执，会一直重投一条设备其实已经执行过的解绑。 */
         if (cid[0]) { cid_remember_pair(cid); send_ack(cid, true, NULL); }
-        /* 解绑后旧主人的帧必须立刻作废，不能等重启后还被新主人看到。 */
-        framepack_invalidate();
-        vTaskDelay(pdMS_TO_TICKS(1500));
-        esp_restart();
+        /* 解绑后旧主人的帧必须立刻作废，不能等重启后还被新主人看到。
+         * 放到独立任务里做，先让 mqtt 任务回去把 ACK 冲刷出去。 */
+        schedule_cleanup_restart();
     }
 }
 
@@ -569,6 +569,23 @@ static void subscribe_paired_topics(void)
     s_sub_frame_id = esp_mqtt_client_subscribe(s_mqtt, s_topic_frame, 1);
     ESP_LOGI(TAG, "已请求订阅用量与帧通知（msg_id %d/%d）",
              s_sub_usage_id, s_sub_frame_id);
+}
+
+/* 清槽 + 延时 + 重启不能跑在 MQTT 事件里：esp-mqtt 的 handler 就在 mqtt
+ * 任务上执行，阻塞它会让刚 publish 的 ACK 永远发不出去。 */
+static void cleanup_restart_task(void *arg)
+{
+    (void)arg;
+    framepack_invalidate();
+    vTaskDelay(pdMS_TO_TICKS(1500));
+    esp_restart();
+}
+
+static void schedule_cleanup_restart(void)
+{
+    if (xTaskCreate(cleanup_restart_task, "cleanup", 3072, NULL, 3, NULL) != pdPASS) {
+        esp_restart();
+    }
 }
 
 static void reconnect_cb(void *arg)
@@ -691,9 +708,7 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
                     lcd_ui_cloud("密钥被拒，重新注册");
                     prov_erase_devkey();
                     s_devkey[0] = 0;
-                    framepack_invalidate();
-                    vTaskDelay(pdMS_TO_TICKS(1500));
-                    esp_restart();
+                    schedule_cleanup_restart();
                 }
             } else if (code == MQTT_CONNECTION_REFUSE_SERVER_UNAVAILABLE) {
                 /* 0x03：服务繁忙/连接准入限流。绝不能清密钥，退避即可。 */
