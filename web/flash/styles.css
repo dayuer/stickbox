@@ -14,8 +14,10 @@
   --danger: #ff5a5a;
   --dim: #7a7a7d;
 
-  --font-display: "Barlow Condensed", "Noto Sans SC", sans-serif;
-  --font-body: "Noto Sans SC", system-ui, -apple-system, sans-serif;
+  /* 烧录页不引第三方字体：断网也能完整使用。 */
+  --font-display: "Helvetica Neue", "Arial Narrow", Arial, system-ui, sans-serif;
+  --font-body: system-ui, -apple-system, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   --ease: cubic-bezier(0.2, 0, 0, 1);
 }
 
