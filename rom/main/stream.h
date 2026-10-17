@@ -64,6 +64,9 @@ void stream_use_framepack(const struct fp_index *ix, const uint8_t *base, size_t
 /* 退回预置页。没有帧包、或帧包失效时调用——画面停在配对页，不黑屏。 */
 void stream_use_presets(void);
 
+/* 同上，但不等在途帧发完。只给“马上重启”的清理路径用；不 munmap。 */
+void stream_use_presets_nowait(void);
+
 /* 发布一块帧包模式的时钟带，附带每行在缓冲里的偏移与长度。
  * 长度超过 BAND_CAP 时拒绝发布并返回 false，画面保持上一帧。 */
 bool stream_band_publish_rows(uint8_t *buf, size_t len,

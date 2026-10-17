@@ -143,8 +143,10 @@ static bool activate(int slot, uint32_t len, const char *ver)
     return true;
 }
 
-bool framepack_init(void)
+/* 找分区但不扫槽/不激活。解绑清理和开机无密钥清理都要先有 s_part。 */
+static bool ensure_part(void)
 {
+    if (s_part) return true;
     s_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 0x40, "frames");
     if (!s_part) {
         /* 旧分区表（T9 之前）没有这个分区。不是致命错误：退回预置页，
@@ -158,6 +160,12 @@ bool framepack_init(void)
         s_part = NULL;
         return false;
     }
+    return true;
+}
+
+bool framepack_init(void)
+{
+    if (!ensure_part()) return false;
 
     int best = -1;
     uint32_t best_seq = 0, best_len = 0;
@@ -197,9 +205,24 @@ bool framepack_active(const fp_index_t **ix,
 
 const char *framepack_version(void) { return s_active ? s_ver : ""; }
 
+static void erase_all_slots(void)
+{
+    /* 只擦每个槽的第一个扇区（含 magic+header），整槽擦除没必要还费寿命。 */
+    for (int i = 0; i < FP_SLOT_COUNT; i++) {
+        const size_t off = (size_t)i * FP_SLOT_SIZE;
+        esp_err_t err = esp_partition_erase_range(s_part, off, 4096);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "作废槽 %d 失败：%s", i, esp_err_to_name(err));
+        }
+    }
+    s_active = false;
+    s_seq = 0;
+    s_ver[0] = 0;
+}
+
 void framepack_invalidate(void)
 {
-    if (!s_part) {
+    if (!ensure_part()) {
         s_active = false;
         s_ver[0] = 0;
         return;
@@ -211,19 +234,24 @@ void framepack_invalidate(void)
         esp_partition_munmap(s_map);
         s_mapped = false;
     }
-    s_active = false;
-    s_seq = 0;
-    s_ver[0] = 0;
-
-    /* 只擦每个槽的第一个扇区（含 magic+header），整槽擦除没必要还费寿命。 */
-    for (int i = 0; i < FP_SLOT_COUNT; i++) {
-        const size_t off = (size_t)i * FP_SLOT_SIZE;
-        esp_err_t err = esp_partition_erase_range(s_part, off, 4096);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "作废槽 %d 失败：%s", i, esp_err_to_name(err));
-        }
-    }
+    erase_all_slots();
     ESP_LOGI(TAG, "frames 槽已作废，切回预置页");
+}
+
+void framepack_invalidate_reboot(void)
+{
+    /* 解绑清理路径：马上要 esp_restart，不能等推流 idle（电视卡住时
+     * fp_wait_idle 可能等很久，设备就一直不重启）。只把“下一帧用预置页”
+     * 切过去，不 munmap——在途发送可能还拿着映射，重启后自然释放。
+     * 若擦除与在途读取撞车导致 panic，设备照样重启；开机时没有密钥会
+     * 再次擦槽（见 framefetch_boot 的守卫），隐私不会漏。 */
+    if (!ensure_part()) {
+        ESP_LOGW(TAG, "cleanup: 没有 frames 分区");
+        return;
+    }
+    stream_use_presets_nowait();
+    ESP_LOGW(TAG, "cleanup: 作废 frames 槽");
+    erase_all_slots();
 }
 
 /* ------------------------------------------------------------ 流式写入 */

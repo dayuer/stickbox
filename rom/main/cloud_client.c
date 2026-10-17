@@ -443,9 +443,13 @@ static void handle_pair(const char *json, int len)
 
     if (!mine) {
         /* 是针对本设备的 topic，但 key_id 对不上（重新注册后残留的 retain）。
-         * 回 ok=0 让服务端知道这是「刻意不应用」，别一直重投。 */
-        ESP_LOGI(TAG, "忽略不属于当前密钥 %s 的配对通知", s_key_id);
+         * 回 ok=0 让服务端知道这是「刻意不应用」；同时清掉本地密钥并走
+         * cleanup 重启，重新注册出码，别拿着一条永远对不上的身份空转。 */
+        ESP_LOGW(TAG, "配对通知不属于当前密钥 %s，清密钥重新注册", s_key_id);
         send_ack(cid, false, "stale_key");
+        prov_erase_devkey();
+        s_devkey[0] = 0;
+        schedule_cleanup_restart();
         return;
     }
 
@@ -587,8 +591,17 @@ static void subscribe_paired_topics(void)
 static void cleanup_restart_task(void *arg)
 {
     (void)arg;
-    framepack_invalidate();
+    s_auth_failed = true;   /* 清理期间不要再发起重连 */
+    /* 先让 mqtt 任务把解绑 ACK 冲刷出去，再动 flash。 */
     vTaskDelay(pdMS_TO_TICKS(1500));
+
+    ESP_LOGW(TAG, "cleanup: 作废帧槽");
+    framepack_invalidate_reboot();
+
+    ESP_LOGW(TAG, "cleanup: 停止 MQTT client");
+    if (s_mqtt) esp_mqtt_client_stop(s_mqtt);
+
+    ESP_LOGW(TAG, "cleanup: 重启");
     esp_restart();
 }
 

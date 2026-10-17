@@ -146,6 +146,11 @@ void stream_use_framepack(const struct fp_index *ix, const uint8_t *base, size_t
 void stream_use_presets(void)
 {
     fp_wait_idle();
+    stream_use_presets_nowait();
+}
+
+void stream_use_presets_nowait(void)
+{
     xSemaphoreTake(s_mx, portMAX_DELAY);
     bool was = s_fp_mode;
     s_fp_mode = false;
