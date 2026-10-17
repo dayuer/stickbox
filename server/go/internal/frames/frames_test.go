@@ -235,6 +235,7 @@ func newFixture(t *testing.T) *fixture {
 		DefaultTZ:         "UTC",
 		Debounce:          5 * time.Millisecond,
 		RenderConcurrency: 1,
+		BackfillPerSec:    1000,
 		Now:               f.currentTime,
 	})
 	if err != nil {
@@ -693,6 +694,150 @@ func TestCorruptCacheIsIgnored(t *testing.T) {
 	if _, _, ok := svc.Current("u1"); ok {
 		t.Error("损坏的缓存不该被加载")
 	}
+}
+
+// 启动只加载缓存头，帧包等第一次取用时才从磁盘读。
+func TestLoadKeepsFrameDataOnDisk(t *testing.T) {
+	f := newFixture(t)
+	f.rebuild("u1")
+	f.svc.Close()
+
+	svc2, err := New(f.root, f.st, f.us, f.pub, f.b, Options{
+		DefaultTZ: "UTC", Debounce: 5 * time.Millisecond,
+		RenderConcurrency: 1, Now: f.currentTime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(svc2.Close)
+	svc2.mu.RLock()
+	c := svc2.cache["u1"]
+	svc2.mu.RUnlock()
+	if c == nil || c.data != nil {
+		t.Fatalf("启动时不该把帧包读进内存：%+v", c)
+	}
+	if _, _, ok := svc2.Current("u1"); !ok {
+		t.Fatal("首次取用应从磁盘读到帧包")
+	}
+	svc2.mu.RLock()
+	resident := svc2.cache["u1"].data != nil
+	svc2.mu.RUnlock()
+	if !resident {
+		t.Error("取用后帧包应进入常驻内存")
+	}
+}
+
+// 磁盘总量超限时按最近取用时间淘汰。
+func TestDiskLRUEvictsLeastRecentlyUsed(t *testing.T) {
+	f := newFixture(t)
+	f.svc.opt.CacheMaxBytes = 9000 // 大约两帧
+
+	t1 := f.currentTime()
+	f.setNow(t1)
+	f.rebuild("u1")
+	f.setNow(t1.Add(time.Minute))
+	f.rebuild("u2")
+	// u1 最近被取用过，u2 没有：淘汰应落在 u2。
+	f.setNow(t1.Add(90 * time.Second))
+	if _, _, ok := f.svc.Current("u1"); !ok {
+		t.Fatal("u1 没有帧")
+	}
+
+	f.setNow(t1.Add(2 * time.Minute))
+	f.rebuild("u3")
+
+	if _, _, ok := f.svc.Current("u2"); ok {
+		t.Error("磁盘超限后 u2 仍存在，LRU 没淘汰最久未取用的")
+	}
+	if _, err := os.Stat(filepath.Join(f.root, "frames", "u2")); !os.IsNotExist(err) {
+		t.Errorf("u2 的磁盘缓存没删：%v", err)
+	}
+	if _, _, ok := f.svc.Current("u1"); !ok {
+		t.Error("最近取用过的 u1 被误删")
+	}
+	if _, _, ok := f.svc.Current("u3"); !ok {
+		t.Error("刚提交的 u3 被误删")
+	}
+}
+
+// 磁盘淘汰后重新渲染，版本号必须继续递增；回退到 1 会让固件误判
+// “手里已经是这个版本”而跳过下载。
+func TestVersionMonotonicAfterEviction(t *testing.T) {
+	f := newFixture(t)
+	t1 := f.currentTime()
+	f.setNow(t1)
+	f.rebuild("u1")
+	before := f.version("u1")
+
+	// 把上限压到装不下一帧：重建 u2 会淘汰 u1。
+	f.svc.opt.CacheMaxBytes = 1
+	f.setNow(t1.Add(time.Minute))
+	f.rebuild("u2")
+	if _, _, ok := f.svc.Current("u1"); ok {
+		t.Fatal("u1 应已被淘汰")
+	}
+
+	f.setNow(t1.Add(2 * time.Minute))
+	f.rebuild("u1")
+	after := f.version("u1")
+	if after <= before {
+		t.Fatalf("淘汰后版本回退：%d → %d", before, after)
+	}
+}
+
+// 常驻内存也有上限：超过后只保留最近取用的用户。
+func TestMemoryCapEvictsFrames(t *testing.T) {
+	f := newFixture(t)
+	f.svc.opt.MemoryMaxBytes = 1 // 一帧都放不下，但仍允许保留一帧
+
+	f.rebuild("u1")
+	f.rebuild("u2")
+	f.svc.mu.RLock()
+	n := len(f.svc.memIndex)
+	f.svc.mu.RUnlock()
+	if n != 1 {
+		t.Fatalf("常驻内存用户数 = %d，期望 1", n)
+	}
+	if _, _, ok := f.svc.Current("u1"); !ok {
+		t.Fatal("u1 无法从磁盘按需读回")
+	}
+	f.svc.mu.RLock()
+	n = len(f.svc.memIndex)
+	f.svc.mu.RUnlock()
+	if n != 1 {
+		t.Errorf("取用 u1 后常驻用户数 = %d，期望 1", n)
+	}
+}
+
+// 启动巡检只把缺帧用户放进限速队列，不立刻渲染。
+func TestStartupBackfillIsQueuedNotRendered(t *testing.T) {
+	f := newFixture(t)
+	f.svc.checkStale(f.currentTime())
+	if got := f.b.count(); got != 0 {
+		t.Errorf("checkStale 立刻渲染了 %d 次，期望只入队", got)
+	}
+	f.svc.backfillMu.Lock()
+	queued := len(f.svc.backfillQ)
+	f.svc.backfillMu.Unlock()
+	if queued != 3 {
+		t.Errorf("补帧队列 = %d，期望 3", queued)
+	}
+}
+
+// 设备第一次 GET 还没帧时，应触发懒加载渲染。
+func TestLazyGetTriggersRender(t *testing.T) {
+	f := newFixture(t)
+	if _, _, err := f.svc.CurrentForKey("k1", "d1"); !errors.Is(err, ErrNoFrame) {
+		t.Fatalf("首次取帧 = %v，期望 ErrNoFrame", err)
+	}
+	f.waitVersion("u1", 1, 2*time.Second)
+}
+
+// 设备订阅 frame 但还没有帧时，也应触发懒加载。
+func TestResendTriggersLazyRender(t *testing.T) {
+	f := newFixture(t)
+	f.svc.Resend("d3")
+	f.waitVersion("u2", 1, 2*time.Second)
 }
 
 // PendingUsers 只算真正有排队/防抖/渲染任务的用户；worker 常驻，

@@ -8,6 +8,7 @@
 package frames
 
 import (
+	"container/list"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -15,13 +16,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/dayuer/stickbox/server/go/internal/frame"
+	"github.com/dayuer/stickbox/server/go/internal/metrics"
 	"github.com/dayuer/stickbox/server/go/internal/render"
 	"github.com/dayuer/stickbox/server/go/internal/source"
 	"github.com/dayuer/stickbox/server/go/internal/store"
@@ -33,9 +38,11 @@ const (
 	packMagic  = "SBF1"
 	packHeader = 16
 
-	// 落盘缓存：magic + version + built_at + received_at + packLen + pack。
-	cacheMagic  = "SBC2"
-	cacheHeader = 32
+	// 落盘缓存 v3：magic + version + built_at + received_at + used_at + packLen + pack。
+	// v2 没有 used_at，读取时用 built_at 兜底。
+	cacheMagic  = "SBC3"
+	cacheMagic2 = "SBC2"
+	cacheHeader = 40
 
 	// MaxPackBytes 是设备一个 256KB flash 槽能放下的帧包上限：
 	// 262144 - 32 字节槽头 = 262112。见 T13b rom/main/framepack.h 的 FP_MAX_PACK。
@@ -92,22 +99,41 @@ type Options struct {
 	RenderConcurrency int           // 全局同时渲染数
 	StaleAfter        time.Duration // 超过这么久没上报就重渲一次（更新「X 分前」）
 	StaleCheck        time.Duration // 检查跨天/过期的频率
-	Now               func() time.Time
+	// CacheMaxBytes / MemoryMaxBytes 是磁盘与常驻内存上限；按最近取用淘汰。
+	CacheMaxBytes  int64
+	MemoryMaxBytes int64
+	// BackfillPerSec 是启动补帧速率（用户/秒）。
+	BackfillPerSec int
+	Now            func() time.Time
 	// After 是防抖计时器；测试注入假时钟，默认 time.After。
 	After func(time.Duration) <-chan time.Time
 }
 
 type cached struct {
-	data     []byte // 已打包的下发格式
+	data     []byte // nil = 只在磁盘上，取用时再读
 	ver      uint64
 	at       int64 // 构建时刻（Unix 秒）
 	received int64 // 这次渲染用的用量到达时刻（Unix 秒）；0 = 还没有用量
+	used     int64 // 最近一次被设备取用的时刻（Unix 秒），LRU 依据
+	size     int64 // 帧包字节数（不含缓存头）
 }
 
 type worker struct {
 	ch     chan struct{}
 	cancel context.CancelFunc
 	active bool // 有未完成的标记（排队/防抖/渲染）
+}
+
+// memNode 记录 LRU 节点入账时的帧包大小，避免替换/命中时 memBytes 漂移。
+type memNode struct {
+	id   string
+	size int64
+}
+
+// evicted 是磁盘淘汰的用户，用于在锁外删目录并写版本墓碑。
+type evicted struct {
+	id  string
+	ver uint64
 }
 
 // Service 维护全部用户的当前帧。
@@ -132,6 +158,17 @@ type Service struct {
 
 	mu    sync.RWMutex
 	cache map[string]*cached
+
+	// 常驻内存 LRU：cache 里的 data 只有最近用过的用户才有。
+	memLRU    *list.List // 值 = userID；front 最近使用
+	memIndex  map[string]*list.Element
+	memBytes  int64
+	diskBytes int64
+
+	// 启动补帧队列：限速逐个 MarkDirty，避免重连时一次性渲染所有用户。
+	backfillMu  sync.Mutex
+	backfillQ   []string
+	backfillSet map[string]struct{}
 }
 
 func New(root string, st Store, us Usage, pub Publisher, b Builder, opt Options) (*Service, error) {
@@ -159,6 +196,15 @@ func New(root string, st Store, us Usage, pub Publisher, b Builder, opt Options)
 	if opt.StaleCheck <= 0 {
 		opt.StaleCheck = time.Minute
 	}
+	if opt.CacheMaxBytes <= 0 {
+		opt.CacheMaxBytes = 256 << 20
+	}
+	if opt.MemoryMaxBytes <= 0 {
+		opt.MemoryMaxBytes = 64 << 20
+	}
+	if opt.BackfillPerSec <= 0 {
+		opt.BackfillPerSec = 2
+	}
 	if opt.Now == nil {
 		opt.Now = time.Now
 	}
@@ -169,9 +215,12 @@ func New(root string, st Store, us Usage, pub Publisher, b Builder, opt Options)
 	s := &Service{
 		root: root, store: st, usage: us, pub: pub, builder: b, opt: opt,
 		ctx: ctx, cancel: cancel,
-		workers:   map[string]*worker{},
-		renderSem: make(chan struct{}, opt.RenderConcurrency),
-		cache:     map[string]*cached{},
+		workers:     map[string]*worker{},
+		renderSem:   make(chan struct{}, opt.RenderConcurrency),
+		cache:       map[string]*cached{},
+		memLRU:      list.New(),
+		memIndex:    map[string]*list.Element{},
+		backfillSet: map[string]struct{}{},
 	}
 	if err := os.MkdirAll(s.dir(), 0o700); err != nil {
 		cancel()
@@ -218,6 +267,8 @@ func safeUserID(id string) bool {
 	return true
 }
 
+// load 只读缓存头，不把帧包读进内存：进程重启后内存里只有元数据，
+// 哪个用户第一次被取帧，哪个用户的帧包才从磁盘读上来。
 func (s *Service) load() {
 	entries, err := os.ReadDir(s.dir())
 	if err != nil {
@@ -228,18 +279,20 @@ func (s *Service) load() {
 		if !e.IsDir() || !safeUserID(e.Name()) {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(s.dir(), e.Name(), "frame.cache"))
-		if err != nil {
-			slog.Warn("读帧缓存失败", "user", e.Name(), "err", err)
-			continue
-		}
-		c, err := decodeCache(raw)
+		path := filepath.Join(s.dir(), e.Name(), "frame.cache")
+		c, err := readCacheHeader(path)
 		if err != nil {
 			slog.Warn("帧缓存损坏，忽略", "user", e.Name(), "err", err)
 			continue
 		}
 		s.cache[e.Name()] = c
+		s.diskBytes += c.size + cacheHeader
 	}
+	// 启动时磁盘已超限：按 used 淘汰。
+	s.mu.Lock()
+	victims := s.evictDiskLocked("", s.opt.CacheMaxBytes)
+	s.mu.Unlock()
+	s.finishEvictions(victims)
 }
 
 // MarkDirty 标记用户数据变了，后台 worker 会在防抖窗口后重渲染。
@@ -411,6 +464,10 @@ func (s *Service) commit(userID string, data []byte, now time.Time, received tim
 	ver := uint64(1)
 	if cur != nil {
 		ver = cur.ver + 1
+	} else if gone, ok := s.readGoneVer(userID); ok {
+		// 帧被磁盘 LRU 淘汰过：从墓碑接着递增，绝不回到 1。
+		// 固件拿版本号做等值比较，回退会让它误以为手里已是最新帧。
+		ver = gone + 1
 	}
 	rec := int64(0)
 	if hasUsage {
@@ -429,14 +486,127 @@ func (s *Service) commit(userID string, data []byte, now time.Time, received tim
 		os.Remove(tmp)
 		return err
 	}
+	c.used = now.Unix()
+	c.size = int64(len(data))
 	s.cache[userID] = c
+	if cur != nil {
+		s.diskBytes += c.size - cur.size
+	} else {
+		s.diskBytes += c.size + cacheHeader
+	}
+	s.touchMemLocked(userID, c)
+	victims := s.evictDiskLocked(userID, s.opt.CacheMaxBytes)
 	s.mu.Unlock()
 
+	// 这次提交成功后墓碑就过时了（版本已经重新建立在它之上）。
+	os.Remove(s.goneFile(userID))
+	s.finishEvictions(victims)
 	if err := syncDir(s.userDir(userID)); err != nil {
 		slog.Warn("同步帧缓存目录失败", "user", userID, "err", err)
 	}
 	s.notify(userID, ver)
 	return nil
+}
+
+// touchMemLocked 把用户帧包放进常驻内存 LRU，并淘汰最久没被取用的。
+// 要求持有 s.mu。
+func (s *Service) touchMemLocked(userID string, c *cached) {
+	if c.data == nil {
+		return
+	}
+	if e, ok := s.memIndex[userID]; ok {
+		n := e.Value.(*memNode)
+		if n.size != c.size {
+			s.memBytes += c.size - n.size
+			n.size = c.size
+		}
+		s.memLRU.MoveToFront(e)
+		return
+	}
+	n := &memNode{id: userID, size: c.size}
+	s.memIndex[userID] = s.memLRU.PushFront(n)
+	s.memBytes += c.size
+	for s.memBytes > s.opt.MemoryMaxBytes && s.memLRU.Len() > 1 {
+		back := s.memLRU.Back()
+		node := back.Value.(*memNode)
+		s.memLRU.Remove(back)
+		delete(s.memIndex, node.id)
+		s.memBytes -= node.size
+		if old, ok := s.cache[node.id]; ok {
+			old.data = nil
+		}
+	}
+}
+
+// evictDiskLocked 按 used 从旧到新删除，直到磁盘总量回到上限内。
+// 返回需要删除目录的用户及其版本（版本写墓碑，保证不倒退）；
+// 要求持有 s.mu。
+func (s *Service) evictDiskLocked(keep string, max int64) []evicted {
+	var victims []evicted
+	for s.diskBytes > max {
+		var oldestID string
+		var oldest int64
+		for id, c := range s.cache {
+			if id == keep {
+				continue
+			}
+			if oldestID == "" || c.used < oldest {
+				oldestID, oldest = id, c.used
+			}
+		}
+		if oldestID == "" {
+			break
+		}
+		old := s.cache[oldestID]
+		delete(s.cache, oldestID)
+		s.diskBytes -= old.size + cacheHeader
+		if e, ok := s.memIndex[oldestID]; ok {
+			node := e.Value.(*memNode)
+			s.memLRU.Remove(e)
+			delete(s.memIndex, oldestID)
+			s.memBytes -= node.size
+		}
+		victims = append(victims, evicted{id: oldestID, ver: old.ver})
+	}
+	return victims
+}
+
+// finishEvictions 在锁外删目录并写版本墓碑。
+func (s *Service) finishEvictions(victims []evicted) {
+	if len(victims) == 0 {
+		return
+	}
+	metrics.IncFrameCacheEviction(len(victims))
+	for _, v := range victims {
+		if err := os.MkdirAll(s.goneDir(), 0o700); err != nil {
+			slog.Warn("创建版本墓碑目录失败", "err", err)
+		} else if err := os.WriteFile(s.goneFile(v.id),
+			[]byte(strconv.FormatUint(v.ver, 10)), 0o600); err != nil {
+			slog.Warn("写版本墓碑失败", "user", v.id, "err", err)
+		}
+		if err := os.RemoveAll(s.userDir(v.id)); err != nil {
+			slog.Warn("淘汰帧缓存失败", "user", v.id, "err", err)
+		}
+	}
+}
+
+func (s *Service) goneDir() string { return filepath.Join(s.dir(), ".gone") }
+
+func (s *Service) goneFile(id string) string {
+	return filepath.Join(s.goneDir(), id)
+}
+
+// readGoneVer 读被杀用户的版本墓碑；没有墓碑表示从未淘汰过。
+func (s *Service) readGoneVer(id string) (uint64, bool) {
+	raw, err := os.ReadFile(s.goneFile(id))
+	if err != nil {
+		return 0, false
+	}
+	v, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 64)
+	if err != nil || v == 0 {
+		return 0, false
+	}
+	return v, true
 }
 
 func (s *Service) writeTemp(userID string, c *cached) (string, error) {
@@ -513,14 +683,75 @@ func (s *Service) cachedVersion(userID string) (uint64, bool) {
 }
 
 // Current 返回用户的当前帧包与版本。返回的字节是共享缓存，调用方不要改。
+//
+// 帧包不常驻内存：不在 LRU 里时从磁盘读一次，同时更新 used 供淘汰。
+//
+// 读文件时不持锁。期间 commit 可能把文件换成 v2，而 v2 的 data 又立刻被
+// 内存 LRU 淘汰——如果不比对文件里的版本，就会把 v1 的字节挂到 v2 名下。
+// 所以 readPackFile 连版本一起返回，和内存里的 c.ver 不一致就丢弃重读。
 func (s *Service) Current(userID string) (data []byte, ver uint64, ok bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	c, ok := s.cache[userID]
-	if !ok {
-		return nil, 0, false
+	for attempt := 0; attempt < 3; attempt++ {
+		s.mu.Lock()
+		c, ok := s.cache[userID]
+		if !ok {
+			s.mu.Unlock()
+			return nil, 0, false
+		}
+		if c.data != nil {
+			if e, ok := s.memIndex[userID]; ok {
+				s.memLRU.MoveToFront(e)
+			}
+			c.used = s.opt.Now().Unix()
+			data, ver := c.data, c.ver
+			s.mu.Unlock()
+			return data, ver, true
+		}
+		s.mu.Unlock()
+
+		got, fileVer, err := readPackFile(s.cacheFile(userID))
+		if err != nil {
+			slog.Warn("读帧缓存失败", "user", userID, "err", err)
+			return nil, 0, false
+		}
+
+		s.mu.Lock()
+		c, ok = s.cache[userID]
+		if !ok {
+			s.mu.Unlock()
+			return nil, 0, false
+		}
+		if c.ver != fileVer {
+			// 文件已经被更新的提交换掉了；重读一次。
+			s.mu.Unlock()
+			continue
+		}
+		if c.data == nil {
+			c.data = got
+			c.size = int64(len(got))
+			s.touchMemLocked(userID, c)
+		}
+		if e, ok := s.memIndex[userID]; ok {
+			s.memLRU.MoveToFront(e)
+		}
+		c.used = s.opt.Now().Unix()
+		data, ver := c.data, c.ver
+		s.mu.Unlock()
+		return data, ver, true
 	}
-	return c.data, c.ver, true
+	return nil, 0, false
+}
+
+// readPackFile 读取并校验磁盘缓存，返回帧包字节与文件里的版本。
+func readPackFile(path string) ([]byte, uint64, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	c, err := decodeCache(raw)
+	if err != nil {
+		return nil, 0, err
+	}
+	return c.data, c.ver, nil
 }
 
 // CurrentForKey 按令牌自己的 KeyID 判权：未配对、已吊销、角色不对、
@@ -536,6 +767,8 @@ func (s *Service) CurrentForKey(keyID, dev string) ([]byte, uint64, error) {
 	}
 	data, ver, ok := s.Current(k.UserID)
 	if !ok {
+		// 懒加载：设备第一次取帧时才为这个用户渲染，不在启动时全量补帧。
+		s.MarkDirty(k.UserID)
 		return nil, 0, ErrNoFrame
 	}
 	return data, ver, nil
@@ -549,6 +782,8 @@ func (s *Service) Resend(dev string) {
 	}
 	ver, ok := s.cachedVersion(owner)
 	if !ok {
+		// 设备订阅了 frame 但还没有帧：懒加载，不等启动补帧队列。
+		s.MarkDirty(owner)
 		return
 	}
 	if err := s.pub.PublishFrame(dev, versionPayload(ver)); err != nil {
@@ -572,8 +807,21 @@ func (s *Service) drop(userID string) {
 	defer s.commitMu.Unlock()
 
 	s.mu.Lock()
-	delete(s.cache, userID)
+	c, had := s.cache[userID]
+	if had {
+		s.diskBytes -= c.size + cacheHeader
+		delete(s.cache, userID)
+	}
+	if e, ok := s.memIndex[userID]; ok {
+		node := e.Value.(*memNode)
+		s.memLRU.Remove(e)
+		delete(s.memIndex, userID)
+		s.memBytes -= node.size
+	}
 	s.mu.Unlock()
+
+	// 解绑/删除用户后墓碑也没有意义了。
+	os.Remove(s.goneFile(userID))
 
 	s.workersMu.Lock()
 	if w, ok := s.workers[userID]; ok {
@@ -589,6 +837,7 @@ func (s *Service) drop(userID string) {
 
 // Run 每分钟检查一次跨天与「超过 15 分钟没上报」，按用户时区判断。
 func (s *Service) Run(ctx context.Context) {
+	go s.backfillLoop(ctx)
 	s.checkStale(s.opt.Now())
 	t := time.NewTicker(s.opt.StaleCheck)
 	defer t.Stop()
@@ -647,13 +896,14 @@ func (s *Service) checkStale(now time.Time) {
 	}
 
 	// 新版本部署/进程重启时，已配对的老用户没有帧缓存，上面的循环看不到。
-	// 枚举所有用户：名下有设备但还没有缓存的直接标脏；没有用量的用户
-	// 也出一张「等待上报」帧（设计稿有该状态）。
+	// 不在启动时一次性渲染：设备第一次 GET/订阅会懒加载，其余用户进入
+	// 限速补帧队列（默认 2 用户/秒），避免重连风暴叠加渲染风暴。
 	users, err := s.store.ListUsers()
 	if err != nil {
 		slog.Warn("枚举用户失败，跳过补帧", "err", err)
 		return
 	}
+	var missing []string
 	for _, u := range users {
 		if u.Disabled {
 			continue
@@ -668,7 +918,58 @@ func (s *Service) checkStale(now time.Time) {
 		if err != nil || len(devs) == 0 {
 			continue
 		}
-		s.MarkDirty(u.ID)
+		missing = append(missing, u.ID)
+	}
+	s.enqueueBackfill(missing)
+}
+
+// enqueueBackfill 把缺帧用户放进限速队列，去重。
+func (s *Service) enqueueBackfill(ids []string) {
+	s.backfillMu.Lock()
+	defer s.backfillMu.Unlock()
+	for _, id := range ids {
+		if _, ok := s.backfillSet[id]; ok {
+			continue
+		}
+		s.backfillSet[id] = struct{}{}
+		s.backfillQ = append(s.backfillQ, id)
+	}
+}
+
+// backfillLoop 按 BackfillPerSec 逐个标脏；有帧了就跳过。
+func (s *Service) backfillLoop(ctx context.Context) {
+	interval := time.Second / time.Duration(s.opt.BackfillPerSec)
+	if interval <= 0 {
+		interval = time.Millisecond
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.ctx.Done():
+			return
+		case <-t.C:
+		}
+		s.backfillMu.Lock()
+		var id string
+		for len(s.backfillQ) > 0 && id == "" {
+			id = s.backfillQ[0]
+			s.backfillQ = s.backfillQ[1:]
+			delete(s.backfillSet, id)
+		}
+		s.backfillMu.Unlock()
+		if id == "" {
+			continue
+		}
+		s.mu.RLock()
+		_, cached := s.cache[id]
+		s.mu.RUnlock()
+		if cached {
+			continue
+		}
+		s.MarkDirty(id)
 	}
 }
 
@@ -769,28 +1070,109 @@ func encodeCache(c *cached) []byte {
 	binary.BigEndian.PutUint64(buf[4:12], c.ver)
 	binary.BigEndian.PutUint64(buf[12:20], uint64(c.at))
 	binary.BigEndian.PutUint64(buf[20:28], uint64(c.received))
-	binary.BigEndian.PutUint32(buf[28:32], uint32(len(c.data)))
+	used := c.used
+	if used == 0 {
+		used = c.at
+	}
+	binary.BigEndian.PutUint64(buf[28:36], uint64(used))
+	binary.BigEndian.PutUint32(buf[36:40], uint32(len(c.data)))
 	copy(buf[cacheHeader:], c.data)
 	return buf
 }
 
 func decodeCache(raw []byte) (*cached, error) {
-	if len(raw) < cacheHeader || string(raw[:4]) != cacheMagic {
+	c, err := decodeHeader(raw)
+	if err != nil {
+		return nil, err
+	}
+	hdr := cacheHeader
+	if string(raw[:4]) == cacheMagic2 {
+		hdr = 32
+	}
+	if int(c.size) != len(raw)-hdr {
+		return nil, errors.New("缓存长度非法")
+	}
+	data := append([]byte(nil), raw[hdr:]...)
+	if _, err := Unpack(data); err != nil {
+		return nil, err
+	}
+	c.data = data
+	return c, nil
+}
+
+// decodeHeader 只解析缓存头，不复制/校验帧包本身。
+func decodeHeader(raw []byte) (*cached, error) {
+	if len(raw) < 32 {
+		return nil, errors.New("缓存头太短")
+	}
+	magic := string(raw[:4])
+	hdr := cacheHeader
+	switch magic {
+	case cacheMagic:
+	case cacheMagic2:
+		hdr = 32
+	default:
 		return nil, errors.New("缓存 magic 不对")
+	}
+	if len(raw) < hdr {
+		return nil, errors.New("缓存头太短")
 	}
 	ver := binary.BigEndian.Uint64(raw[4:12])
 	at := int64(binary.BigEndian.Uint64(raw[12:20]))
 	received := int64(binary.BigEndian.Uint64(raw[20:28]))
-	n := binary.BigEndian.Uint32(raw[28:32])
-	if ver == 0 || at <= 0 || n == 0 || int(n) > MaxPackBytes ||
-		int(n) != len(raw)-cacheHeader {
+	used := at
+	var n uint32
+	if magic == cacheMagic {
+		used = int64(binary.BigEndian.Uint64(raw[28:36]))
+		n = binary.BigEndian.Uint32(raw[36:40])
+	} else {
+		n = binary.BigEndian.Uint32(raw[28:32])
+	}
+	if ver == 0 || at <= 0 || n == 0 || int(n) > MaxPackBytes {
 		return nil, errors.New("缓存长度/版本非法")
 	}
-	data := append([]byte(nil), raw[cacheHeader:]...)
-	if _, err := Unpack(data); err != nil {
+	if used <= 0 {
+		used = at
+	}
+	return &cached{ver: ver, at: at, received: received, used: used, size: int64(n)}, nil
+}
+
+// readCacheHeader 只读文件头，启动加载用；不把帧包读进内存。
+func readCacheHeader(path string) (*cached, error) {
+	f, err := os.Open(path)
+	if err != nil {
 		return nil, err
 	}
-	return &cached{data: data, ver: ver, at: at, received: received}, nil
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	head := make([]byte, 4)
+	if _, err := io.ReadFull(f, head); err != nil {
+		return nil, err
+	}
+	rest := cacheHeader - 4
+	if string(head) == cacheMagic2 {
+		rest = 32 - 4
+	}
+	buf := make([]byte, 4+rest)
+	copy(buf, head)
+	if _, err := io.ReadFull(f, buf[4:]); err != nil {
+		return nil, err
+	}
+	c, err := decodeHeader(buf)
+	if err != nil {
+		return nil, err
+	}
+	hdr := int64(cacheHeader)
+	if string(head) == cacheMagic2 {
+		hdr = 32
+	}
+	if int64(c.size) != info.Size()-hdr {
+		return nil, errors.New("缓存文件长度与头不一致")
+	}
+	return c, nil
 }
 
 func syncDir(dir string) error {

@@ -117,7 +117,7 @@ func (a *API) handleAgentPair(w http.ResponseWriter, r *http.Request) {
 		if len(name) > 64 {
 			name = name[:64]
 		}
-		newToken, err = auth.IssueAgentKey(a.store, userID, name)
+		newToken, err = auth.IssueAgentKey(a.v, a.store, userID, name)
 		if err != nil {
 			fail(w, 500, "server error", "")
 			return

@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
+	"log/slog"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,13 +45,15 @@ func ValidDev(s string) bool { return devRe.MatchString(s) }
 // KeyStore 是 auth 对 store 的窄依赖，测试里用假实现替换。
 type KeyStore interface {
 	KeyByID(keyID string) (store.Key, bool, error)
+	// UpdateKeyHash 用于把旧 argon2id 记录就地迁移成 HMAC。
+	// oldHash 是本次校验时读到的值，作为 CAS 条件。
+	UpdateKeyHash(keyID, oldHash, newHash string) error
 }
 
 const cacheTTL = time.Hour
 
-// argon2 每次校验占 64MB 内存。一万台设备同时重连（服务重启后就是这个场景）
-// 时并发跑会瞬间吃掉几十 GB，所以同时进行的校验数限制为 8，超出的排队等待。
-// 这条比缓存更要命——缓存冷的时候正是重连风暴。
+// 旧 argon2 记录每次校验占 64MB。迁移后新记录走 HMAC，不再需要排队；
+// 这里保留信号量只为迁移期兜底（缓存冷 + 大量旧记录同时重连）。
 const argonConcurrency = 8
 
 type cacheEntry struct {
@@ -59,10 +63,11 @@ type cacheEntry struct {
 }
 
 type Verifier struct {
-	keys KeyStore
-	mu   sync.RWMutex
-	c    map[string]cacheEntry
-	// epoch 在每次 Invalidate/InvalidateAll 时加一。Verify 在跑完 argon2
+	keys   KeyStore
+	pepper string
+	mu     sync.RWMutex
+	c      map[string]cacheEntry
+	// epoch 在每次 Invalidate/InvalidateAll 时加一。Verify 在跑完校验
 	// 准备写缓存前检查它：如果期间有失效操作，说明刚查到的身份可能已经
 	// 过时（例如设备连接与配对同时发生），必须重新查库而不是写回缓存。
 	epoch uint64
@@ -70,13 +75,19 @@ type Verifier struct {
 	now   func() time.Time
 }
 
-func NewVerifier(keys KeyStore) *Verifier {
+func NewVerifier(keys KeyStore, pepper string) *Verifier {
 	return &Verifier{
-		keys: keys,
-		c:    map[string]cacheEntry{},
-		sem:  make(chan struct{}, argonConcurrency),
-		now:  time.Now,
+		keys:   keys,
+		pepper: pepper,
+		c:      map[string]cacheEntry{},
+		sem:    make(chan struct{}, argonConcurrency),
+		now:    time.Now,
 	}
+}
+
+// HashSecret 用本进程的 pepper 生成存储哈希（签发路径用）。
+func (v *Verifier) HashSecret(keyID, secret string) (string, error) {
+	return HashSecret(v.pepper, keyID, secret)
 }
 
 // Verify 校验 "{key_id}.{secret}" 形式的令牌。
@@ -112,11 +123,27 @@ func (v *Verifier) Verify(token string) (Identity, error) {
 			return Identity{}, ErrDenied
 		}
 
-		v.sem <- struct{}{} // 限制并发 argon2，防重连风暴打爆内存
-		okPass := VerifySecret(secret, k.Hash)
-		<-v.sem
+		// 新记录是 HMAC，几乎零成本；只有旧 argon2id 记录才需要限并发。
+		// 先做一次格式判断，避免付 64MB 的钱去跑一个 HMAC 比较。
+		okPass, legacy := false, false
+		if strings.HasPrefix(k.Hash, "$"+hmacScheme+"$") {
+			okPass, _ = VerifySecret(v.pepper, keyID, secret, k.Hash)
+		} else {
+			v.sem <- struct{}{}
+			okPass, legacy = VerifySecret(v.pepper, keyID, secret, k.Hash)
+			<-v.sem
+		}
 		if !okPass {
 			return Identity{}, ErrDenied
+		}
+		if legacy {
+			// 校验成功即迁移；失败不影响本次登录（下次再试）。
+			// 带上旧哈希做 CAS：并发校验/轮换时不会把别人刚写的新哈希盖回去。
+			if h, err := v.HashSecret(keyID, secret); err == nil {
+				if err := v.keys.UpdateKeyHash(keyID, k.Hash, h); err != nil {
+					slog.Warn("令牌哈希迁移失败", "key_id", keyID, "err", err)
+				}
+			}
 		}
 
 		id := Identity{

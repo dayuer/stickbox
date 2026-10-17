@@ -35,6 +35,9 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/tlsx"
 )
 
+// testPepper 只用于测试进程内的令牌哈希。
+const testPepper = "integration-test-pepper-0123456789"
+
 type env struct {
 	t        *testing.T
 	httpBase string
@@ -67,7 +70,7 @@ func startServerAt(t *testing.T, dir string) (*env, func()) {
 		t.Fatal(err)
 	}
 
-	v := auth.NewVerifier(st)
+	v := auth.NewVerifier(st, testPepper)
 	reloader, err := tlsx.New(cfg.CertPath(), cfg.KeyPath())
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +79,7 @@ func startServerAt(t *testing.T, dir string) (*env, func()) {
 	reg := registry.New(registry.Options{IdleTimeout: time.Hour})
 
 	mqttAddr := freeAddr(t)
-	br, err := broker.New(mqttAddr, reloader.Config(), v, reg)
+	br, err := broker.New(mqttAddr, reloader.Config(), v, reg, broker.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +98,7 @@ func startServerAt(t *testing.T, dir string) (*env, func()) {
 		DefaultTZ:         "UTC",
 		Debounce:          100 * time.Millisecond, // 测试里缩短防抖
 		RenderConcurrency: 1,
+		BackfillPerSec:    100,
 		Now:               time.Now,
 	})
 	if err != nil {

@@ -14,6 +14,8 @@ type fakeKeys struct {
 	reads int
 }
 
+const testPepper = "test-pepper-0123456789abcdef"
+
 func (f *fakeKeys) KeyByID(id string) (store.Key, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -22,17 +24,28 @@ func (f *fakeKeys) KeyByID(id string) (store.Key, bool, error) {
 	return k, ok, nil
 }
 
+func (f *fakeKeys) UpdateKeyHash(id, oldHash, newHash string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	k := f.keys[id]
+	if k.Hash == oldHash {
+		k.Hash = newHash
+		f.keys[id] = k
+	}
+	return nil
+}
+
 func newFixture(t *testing.T) (*Verifier, *fakeKeys, string) {
 	t.Helper()
 	keyID, secret, token := NewToken()
-	h, err := HashSecret(secret)
+	h, err := HashSecret(testPepper, keyID, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f := &fakeKeys{keys: map[string]store.Key{
 		keyID: {KeyID: keyID, Dev: "dev1", Role: string(RoleDevice), Hash: h},
 	}}
-	return NewVerifier(f), f, token
+	return NewVerifier(f, testPepper), f, token
 }
 
 func TestVerifyReturnsIdentity(t *testing.T) {
@@ -155,6 +168,8 @@ type blockingKeys struct {
 	release chan struct{}
 }
 
+func (f *blockingKeys) UpdateKeyHash(string, string, string) error { return nil }
+
 func (f *blockingKeys) KeyByID(string) (store.Key, bool, error) {
 	f.mu.Lock()
 	k := f.key
@@ -173,7 +188,7 @@ func (f *blockingKeys) KeyByID(string) (store.Key, bool, error) {
 // 写回缓存，之后一小时的重连全部被当成待配对。修复后必须重新查库。
 func TestVerifyDoesNotCacheIdentityInvalidatedMidFlight(t *testing.T) {
 	keyID, secret, token := NewToken()
-	h, err := HashSecret(secret)
+	h, err := HashSecret(testPepper, keyID, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +198,7 @@ func TestVerifyDoesNotCacheIdentityInvalidatedMidFlight(t *testing.T) {
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	v := NewVerifier(f)
+	v := NewVerifier(f, testPepper)
 
 	type result struct {
 		id  Identity
@@ -218,6 +233,44 @@ func TestVerifyDoesNotCacheIdentityInvalidatedMidFlight(t *testing.T) {
 	}
 	if id, err := v.Verify(token); err != nil || id.Pending {
 		t.Fatalf("后续校验 = %+v, %v；缓存里残留了 pending", id, err)
+	}
+}
+
+// 旧 argon2 记录校验成功后应就地迁移成 HMAC，且迁移后仍能登录。
+func TestVerifyMigratesLegacyArgon2(t *testing.T) {
+	keyID, secret, token := NewToken()
+	legacy, err := hashArgon2(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeKeys{keys: map[string]store.Key{
+		keyID: {KeyID: keyID, Dev: "dev1", Role: string(RoleDevice), Hash: legacy},
+	}}
+	v := NewVerifier(f, testPepper)
+	if _, err := v.Verify(token); err != nil {
+		t.Fatalf("旧记录校验失败：%v", err)
+	}
+	if got := f.keys[keyID].Hash; got == legacy || got[:len("$hmac-sha256$")] != "$hmac-sha256$" {
+		t.Fatalf("旧记录没有迁移成 HMAC：%q", got)
+	}
+	v.Invalidate(keyID)
+	if _, err := v.Verify(token); err != nil {
+		t.Fatalf("迁移后的 HMAC 校验失败：%v", err)
+	}
+}
+
+func TestVerifyRejectsWrongPepper(t *testing.T) {
+	keyID, secret, token := NewToken()
+	h, err := HashSecret(testPepper, keyID, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeKeys{keys: map[string]store.Key{
+		keyID: {KeyID: keyID, Role: string(RoleDevice), Hash: h},
+	}}
+	v := NewVerifier(f, "another-pepper-0123456789")
+	if _, err := v.Verify(token); err == nil {
+		t.Fatal("换 pepper 后旧哈希不应通过")
 	}
 }
 
