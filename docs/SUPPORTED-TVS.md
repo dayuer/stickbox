@@ -11,10 +11,18 @@ StickBox 通过 DLNA/UPnP 把 1080p MJPEG/AVI 直播流推给电视。不同品�
 
 | 电视 | 地区/年份 | DLNA DMR | SetURI / Play | 起播（burst 8 / 2fps） | 3 分钟长跑 | 电视请求特征 | 已知问题 | 测试 |
 |---|---|---|---|---|---|---|---|---|
-| 三星 UA60DU7000（Room C，192.168.3.18） | 2024 / 中国 | 是，AVTransport `:9197` | 200 / 200 | 2.1–2.5 s | 通过：6 分钟无断流，只发 1 次 GET | HEAD 带 `getcontentFeatures.dlna.org`、`getCaptionInfo.sec`；GET 带 `transferMode.dlna.org: Streaming`、`getMediaInfo.sec`，无 Range、不要求 Content-Length | ① Play 后先 `TRANSITIONING` 1–2.5 s，正常；② 曾被数字实体（`&#34;`）打成 402，T17 起只转义 `& < >`；③ 首推偶发约 4 s 断流，burst 8 缓解 | 2026-10-17，USB-TV / T17 |
+| 三星 UA60DU7000KXXD（Room C，192.168.3.18） | 2024 / 中国 | 是，AVTransport `:9197` | 200 / 200 | 1.1 s（TRANSITIONING 1.0 s） | 通过：180 s 实测 1 次 GET、0 断流（T17 另有 6 分钟无断流） | HEAD 后 GET；无 User-Agent、无 Range。HEAD 带 `getcontentFeatures.dlna.org`、`getCaptionInfo.sec`；GET 带 `transferMode.dlna.org: Streaming`、`getMediaInfo.sec`，不要求 Content-Length | ① Play 后先 `TRANSITIONING` 1–2.5 s，正常；② 曾被数字实体（`&#34;`）打成 402，T17 起只转义 `& < >`；③ 首推偶发约 4 s 断流，burst 8 缓解；④ GetProtocolInfo 属于 ConnectionManager，tvcheck 首次误发 AVTransport 得到 500，已修复（待复测 MIME） | 2026-10-17，USB-TV（T14a 实测）/ T17 |
 
 > 表中“起播”是 `Play` 返回到 `GetTransportInfo=PLAYING` 的时间；`GET` 是电视开始拉流的时刻。
 > 实际出画时刻会比 PLAYING 再晚一点，目前没有逐机型记录。
+
+Room C 的 T14a 实测（2026-10-17，`stickbox-tvcheck --minutes 3`）：
+
+- SetAVTransportURI / Play：200 / 200
+- 进入 PLAYING：1.1 s；其中 TRANSITIONING 1.0 s
+- 180 s 内：1 次 GET、0 次断开；电视先 HEAD 再 GET，无 User-Agent、无 Range
+- 已知问题：GetProtocolInfo 被工具误发到 AVTransport（HTTP 500），已改为从设备描述里
+  找 ConnectionManager 的 controlURL；Room C 的 MIME 声明待复测后补上
 
 ### 怎么读这张表
 
