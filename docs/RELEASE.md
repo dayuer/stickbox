@@ -223,12 +223,24 @@ T15a 的 `manifest.json`（偏移 0 / 0x8000 / 0x10000 / 0x20000）。
 同时验证：六个 agent 目标（darwin/linux/windows × amd64/arm64）都能
 `CGO_ENABLED=0 go build`。`stickboxd` 镜像构建见工作流。
 
+### 升级 IDF 镜像 digest
+
+```bash
+docker pull espressif/idf:v5.5
+docker inspect --format '{{index .RepoDigests 0}}' espressif/idf:v5.5
+```
+
+把输出的 `@sha256:...` 替换到 `.github/workflows/release.yml` 的
+`docker run` 那一行；先用 `rom/tools/release_build.sh` 在本地跑通一次完整
+构建（含验签和版本断言），再提交。不要只改 tag。
+
 ## 8. 设计说明
 
 - **所有 action 钉 commit SHA**：`actions/checkout` v4.4.0、
   `actions/setup-go` v5.6.0。第三方 Docker 登录/推送不用 action，直接
   `docker login` / `docker push`，减少供应链面。
-- **固件容器固定 `espressif/idf:v5.5`**；镜像 tag 变更要单独评审。
+- **固件容器固定到 digest**：`espressif/idf:v5.5@sha256:00e94c...`。
+  只写 tag 不够——tag 会漂移，digest 才能复现同一套工具链。
 - **发布构建与开发构建物理隔离**：`build-release/` 独立，构建前 `rm -rf`，
   不读开发机的 `sdkconfig`。
 - **固定依赖版本**：`export IDF_COMPONENT_CHECK_NEW_VERSION=0`，只用
