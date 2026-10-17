@@ -24,15 +24,17 @@
 | [`rom/`](rom/) | ESP32-S3 固件（ESP-IDF 5.5） | 配网、MQTT、推流、看板渲染、板载 LCD 状态屏 |
 | [`server/`](server/) | Go 服务端 `stickboxd` 与电脑端 `stickbox-agent` | 账号、设备绑定、内嵌 MQTT broker、用量链路 |
 | [`docs/`](docs/) | 设计稿、接口文档、计划 | 见下 |
-| `probe/dlna-tv/` | **临时**：DLNA 推流的技术验证工程 | 并入 `rom/` 后删除（见 PLAN T3） |
 
 ## 文档
 
 - [`docs/PLAN.md`](docs/PLAN.md) — **项目计划与任务看板**（先看这个）
 - [`docs/design/`](docs/design/) — 1080p 电视看板高保真设计稿（规格以其 README 为准）
 - [`docs/API.md`](docs/API.md) — HTTP / MQTT 接口：设备注册与配对码、agent 配对、用量上报与推送
+- [`docs/FRAME.md`](docs/FRAME.md) — 服务端看板帧接口：底帧、字形图集、MCU 拼接
+- [`docs/HANDOFF-tv-startup.md`](docs/HANDOFF-tv-startup.md) — 电视起播延迟实验与推流参数
 - [`docs/HANDOFF-usb-tv-probe.md`](docs/HANDOFF-usb-tv-probe.md) — 电视接入的实验记录（U 盘方案为何放弃、三星电视能力）
 - [`server/DEPLOY.md`](server/DEPLOY.md) — 服务端部署
+- [`docs/experiments/tvstart/`](docs/experiments/tvstart/) — DLNA 推流/起播实验脚本
 
 ## 快速上手
 
