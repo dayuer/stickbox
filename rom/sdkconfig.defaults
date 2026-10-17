@@ -1,16 +1,12 @@
 CONFIG_IDF_TARGET="esp32s3"
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 
-# 控制台必须走 UART0（Micro-USB 调试口）：
-# USB-OTG 外设被 host 模式占用后，原生 USB-Serial/JTAG 与之共用 GPIO19/20，用不了
+# 串口：删掉 USB host 切换后，UART0 调试口与原生 USB-Serial/JTAG 都不再被 OTG 占用。
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
 
 CONFIG_FREERTOS_HZ=1000
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
-
-# 诊断用：把日志同时镜像到原生 USB-Serial/JTAG，
-# 这样在切进 host 模式（PHY 被 OTG 接管）之前的输出能从 DEV 口看到
-CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
 
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
@@ -20,23 +16,15 @@ CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
 CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
 
-# TCP 缓冲：这两个值是【本地 IPP 时代】定下的，当时要给 iOS 的 8 条并发连接省内存
-# （每条各一份收发缓冲，按 5760 算一条约 11KB，8 条 88KB 直接吃光堆），
-# 而 IPP 请求只有 268 字节，2×MSS 绰绰有余。
-#
-# 云架构下前提变了：只剩一条 HTTPS 下载连接，没有并发压力，而窗口大小直接
-# 决定取件速度。2880 很可能已经是瓶颈而不是保护。
-# ⚠ 待验证：调大到 5760/11520 测端到端取件耗时与空闲堆，确认后再改这里。
-CONFIG_LWIP_TCP_WND_DEFAULT=2880
-CONFIG_LWIP_TCP_SND_BUF_DEFAULT=2880
+# 1080p MJPEG ~120KB/帧 × 2fps，加大 TCP 窗口提吞吐（probe 实测值）。
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=23040
+CONFIG_LWIP_TCP_WND_DEFAULT=11520
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=12
 
-# socket 池：默认 10 个。现在的用量是 MQTT + HTTPS 取件 + netlog + 配网期的 httpd，
-# 远没到上限；保持 16 是余量，不是必需。
+# MQTT TLS + 推流 + netlog + 配网 httpd，16 个 socket 是余量。
 CONFIG_LWIP_MAX_SOCKETS=16
 
-# Wi-Fi 缓冲默认按高吞吐场景配，我们是低流量设备（请求 268 字节、应答 4.7KB），
-# 省下来的几十 KB 正好给 iOS 的多条并发连接用。
+# Wi-Fi 缓冲保持低流量配置，把堆留给 MQTT TLS 和推流。
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
 CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1
@@ -44,40 +32,9 @@ CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
 CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
 CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
 
-# 曾经在这里抬 mDNS 任务优先级来对抗 iOS 轮询把它饿死。云架构下已不再编译
-# mDNS 组件（dependencies.lock 里没有它），那两行是空配置，已删除。
-# 那次教训本身记在 docs/HANDOFF-cloud-print.md 第 2 节。
-
-# ── TLS 内存：两条连接同时开着时的悬崖 ──
+# 一条 MQTT TLS 长连接常驻。DYNAMIC_BUFFER 让它在空闲时把收发缓冲还回去，
+# 推流和配网时多出十几 KB。
 #
-# 实测（2026-08-30，f412fa87c9e0 真机，服务端 /api/status 的 heap 字段）：
-#   空闲          51080
-#   取件过程中     9284   ← 最低点
-#   取件结束后    42704 → 51544
-#
-# 也就是说一条 HTTPS 连接吃掉约 42KB，而 MQTT 那条 TLS 始终开着。剩 9KB
-# 时 mbedtls 分不到握手用的大数缓冲，**失败形态伪装成证书错误**——服务端
-# 日志里是 `tls: access denied` / `connection reset by peer`，现场会一路
-# 往证书和时钟上查，方向完全错。cloud_client.c 里那句「9.8KB 直接报
-# PK verify failed，其实是 mbedtls 分不到大数缓冲」说的是同一件事。
-#
-# DYNAMIC_BUFFER 让 TLS 在空闲时把收发缓冲还回去（16KB+4KB 一条）。
-# MQTT 那条连接 99% 的时间在空闲，正好是取件时最该让出来的那部分。
+# DYNAMIC_FREE_CONFIG_DATA 绝对不能开——esp-mqtt 复用同一份配置，第一次握手
+# 成功后每次重连都会失败（真机踩过）。
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
-
-# ⚠ DYNAMIC_FREE_CONFIG_DATA 绝对不能开——真机上试过，代价是设备彻底掉线。
-#
-# 它在握手结束后释放 mbedtls 配置里的私钥与 DHM 数据。而 esp-mqtt 从头到尾
-# 复用同一份配置：**第一次握手成功，之后每一次重连都失败**。现象是服务端
-# 8883 上一片 `read connection: EOF`，设备按 2s→60s 退避一直撞，永远连不回来。
-#
-# 这个形态特别容易误判成「固件没起来」——它其实起来了，还发了一次 ident、
-# 拿到了怪癖档案，只是再也回不来。判别方法：看服务端日志里第一次连接之后
-# 有没有成功的心跳。
-#
-# CA 证书那个开关（DYNAMIC_FREE_CA_CERT）是它的下游依赖，它关着就无从谈起。
-
-# 用量屏数字字号（设计稿 1b）：44 主百分比、22 主「%」、20 次要百分比、14 IP
-CONFIG_LV_FONT_MONTSERRAT_44=y
-CONFIG_LV_FONT_MONTSERRAT_22=y
-CONFIG_LV_FONT_MONTSERRAT_20=y

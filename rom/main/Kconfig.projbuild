@@ -1,7 +1,4 @@
 menu "StickBox"
-config BRIDGE_DIAG_NO_USB
-    bool "Diagnostic mode: keep USB serial, skip host switch"
-    default n
 
 config STICKBOX_LCD_ROTATE_180
     bool "Rotate the LCD 180 degrees (board plugged in upside down)"
@@ -9,4 +6,31 @@ config STICKBOX_LCD_ROTATE_180
     help
         USB 口只能倒插，板子装上后屏幕是倒的。打开后用 ST7789 硬件镜像翻转，
         不占额外渲染时间。
+
+config STICKBOX_DLNA_TV_IP
+    string "电视 IP（留空 = SSDP 自动发现）"
+    default ""
+    help
+        填了就跳过发现，直接用 http://<IP>:9197/upnp/control/AVTransport1
+        （三星的固定路径）。
+
+config STICKBOX_DLNA_FPS
+    int "MJPEG 帧率"
+    range 1 10
+    default 2
+    help
+        内容是静态的，帧率只决定换页延迟和码率。1080p 帧约 120KB，
+        2fps ≈ 240KB/s。太低电视会因为 6 秒内凑不够数据而判定启动失败。
+
+config STICKBOX_DLNA_CYCLE_S
+    int "自动换页间隔（秒，0 = 不自动换）"
+    default 10
+
+config STICKBOX_DLNA_REPUSH_IDLE_S
+    int "流空闲多久后重新发现并重推（秒）"
+    default 20
+    help
+        电视关机 / 切走信号源后流会断。空闲超过这个时间就重新 SSDP 发现并推送，
+        失败后按 2 倍退避，最长 5 分钟。
+
 endmenu
