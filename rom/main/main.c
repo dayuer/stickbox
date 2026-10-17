@@ -28,6 +28,7 @@
 #include "cloud_client.h"
 #include "coredump.h"
 #include "dlna.h"
+#include "framefetch.h"
 #include "lcd_ui.h"
 #include "memdiag.h"
 #include "ota.h"
@@ -91,6 +92,10 @@ static void services_task(void *arg)
     cloud_client_start(mac);
     ESP_LOGI(TAG, "云端服务已启动，堆=%u", (unsigned)esp_get_free_heap_size());
     memdiag_heap("cloud_client_start 之后（含 MQTT TLS 长连接）");
+
+    /* 密钥与服务器地址都就位了，立刻拉一次最新帧。排在 ota_start 之前：
+     * 两边都要开 TLS，先把看板起来，升级检查本来就推迟到开机 10 分钟后。 */
+    framefetch_start();
 
     char devid[24];
     snprintf(devid, sizeof devid, "%02x%02x%02x%02x%02x%02x",
@@ -294,6 +299,12 @@ void app_main(void)
     memdiag_heap("stream_start 之前");
     stream_start(frames, 1, CONFIG_STICKBOX_DLNA_FPS, PAIR_ROW0, PAIR_ROWS);
     memdiag_heap("stream_start 之后（含带缓冲与页面解析）");
+
+    /* 尽早：flash 里存着上次的帧包时，这一步就让电视直接出真实看板，不用等
+     * Wi-Fi、不用等服务端。电视关机即断 USB 供电，冷启动时间用户每天看一次。
+     * 放在 stream_start() 之后是因为要用它的带缓冲和页面解析结果。 */
+    framefetch_boot();
+    memdiag_heap("framefetch_boot 之后（含 flash 帧包与时钟任务）");
 
     sntp_start();
     xTaskCreate(services_task, "svc", 8192, NULL, 4, NULL);

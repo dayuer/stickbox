@@ -3,7 +3,7 @@ idf_component_register(
          "provision.c" "dlna.c" "stream.c" "jband.c" "pairband.c"
          "ota.c" "coredump.c" "memdiag.c"
          "framepack.c" "framepack_band.c" "framepack_meta.c"
-         "statusband.c" "statusmask.c"
+         "statusband.c" "statusmask.c" "framefetch.c"
     INCLUDE_DIRS "."
     REQUIRES esp_wifi esp_event nvs_flash esp_netif esp_http_server esp_http_client
              mqtt json lwip esp_timer esp-tls driver
