@@ -18,6 +18,13 @@ bool ota_pending_verify(void);
  * 幂等：非试运行状态下调用是空操作。 */
 void ota_mark_healthy(void);
 
+/* 健康检查超时：判定这版不可用，标记并立刻重启回滚上一槽。不返回。
+ *
+ * 必须有这条路。只是「不确认」的话设备会一直停在 PENDING_VERIFY，
+ * 之后 esp_ota_begin() 直接返回 ROLLBACK_INVALID_STATE，连修复版都推不
+ * 进来，等于把设备锁死。 */
+void ota_rollback_now(void);
+
 /* 起 OTA 检查任务：开机一次，之后每天一次。
  * 必须在 cloud_client_start() 之后调用（要用它的 api_base 与设备密钥）。 */
 void ota_start(const char *devid);

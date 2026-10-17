@@ -67,6 +67,7 @@ static char s_devkey[80];
 static char s_topic_status[64], s_topic_usage[64], s_topic_pair[64];
 
 static bool     s_paired;
+static volatile bool s_connected;
 static char     s_key_id[24];       /* 设备令牌里第一个 '.' 之前的部分 */
 static char     s_pair_code[8];
 static int64_t  s_pair_expire_us;   /* 本机 uptime 截止时间 */
@@ -81,6 +82,10 @@ static int  s_rx_len;
 static char s_rx_buf[RX_MAX + 1];
 
 bool cloud_paired(void) { return s_paired; }
+
+/* MQTT 是否已连上。OTA 健康检查拿它当「这版固件能用」的判据之一——
+ * 判据必须是设备自己能决定的，不能依赖电视开没开、用户配没配对。 */
+bool cloud_connected(void) { return s_connected; }
 
 const char *cloud_api_base(void) { return s_api_base; }
 
@@ -365,6 +370,7 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
     esp_mqtt_event_handle_t e = data;
     switch ((esp_mqtt_event_id_t)id) {
     case MQTT_EVENT_CONNECTED:
+        s_connected = true;
         ESP_LOGI(TAG, "已连接云端 %s", s_mqtt_uri);
         lcd_ui_cloud("已连接");
         s_backoff_ms = BACKOFF_MIN_MS;
@@ -375,6 +381,7 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
         break;
 
     case MQTT_EVENT_DISCONNECTED:
+        s_connected = false;
         if (s_auth_failed) break;
         s_backoff_ms = s_backoff_ms * 2;
         if (s_backoff_ms > BACKOFF_MAX_MS) s_backoff_ms = BACKOFF_MAX_MS;

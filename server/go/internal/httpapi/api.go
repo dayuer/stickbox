@@ -39,6 +39,8 @@ type API struct {
 	pairCodeDev   *rateLimiter
 	pairFailIP    *rateLimiter
 	pairFailWorld *rateLimiter
+	// 崩溃包：每台设备每小时一次。正常设备开机传一次就擦了。
+	coredumpDev *rateLimiter
 }
 
 func New(cfg *config.Config, st *store.Store, v *auth.Verifier,
@@ -52,6 +54,7 @@ func New(cfg *config.Config, st *store.Store, v *auth.Verifier,
 		pairCodeDev:   newRateLimiter(10, 10*time.Minute),
 		pairFailIP:    newRateLimiter(10, 10*time.Minute),
 		pairFailWorld: newRateLimiter(100, time.Minute),
+		coredumpDev:   newRateLimiter(1, time.Hour),
 	}
 }
 

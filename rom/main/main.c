@@ -101,12 +101,16 @@ static void services_task(void *arg)
     vTaskDelete(NULL);
 }
 
-/* OTA 试运行的健康检查：联网 + 已配对 + 电视在拉流，三项都成立才算这版
- * 固件能用，才调 ota_mark_healthy()。任一项没达成就不标记——下次重启
- * bootloader 自动回滚上一槽。
+/* OTA 试运行的健康检查：拿到 IP + MQTT 已连上，两项成立就算这版固件能用。
  *
- * 判据要比「没崩」严格：一版能启动但连不上云端的固件，表现是电视停在
- * 旧画面，用户看不出异常，而设备已经永远收不到新用量了。 */
+ * 判据只能用**设备自己能决定**的条件。早先这里还要求「已配对」和「电视在
+ * 拉流」，那是错的：电视关着、或者设备还没配对时，180 秒内必然过不了，
+ * 而没通过就一直卡在 PENDING_VERIFY——之后 esp_ota_begin() 会直接返回
+ * ROLLBACK_INVALID_STATE，连修复版都推不进来，哪天断电还会悄悄回滚。
+ * 用户把电视关了一晚上，就能把整批设备锁死在这个状态里。
+ *
+ * 超时也必须有动作：主动 mark_invalid 并重启回滚，而不是打条日志就算了。
+ * 「不确认」和「确认失败」在 bootloader 眼里不是一回事，前者会一直悬着。 */
 static void health_task(void *arg)
 {
     (void)arg;
@@ -114,13 +118,16 @@ static void health_task(void *arg)
     for (int t = 1; t <= deadline_s; t++) {
         vTaskDelay(pdMS_TO_TICKS(1000));
         bool online = (xEventGroupGetBits(s_evt) & EVT_GOT_IP) != 0;
-        if (online && cloud_paired() && stream_clients() > 0) {
-            ESP_LOGI(TAG, "健康检查通过（%d 秒）：联网 + 已配对 + 电视在拉流", t);
+        if (online && cloud_connected()) {
+            ESP_LOGI(TAG, "健康检查通过（%d 秒）：已联网 + 云端已连上", t);
             ota_mark_healthy();
             vTaskDelete(NULL);
         }
     }
-    ESP_LOGE(TAG, "健康检查 %d 秒未通过，这版固件不落定——重启将回滚", deadline_s);
+    ESP_LOGE(TAG, "健康检查 %d 秒未通过，判定这版固件不可用，回滚上一槽", deadline_s);
+    lcd_ui_cloud("新固件不可用，回滚");
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    ota_rollback_now();   /* 不返回 */
     vTaskDelete(NULL);
 }
 

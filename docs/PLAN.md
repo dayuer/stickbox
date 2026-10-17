@@ -225,8 +225,13 @@ phy_init, data, phy,      0xf000,   0x1000     # 4K
 otadata,  data, ota,      0x10000,  0x2000     # 8K
 ota_0,    app,  ota_0,    0x20000,  0x300000   # 3M，app 分区须 64K 对齐
 ota_1,    app,  ota_1,    0x320000, 0x300000   # 3M
-coredump, data, coredump, 0x620000, 0x10000    # 64K
+frames,   data, 0x40,     0x620000, 0x180000   # 1.5M，服务端渲染帧缓存（T13）
+coredump, data, coredump, 0x7a0000, 0x10000    # 64K
 ```
+
+frames 划 6 槽 × 256K 环形轮换。槽给 256K 而不是 128K：1080p JPEG 实测约
+120KB，128K 槽只剩 6% 余量。寿命取决于写入策略不是槽数——整帧每分钟重写
+只有 1.1 年，只在数据变化时重写底帧则是 11 年，见 T13b 的硬约束。
 
 当前固件 2.03MB，3M 槽余量约 48%。0x12000–0x20000 的 56KB 空隙是对齐代价，留作后用。
 

@@ -82,7 +82,10 @@ static int upload(size_t addr, size_t size)
     if (esp_http_client_open(h, (int)size) == ESP_OK) {
         size_t off = 0;
         bool ok = true;
-        char buf[CHUNK];
+        /* static：这个任务的栈要同时扛一次 TLS 握手，4K 的局部缓冲会把
+         * 8K 栈挤爆。爆栈又正好会覆盖掉 coredump，变成每次开机 45 秒崩
+         * 一次的循环——而且现场拿不到任何线索。 */
+        static char buf[CHUNK];
         while (off < size && ok) {
             size_t n = size - off < CHUNK ? size - off : CHUNK;
             /* addr 是分区内偏移，不是绝对地址。 */

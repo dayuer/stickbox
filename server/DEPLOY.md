@@ -235,3 +235,31 @@ sudo -u stickbox /opt/stickbox/bin/stickboxd -conf /opt/stickbox/config.json dev
 | `user list` | 列出用户（没有手机号） |
 
 `device unbind` 绕过所有权检查，所以只能在服务器上执行，不暴露为 API。
+
+## OTA 下载对 TLS record 大小的依赖
+
+设备的 `CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN` 是 **8192**（T8 为省堆调低的），
+而 nginx 默认 `ssl_buffer_size` 是 16k、Go 发大文件时也用 16KB 的 record。
+两者都不支持 MFL（Maximum Fragment Length）协商，所以**设备收不下 16KB 的
+record，OTA 下载会直接失败**。
+
+自托管的人必须给固件下载路径调小 record：
+
+```nginx
+location /fw/ {
+    ssl_buffer_size 4k;
+    proxy_pass http://127.0.0.1:9443;
+}
+```
+
+不走 nginx、直接用 stickboxd 的 HTTPS 时同理，要确认发出的 record ≤ 8KB。
+
+改了之后务必实际跑一次完整 OTA 验证——这条依赖在日志里的表现只是下载失败，
+不会指向 record 大小。
+
+## 私有 CA 与 OTA / 崩溃回传
+
+固件里的 OTA 下载和 coredump 上传都写死了用 ESP-IDF 的根证书包
+（`esp_crt_bundle_attach`）。**自托管如果用私有 CA 签的证书，这两条链路都走
+不通**（配网填的自托管地址只影响连哪台服务器，不影响信任哪个 CA）。
+目前只能用公共 CA 签发的证书，或者自行改固件换成自带 CA。

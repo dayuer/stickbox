@@ -23,14 +23,48 @@ const maxCoredumpBytes = 256 << 10
 // 而且磁盘是有限的。
 const keepCoredumpsPerDev = 10
 
+// 所有设备的崩溃包加起来的上限。单设备限流挡不住很多台一起慢慢灌。
+const maxCoredumpTotalBytes = 512 << 20
+
+// dirBytes 统计目录下所有普通文件的字节数。崩溃包数量不多（每设备最多
+// 保留 10 份），每次上传走一遍可以接受。
+func dirBytes(root string) int64 {
+	var n int64
+	filepath.WalkDir(root, func(_ string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if info, err := d.Info(); err == nil {
+			n += info.Size()
+		}
+		return nil
+	})
+	return n
+}
+
 // POST /api/device/coredump —— 设备鉴权，请求体是原始 ELF。
 //
 // 固件版本和复位原因走头部：服务端不解 ELF，没有版本号就还原不了符号，
 // 一份没有版本号的 coredump 等于没有。
 func (a *API) handleDeviceCoredump(w http.ResponseWriter, r *http.Request, id auth.Identity) {
-	dir := filepath.Join(a.cfg.Root, "coredumps", id.Dev)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		fail(w, http.StatusInternalServerError, "server error", "")
+	// 只收已配对设备的崩溃包。requireDevice 放行待配对（pending）密钥，
+	// 而 /api/device/register 不鉴权——否则一个 IP 每 10 分钟能造 20 个 dev，
+	// 每个塞 2.5MB，一天约 7GB，磁盘直接写满。
+	// 两道都要：密钥不能是待配对的，设备也必须已经绑定给某个用户。
+	// 光看「设备已绑定」不够——知道 MAC 的人可以重新 register 拿一把
+	// pending 密钥冒用这台已配对设备；光看「密钥非 pending」也不够。
+	if k, ok, err := a.store.KeyByID(id.KeyID); err != nil || !ok || k.Pending {
+		fail(w, http.StatusForbidden, "not paired", "")
+		return
+	}
+	if owner, bound, err := a.store.OwnerOfDevice(id.Dev); err != nil || !bound || owner == "" {
+		fail(w, http.StatusForbidden, "not paired", "")
+		return
+	}
+	// 每台设备每小时一次。正常设备开机才传一次，传完就擦；高频只可能是
+	// 崩溃循环或者有人在灌。
+	if !a.coredumpDev.allow(id.Dev) {
+		fail(w, http.StatusTooManyRequests, "rate limited", "")
 		return
 	}
 
@@ -48,7 +82,24 @@ func (a *API) handleDeviceCoredump(w http.ResponseWriter, r *http.Request, id au
 		return
 	}
 
-	ts := time.Now().UTC().Format("20060102-150405")
+	// 全局配额：所有设备的崩溃包加起来不能超过上限。单设备限流挡不住
+	// 「很多台设备一起慢慢灌」，这道是兜底。
+	root := filepath.Join(a.cfg.Root, "coredumps")
+	if dirBytes(root)+int64(len(body)) > maxCoredumpTotalBytes {
+		fail(w, http.StatusInsufficientStorage, "quota exceeded", "")
+		return
+	}
+
+	// 目录在校验全过之后才建，不然被拒的请求也会在磁盘上留下一堆空目录。
+	dir := filepath.Join(root, id.Dev)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		fail(w, http.StatusInternalServerError, "server error", "")
+		return
+	}
+
+	// 带纳秒后缀：同一秒内传两次会互相覆盖，而崩溃循环恰好就是同一秒连来。
+	ts := fmt.Sprintf("%s-%09d", time.Now().UTC().Format("20060102-150405"),
+		time.Now().Nanosecond())
 	base := filepath.Join(dir, ts)
 
 	// 先写临时文件再改名：设备上传到一半断了的话，不该在目录里留下一份

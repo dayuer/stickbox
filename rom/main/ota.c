@@ -19,11 +19,31 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
+#include "nvs.h"
 
 #include "cloud_client.h"
 #include "ota.h"
 
 static const char *TAG = "ota";
+
+/* 发布构建必须真的开了签名校验。
+ *
+ * 坑在这里：SDKCONFIG_DEFAULTS 只对 sdkconfig 里还没有的项生效。开发机上
+ * 已经存在的 rom/sdkconfig 里写着「# CONFIG_SECURE_... is not set」，会把
+ * sdkconfig.release 的设置盖掉——构建照样成功，签名校验却是关的，而且没有
+ * 任何提示。发布流程必须用独立的 -DSDKCONFIG=build-release/sdkconfig，
+ * 下面这条断言是最后一道保险。 */
+#ifdef STICKBOX_RELEASE
+#ifndef CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT
+#error "发布构建未开启 OTA 签名校验：sdkconfig.release 被已有的 sdkconfig 盖掉了。用 -DSDKCONFIG=build-release/sdkconfig 重新构建。"
+#endif
+#endif
+
+#ifdef CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT
+#define SIGCHECK_ON 1
+#else
+#define SIGCHECK_ON 0
+#endif
 
 /* 开机检查一次，之后每天一次。 */
 #define CHECK_FIRST_DELAY_S   120
@@ -38,6 +58,50 @@ static const char *TAG = "ota";
 
 static bool s_pending_verify;
 static char s_devid[24];
+
+/* ------------------------------------------------- 坏版本记忆 */
+
+/* 回滚之后运行的是旧版，而服务端 manifest 仍然指着那个新版本。只比
+ * 「版本号不同」的话，设备每天都会重下 2MB、重启、再崩一次，无限循环。
+ * 所以要把失败过的版本记进 NVS，之后见到它直接跳过。 */
+#define NVS_OTA "ota"
+
+static void remember_bad_version(const char *ver)
+{
+    if (!ver || !ver[0]) return;
+    nvs_handle_t h;
+    if (nvs_open(NVS_OTA, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_str(h, "badver", ver);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGW(TAG, "已记下坏版本 %s，以后不再下载它", ver);
+}
+
+static bool is_bad_version(const char *ver)
+{
+    if (!ver || !ver[0]) return false;
+    nvs_handle_t h;
+    if (nvs_open(NVS_OTA, NVS_READONLY, &h) != ESP_OK) return false;
+    char bad[48] = { 0 };
+    size_t n = sizeof bad;
+    bool hit = nvs_get_str(h, "badver", bad, &n) == ESP_OK && strcmp(bad, ver) == 0;
+    nvs_close(h);
+    return hit;
+}
+
+/* 备用槽里是不是已经躺着这个版本、而且被判定为坏？NVS 那条是主判据，
+ * 这条是补充：万一 NVS 被擦过，槽里的状态还在。 */
+static bool spare_slot_rejected(const char *ver)
+{
+    const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
+    if (!next) return false;
+    esp_app_desc_t d;
+    if (esp_ota_get_partition_description(next, &d) != ESP_OK) return false;
+    if (strcmp(d.version, ver) != 0) return false;
+    esp_ota_img_states_t st = ESP_OTA_IMG_UNDEFINED;
+    if (esp_ota_get_state_partition(next, &st) != ESP_OK) return false;
+    return st == ESP_OTA_IMG_INVALID || st == ESP_OTA_IMG_ABORTED;
+}
 
 bool ota_pending_verify(void) { return s_pending_verify; }
 
@@ -57,6 +121,9 @@ void ota_boot_check(void)
     ESP_LOGI(TAG, "运行槽位 %s，版本 %s，状态 %s",
              run ? run->label : "?", ota_version(),
              s_pending_verify ? "待验证（健康检查通过前不落定）" : "已确认");
+    /* 把签名校验的开关状态打出来。构建配置被意外盖掉时，这是现场唯一能
+     * 看出「这块板子接受任何人签的固件」的地方。 */
+    ESP_LOGW(TAG, "OTA 签名校验：%s", SIGCHECK_ON ? "开" : "关（仅限开发构建）");
 
     if (s_pending_verify)
         ESP_LOGW(TAG, "本次是 OTA 后试运行：%d 秒内没通过健康检查，重启将回滚",
@@ -73,6 +140,15 @@ void ota_mark_healthy(void)
     } else {
         ESP_LOGE(TAG, "标记可用失败 %s，重启会回滚", esp_err_to_name(e));
     }
+}
+
+void ota_rollback_now(void)
+{
+    /* 先把这版记成坏版本再回滚。否则回滚后运行的是旧版，服务端 manifest
+     * 仍然指着这个新版本，设备每天都会重新下载 2MB、重启、再崩一次。 */
+    remember_bad_version(ota_version());
+    ESP_LOGE(TAG, "标记本版不可用并回滚");
+    esp_ota_mark_app_invalid_rollback_and_reboot();   /* 不返回 */
 }
 
 /* ---------------------------------------------------------------- 检查与下载 */
@@ -105,6 +181,14 @@ static int fetch_manifest(char *resp, size_t cap)
     }
     esp_http_client_cleanup(h);
     return status;
+}
+
+/* 备用槽容量。manifest 里的 size 超过它就别下了——下到最后才失败，
+ * 白烧 3MB 流量，还占着一条 TLS 把堆挤低。 */
+static size_t slot_capacity(void)
+{
+    const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
+    return next ? next->size : 0;
 }
 
 /* 下载并写入备用槽。成功返回 true（调用方随即重启）。 */
@@ -150,19 +234,29 @@ static void check_once(void)
 
     const cJSON *ver = cJSON_GetObjectItemCaseSensitive(root, "version");
     const cJSON *url = cJSON_GetObjectItemCaseSensitive(root, "url");
+    int64_t size = (int64_t)cJSON_GetNumberValue(
+        cJSON_GetObjectItemCaseSensitive(root, "size"));
     if (cJSON_IsString(ver) && cJSON_IsString(url) && ver->valuestring[0] &&
         url->valuestring[0]) {
         /* 不解析版本号大小，服务端说推什么就是什么——只要和当前跑的不一样。
          * 这样回退一个版本也走同一条路。 */
-        if (strcmp(ver->valuestring, ota_version()) != 0) {
+        if (strcmp(ver->valuestring, ota_version()) == 0) {
+            ESP_LOGI(TAG, "已是最新 %s", ota_version());
+        } else if (is_bad_version(ver->valuestring) ||
+                   spare_slot_rejected(ver->valuestring)) {
+            /* 这版试过且失败过。再下一次只会重复「下载 2MB → 重启 → 崩 →
+             * 回滚」这个循环，还白费流量。 */
+            ESP_LOGW(TAG, "版本 %s 之前已判定不可用，跳过", ver->valuestring);
+        } else if (size > 0 && size > (int64_t)slot_capacity()) {
+            ESP_LOGE(TAG, "固件 %lld 字节放不进 %u 的槽，跳过",
+                     (long long)size, (unsigned)slot_capacity());
+        } else {
             ESP_LOGI(TAG, "有新版本 %s（当前 %s）", ver->valuestring, ota_version());
             if (download(url->valuestring)) {
                 cJSON_Delete(root);
                 vTaskDelay(pdMS_TO_TICKS(1000));
                 esp_restart();
             }
-        } else {
-            ESP_LOGI(TAG, "已是最新 %s", ota_version());
         }
     }
     cJSON_Delete(root);
