@@ -1,0 +1,44 @@
+esp-idf/esp_netif/CMakeFiles/__idf_esp_netif.dir/esp_netif_defaults.c.obj: \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/esp_netif/esp_netif_defaults.c \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/esp_netif/include/esp_netif.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include/stdint.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/stdint.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/machine/_default_types.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/features.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/_newlib_version.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/_intsup.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/_stdint.h \
+ /Users/liyuqing/sproot/esp-airprint-M0/rom/\ build-m0a/config/sdkconfig.h \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/esp_netif/include/esp_netif_ip_addr.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/machine/endian.h \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/newlib/platform_include/sys/cdefs.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/cdefs.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include/stddef.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/_types.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/newlib.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/config.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/machine/ieeefp.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/machine/_types.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/machine/_endian.h \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/esp_netif/include/esp_netif_types.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include/stdbool.h \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/esp_event/include/esp_event_base.h \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/esp_common/include/esp_err.h \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/newlib/platform_include/stdio.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/stdio.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/_ansi.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include/stdarg.h \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/newlib/platform_include/sys/reent.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/reent.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/_ansi.h \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/newlib/platform_include/sys/lock.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/lock.h \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/newlib/platform_include/assert.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/stdlib.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/machine/stdlib.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/alloca.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/_locale.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/assert.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/stdio.h \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/esp_common/include/esp_compiler.h \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/esp_netif/include/esp_netif_defaults.h

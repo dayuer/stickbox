@@ -19,6 +19,7 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "nvs.h"
 
 #include "cloud_client.h"
@@ -57,6 +58,9 @@ static const char *TAG = "ota";
 #define MIN_FREE_HEAP      90000
 
 static bool s_pending_verify;
+static volatile bool s_checking;
+static esp_timer_handle_t s_timer;
+static esp_timer_handle_t s_once;
 static char s_devid[24];
 
 /* ------------------------------------------------- 坏版本记忆 */
@@ -262,19 +266,42 @@ static void check_once(void)
     cJSON_Delete(root);
 }
 
-static void ota_task(void *arg)
+/* 检查任务是**按需创建、跑完自删**的。
+ *
+ * 原来是一个 8192 栈的常驻任务，它一天里 99.9% 的时间在 vTaskDelay，却一直
+ * 占着 8KB 堆。推流和 MQTT TLS 都在抢同一块内存，这 8KB 买不到任何东西。
+ * 改成用 esp_timer 定时唤醒：定时器自己不占任务栈，到点才创建任务，查完就
+ * 删掉。 */
+static void ota_check_task(void *arg)
 {
     (void)arg;
-    vTaskDelay(pdMS_TO_TICKS(CHECK_FIRST_DELAY_S * 1000));
-    while (1) {
-        check_once();
-        vTaskDelay(pdMS_TO_TICKS(CHECK_INTERVAL_S * 1000));
+    check_once();
+    s_checking = false;
+    vTaskDelete(NULL);
+}
+
+static void on_check_timer(void *arg)
+{
+    (void)arg;
+    if (s_checking) return;          /* 上一轮还没跑完就跳过这次 */
+    s_checking = true;
+    /* 8192：一次 TLS 握手，4096 太紧。只在检查期间占用。 */
+    if (xTaskCreate(ota_check_task, "ota_check", 8192, NULL, 2, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "内存不够，跳过本轮升级检查");
+        s_checking = false;
     }
 }
 
 void ota_start(const char *devid)
 {
     strlcpy(s_devid, devid, sizeof s_devid);
-    /* 8192：和注册/换配对码同理，一次 TLS 握手 4096 太紧。 */
-    xTaskCreate(ota_task, "ota", 8192, NULL, 2, NULL);
+    const esp_timer_create_args_t a = { .callback = on_check_timer, .name = "ota" };
+    if (esp_timer_create(&a, &s_timer) != ESP_OK) {
+        ESP_LOGE(TAG, "创建升级检查定时器失败");
+        return;
+    }
+    /* 开机 CHECK_FIRST_DELAY_S 之后查一次，之后每天一次。 */
+    esp_timer_start_periodic(s_timer, (uint64_t)CHECK_INTERVAL_S * 1000000ULL);
+    esp_timer_create(&a, &s_once);
+    esp_timer_start_once(s_once, (uint64_t)CHECK_FIRST_DELAY_S * 1000000ULL);
 }
