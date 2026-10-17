@@ -7,13 +7,11 @@ import (
 	"errors"
 )
 
+// User 没有手机号、没有密码：它只是「一台电脑（agent）名下的屏」的归属。
 type User struct {
-	ID        string
-	PhoneHMAC string
-	PhoneTail string
-	Created   int64
-	LastLogin int64
-	Disabled  bool
+	ID       string
+	Created  int64
+	Disabled bool
 }
 
 func newID() string {
@@ -24,34 +22,16 @@ func newID() string {
 	return hex.EncodeToString(b)
 }
 
-const userCols = `id,phone_hmac,phone_tail,created,last_login,disabled`
+const userCols = `id,created,disabled`
 
-// UpsertUser 按手机号 HMAC 找用户，没有就创建。created 表示是否新建。
-// 登录路径只碰 HMAC，全程不解密完整号码。
-func (s *Store) UpsertUser(phoneHMAC, tail string) (User, bool, error) {
-	if u, ok, err := s.UserByHMAC(phoneHMAC); err != nil {
-		return User{}, false, err
-	} else if ok {
-		ts := now()
-		s.wmu.Lock()
-		_, err = s.db.Exec(`UPDATE users SET last_login=? WHERE id=?`, ts, u.ID)
-		s.wmu.Unlock()
-		u.LastLogin = ts
-		return u, false, err
-	}
-	u := User{ID: newID(), PhoneHMAC: phoneHMAC, PhoneTail: tail,
-		Created: now(), LastLogin: now()}
+// CreateUser 在配对成功时创建用户。
+func (s *Store) CreateUser() (User, error) {
+	u := User{ID: newID(), Created: now()}
 	s.wmu.Lock()
-	_, err := s.db.Exec(
-		`INSERT INTO users(`+userCols+`) VALUES(?,?,?,?,?,0)`,
-		u.ID, u.PhoneHMAC, u.PhoneTail, u.Created, u.LastLogin)
-	s.wmu.Unlock()
-	return u, true, err
-}
-
-func (s *Store) UserByHMAC(phoneHMAC string) (User, bool, error) {
-	return scanUser(s.db.QueryRow(
-		`SELECT `+userCols+` FROM users WHERE phone_hmac=?`, phoneHMAC))
+	defer s.wmu.Unlock()
+	_, err := s.db.Exec(`INSERT INTO users(`+userCols+`) VALUES(?,?,0)`,
+		u.ID, u.Created)
+	return u, err
 }
 
 func (s *Store) UserByID(id string) (User, bool, error) {
@@ -68,8 +48,7 @@ func (s *Store) ListUsers() ([]User, error) {
 	for rows.Next() {
 		var u User
 		var disabled int
-		if err := rows.Scan(&u.ID, &u.PhoneHMAC, &u.PhoneTail,
-			&u.Created, &u.LastLogin, &disabled); err != nil {
+		if err := rows.Scan(&u.ID, &u.Created, &disabled); err != nil {
 			return nil, err
 		}
 		u.Disabled = disabled != 0
@@ -81,7 +60,7 @@ func (s *Store) ListUsers() ([]User, error) {
 func scanUser(r rowScanner) (User, bool, error) {
 	var u User
 	var disabled int
-	err := r.Scan(&u.ID, &u.PhoneHMAC, &u.PhoneTail, &u.Created, &u.LastLogin, &disabled)
+	err := r.Scan(&u.ID, &u.Created, &disabled)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return User{}, false, nil
@@ -90,120 +69,4 @@ func scanUser(r rowScanner) (User, bool, error) {
 	}
 	u.Disabled = disabled != 0
 	return u, true, nil
-}
-
-// PutPhone / GetPhone 存取加密后的完整号码。调用方负责加解密，
-// store 只当它是一段不透明字节——这样密钥永远不进 store 包。
-func (s *Store) PutPhone(userID string, enc []byte) error {
-	s.wmu.Lock()
-	defer s.wmu.Unlock()
-	_, err := s.db.Exec(
-		`INSERT INTO user_phones(user_id,phone_enc,updated) VALUES(?,?,?)
-		 ON CONFLICT(user_id) DO UPDATE SET phone_enc=excluded.phone_enc,
-		                                    updated=excluded.updated`,
-		userID, enc, now())
-	return err
-}
-
-func (s *Store) GetPhone(userID string) ([]byte, bool, error) {
-	var enc []byte
-	err := s.db.QueryRow(
-		`SELECT phone_enc FROM user_phones WHERE user_id=?`, userID).Scan(&enc)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, false, nil
-		}
-		return nil, false, err
-	}
-	return enc, true, nil
-}
-
-// DeleteUser 执行注销：清空该用户的一切个人数据。
-func (s *Store) DeleteUser(userID string) error {
-	s.wmu.Lock()
-	defer s.wmu.Unlock()
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	for _, q := range []string{
-		`DELETE FROM devices WHERE user_id=?`,
-		`DELETE FROM usage WHERE user_id=?`,
-		`DELETE FROM user_phones WHERE user_id=?`,
-		`DELETE FROM users WHERE id=?`,
-	} {
-		if _, err := tx.Exec(q, userID); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
-type SMSCode struct {
-	PhoneHMAC string
-	CodeHash  string
-	Expires   int64
-	Attempts  int
-	SentAt    int64
-	DayStart  int64
-	DayCount  int
-}
-
-func (s *Store) SMSCode(phoneHMAC string) (SMSCode, bool, error) {
-	var c SMSCode
-	err := s.db.QueryRow(
-		`SELECT phone_hmac,code_hash,expires,attempts,sent_at,day_start,day_count
-		 FROM sms_codes WHERE phone_hmac=?`, phoneHMAC).
-		Scan(&c.PhoneHMAC, &c.CodeHash, &c.Expires, &c.Attempts,
-			&c.SentAt, &c.DayStart, &c.DayCount)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return SMSCode{}, false, nil
-		}
-		return SMSCode{}, false, err
-	}
-	return c, true, nil
-}
-
-// PutSMSCode 按号码单行覆盖——重发即替换，不留历史。
-func (s *Store) PutSMSCode(c SMSCode) error {
-	s.wmu.Lock()
-	defer s.wmu.Unlock()
-	_, err := s.db.Exec(
-		`INSERT INTO sms_codes(phone_hmac,code_hash,expires,attempts,sent_at,day_start,day_count)
-		 VALUES(?,?,?,?,?,?,?)
-		 ON CONFLICT(phone_hmac) DO UPDATE SET
-		   code_hash=excluded.code_hash, expires=excluded.expires,
-		   attempts=0, sent_at=excluded.sent_at,
-		   day_start=excluded.day_start, day_count=excluded.day_count`,
-		c.PhoneHMAC, c.CodeHash, c.Expires, c.Attempts, c.SentAt, c.DayStart, c.DayCount)
-	return err
-}
-
-func (s *Store) BumpSMSAttempts(phoneHMAC string) error {
-	s.wmu.Lock()
-	defer s.wmu.Unlock()
-	_, err := s.db.Exec(
-		`UPDATE sms_codes SET attempts=attempts+1 WHERE phone_hmac=?`, phoneHMAC)
-	return err
-}
-
-// ConsumeSMSCode 在校验成功后作废验证码，但**保留限流计数器**。
-//
-// 不能直接删整行：sent_at 和 day_count 一起没了，用户登录一次就能重置
-// 每日 10 条的上限，反复登录反复刷，闸二形同虚设。
-func (s *Store) ConsumeSMSCode(phoneHMAC string) error {
-	s.wmu.Lock()
-	defer s.wmu.Unlock()
-	_, err := s.db.Exec(
-		`UPDATE sms_codes SET code_hash='', expires=0 WHERE phone_hmac=?`, phoneHMAC)
-	return err
-}
-
-func (s *Store) DeleteSMSCode(phoneHMAC string) error {
-	s.wmu.Lock()
-	defer s.wmu.Unlock()
-	_, err := s.db.Exec(`DELETE FROM sms_codes WHERE phone_hmac=?`, phoneHMAC)
-	return err
 }

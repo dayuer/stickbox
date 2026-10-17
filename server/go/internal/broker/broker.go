@@ -54,11 +54,10 @@ func (t *idTable) drop(cl *mqtt.Client) {
 
 type Broker struct {
 	srv  *mqtt.Server
-	mem  *Membership
 	hook *Hook
 }
 
-func New(addr string, tlsCfg *tls.Config, v *auth.Verifier, mem *Membership, r Router, claim Claimer) (*Broker, error) {
+func New(addr string, tlsCfg *tls.Config, v *auth.Verifier, r Router) (*Broker, error) {
 	srv := mqtt.New(&mqtt.Options{
 		// 服务端要能直接 Publish 推用量，这个开关是前提；
 		// 不开的话 Publish 返回「please set Options.InlineClient=true」。
@@ -68,7 +67,7 @@ func New(addr string, tlsCfg *tls.Config, v *auth.Verifier, mem *Membership, r R
 			Level: slog.LevelWarn,
 		})),
 	})
-	h := &Hook{v: v, mem: mem, router: r, claim: claim, ids: newIDTable()}
+	h := &Hook{v: v, router: r, ids: newIDTable()}
 	if err := srv.AddHook(h, nil); err != nil {
 		return nil, err
 	}
@@ -78,7 +77,7 @@ func New(addr string, tlsCfg *tls.Config, v *auth.Verifier, mem *Membership, r R
 	if err := srv.AddListener(l); err != nil {
 		return nil, err
 	}
-	return &Broker{srv: srv, mem: mem, hook: h}, nil
+	return &Broker{srv: srv, hook: h}, nil
 }
 
 func (b *Broker) Serve() error { return b.srv.Serve() }
@@ -88,6 +87,12 @@ func (b *Broker) Close() error { return b.srv.Close() }
 // 留着会过期；设备重连时由 OnSubscribed 触发补发一份新的（见 usage 包）。
 func (b *Broker) PublishUsage(dev string, payload []byte) error {
 	return b.srv.Publish(fmt.Sprintf("printer/%s/usage", dev), payload, false, 1)
+}
+
+// PublishPair 通知设备配对状态。retain=1：设备离线时错过配对，
+// 重连后仍能拿到「已配对 / 已解绑」的当前状态。
+func (b *Broker) PublishPair(dev string, payload []byte) error {
+	return b.srv.Publish(fmt.Sprintf("printer/%s/pair", dev), payload, true, 1)
 }
 
 // SetUsageResender 接上「设备订阅 usage 时补发」的回调。

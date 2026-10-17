@@ -1,11 +1,11 @@
-// Package store 是账号、设备密钥与用量的唯一真相来源。
+// Package store 是用户、设备密钥、配对码与用量的唯一真相来源。
 //
-// 打印退役后这里不再有作业队列；设备在线状态是内存里的心跳表（见 registry），
-// 不需要持久化。
+// T7 起没有手机号和 App：用户由配对动作创建，设备靠配对码归属到用户。
 package store
 
 import (
 	"database/sql"
+	"fmt"
 	"sync"
 	"time"
 
@@ -18,7 +18,7 @@ type rowScanner interface{ Scan(...any) error }
 
 type Store struct {
 	db  *sql.DB
-	wmu sync.Mutex // 写串行化：百台量级写入量极低，一把锁足够，省掉 SQLITE_BUSY 重试
+	wmu sync.Mutex // 写串行化：写入量极低，一把锁足够
 }
 
 const schema = `
@@ -31,47 +31,37 @@ CREATE TABLE IF NOT EXISTS devices(
   key_hash  TEXT NOT NULL,
   created   INTEGER NOT NULL DEFAULT 0,
   last_seen INTEGER NOT NULL DEFAULT 0,
-  disabled  INTEGER NOT NULL DEFAULT 0
+  disabled  INTEGER NOT NULL DEFAULT 0,
+  pending   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS devices_dev  ON devices(dev);
 CREATE INDEX IF NOT EXISTS devices_user ON devices(user_id);
 
 CREATE TABLE IF NOT EXISTS users(
-  id         TEXT PRIMARY KEY,
-  phone_hmac TEXT NOT NULL UNIQUE,
-  phone_tail TEXT NOT NULL DEFAULT '',
-  created    INTEGER NOT NULL DEFAULT 0,
-  last_login INTEGER NOT NULL DEFAULT 0,
-  disabled   INTEGER NOT NULL DEFAULT 0
+  id       TEXT PRIMARY KEY,
+  created  INTEGER NOT NULL DEFAULT 0,
+  disabled INTEGER NOT NULL DEFAULT 0
 );
 
--- 完整号码单独成表：登录和 ACL 是高频路径，个人信息不进热表
-CREATE TABLE IF NOT EXISTS user_phones(
-  user_id   TEXT PRIMARY KEY,
-  phone_enc BLOB NOT NULL,
-  updated   INTEGER NOT NULL DEFAULT 0
+-- 配对码：每台设备最多一条。code_hash 唯一，避免两个设备同时出同一个码。
+CREATE TABLE IF NOT EXISTS pair_codes(
+  dev        TEXT PRIMARY KEY,
+  code_hash  TEXT NOT NULL UNIQUE,
+  key_id     TEXT NOT NULL,
+  expires    INTEGER NOT NULL DEFAULT 0,
+  created    INTEGER NOT NULL DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS pair_codes_expires ON pair_codes(expires);
 
 -- Claude 订阅用量，每个用户只留最新一份。body 是 usage.Report 的 JSON。
--- 由用户电脑上的 stickbox-agent 上报（role=agent 的密钥）。
 CREATE TABLE IF NOT EXISTS usage(
   user_id  TEXT PRIMARY KEY,
   body     TEXT NOT NULL,
   received INTEGER NOT NULL DEFAULT 0
 );
-
-CREATE TABLE IF NOT EXISTS sms_codes(
-  phone_hmac TEXT PRIMARY KEY,
-  code_hash  TEXT NOT NULL,
-  expires    INTEGER NOT NULL DEFAULT 0,
-  attempts   INTEGER NOT NULL DEFAULT 0,
-  sent_at    INTEGER NOT NULL DEFAULT 0,
-  day_start  INTEGER NOT NULL DEFAULT 0,
-  day_count  INTEGER NOT NULL DEFAULT 0
-);
 `
 
-// 打印退役时一次性清掉的旧表。打印功能已经整条删除，里面的数据没有消费者。
+// 打印退役时一次性清掉的旧表。
 const dropPrintTables = `
 DROP TABLE IF EXISTS jobs;
 DROP TABLE IF EXISTS test_runs;
@@ -93,9 +83,60 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	// 旧库升级：Python 版没有这一列。已存在时报错，忽略即可。
+	// 旧库升级：Python 版没有这两列。
 	db.Exec(`ALTER TABLE devices ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`)
+	db.Exec(`ALTER TABLE devices ADD COLUMN pending INTEGER NOT NULL DEFAULT 0`)
+
+	// T7 去掉了手机号：旧 users 表有 phone_hmac NOT NULL，必须先重建，
+	// 否则新建用户插不进去。user_phones / sms_codes 一并清掉。
+	if err := migrateUsers(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec(`
+		DROP TABLE IF EXISTS user_phones;
+		DROP TABLE IF EXISTS sms_codes;`); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+func migrateUsers(db *sql.DB) error {
+	has, err := hasColumn(db, "users", "phone_hmac")
+	if err != nil || !has {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`CREATE TABLE users_new(
+		   id       TEXT PRIMARY KEY,
+		   created  INTEGER NOT NULL DEFAULT 0,
+		   disabled INTEGER NOT NULL DEFAULT 0)`,
+		`INSERT INTO users_new(id, created, disabled)
+		 SELECT id, created, disabled FROM users`,
+		`DROP TABLE users`,
+		`ALTER TABLE users_new RENAME TO users`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func hasColumn(db *sql.DB, table, column string) (bool, error) {
+	var n int
+	q := fmt.Sprintf(
+		`SELECT COUNT(*) FROM pragma_table_info('%s') WHERE name=?`, table)
+	if err := db.QueryRow(q, column).Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }

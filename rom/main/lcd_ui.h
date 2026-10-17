@@ -13,6 +13,9 @@ void lcd_ui_stream(const char *state, uint32_t frames);
 void lcd_ui_cloud(const char *state);               /* 已连接 / 重连中 / 密钥被拒 */
 void lcd_ui_log(const char *line);                  /* 底行提示（配网用） */
 
+/* 底行显示配对码；paired=true 时显示「已配对」。 */
+void lcd_ui_pair(const char *code, bool paired);
+
 /* 一个限额窗口。字段对应服务端 usage.DevicePayload 的 five_hour / seven_day。 */
 typedef struct {
     bool    present;

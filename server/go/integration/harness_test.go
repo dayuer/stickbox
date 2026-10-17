@@ -1,7 +1,6 @@
 package integration
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -32,31 +31,16 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/tlsx"
 )
 
-type fakeSender struct{ last string }
-
-func (f *fakeSender) Send(ctx context.Context, phone, code string) error {
-	f.last = code
-	return nil
-}
-
 type env struct {
 	t        *testing.T
 	httpBase string
 	mqttAddr string
 	store    *store.Store
-	sender   *fakeSender
 	client   *http.Client
 }
 
 // startServer 起一套真的：内嵌 broker + HTTPS，自签证书，端口交给内核分配。
-// 固定端口会让并行测试互相打架。
 func startServer(t *testing.T) *env {
-	t.Helper()
-	return startServerWithDevLogin(t, "", "")
-}
-
-// startServerWithDevLogin 同上，另开固定手机号旁路（devPhone 为空则不开）。
-func startServerWithDevLogin(t *testing.T, devPhone, devCode string) *env {
 	t.Helper()
 	dir := t.TempDir()
 	certDir := filepath.Join(dir, "certs")
@@ -72,18 +56,7 @@ func startServerWithDevLogin(t *testing.T, devPhone, devCode string) *env {
 	}
 	t.Cleanup(func() { st.Close() })
 
-	pb, err := auth.NewPhoneBox("itest-pepper",
-		"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sender := &fakeSender{}
 	v := auth.NewVerifier(st)
-	smsSvc := auth.NewSMS(st, sender, time.Now)
-	if devPhone != "" {
-		smsSvc.SetDevLogin(pb.HMAC(devPhone), devCode)
-	}
-	mem := broker.NewMembership(st)
 	reloader, err := tlsx.New(cfg.CertPath(), cfg.KeyPath())
 	if err != nil {
 		t.Fatal(err)
@@ -93,16 +66,16 @@ func startServerWithDevLogin(t *testing.T, devPhone, devCode string) *env {
 	t.Cleanup(reg.Shutdown)
 
 	mqttAddr := freeAddr(t)
-	br, err := broker.New(mqttAddr, reloader.Config(), v, mem, reg, st)
+	br, err := broker.New(mqttAddr, reloader.Config(), v, reg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := br.Serve(); err != nil { // 非阻塞：启动监听后立即返回
+	if err := br.Serve(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { br.Close() })
 
-	api := httpapi.New(cfg, st, v, pb, smsSvc, reg, mem, br)
+	api := httpapi.New(cfg, st, v, reg, br)
 	br.SetUsageResender(api.Usage())
 	ln, err := tls.Listen("tcp", freeAddr(t), reloader.Config())
 	if err != nil {
@@ -114,7 +87,7 @@ func startServerWithDevLogin(t *testing.T, devPhone, devCode string) *env {
 
 	return &env{
 		t: t, httpBase: "https://" + ln.Addr().String(), mqttAddr: mqttAddr,
-		store: st, sender: sender,
+		store: st,
 		client: &http.Client{Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // 仅测试
 		}},
@@ -180,87 +153,63 @@ func (e *env) req(method, path, body string, hdr map[string]string) (int, []byte
 	return resp.StatusCode, out
 }
 
-func (e *env) sendCode(phone string) string {
+func (e *env) register(dev string) (token, code string) {
 	e.t.Helper()
-	if code, b := e.req("POST", "/api/auth/sms", `{"phone":"`+phone+`"}`,
-		map[string]string{"Content-Type": "application/json"}); code != 200 {
-		e.t.Fatalf("发码 = %d %s", code, b)
-	}
-	return e.sender.last
-}
-
-func (e *env) login(phone string) string {
-	e.t.Helper()
-	return e.verify(phone, e.sendCode(phone))
-}
-
-// loginWithCode 用已知验证码登录，给固定手机号用。
-func (e *env) loginWithCode(phone, code string) string {
-	e.t.Helper()
-	e.sendCode(phone)
-	return e.verify(phone, code)
-}
-
-func (e *env) verify(phone, verifyCode string) string {
-	e.t.Helper()
-	code, b := e.req("POST", "/api/auth/verify",
-		fmt.Sprintf(`{"phone":"%s","code":"%s","device":"itest"}`, phone, verifyCode),
+	st, b := e.req("POST", "/api/device/register", `{"dev":"`+dev+`"}`,
 		map[string]string{"Content-Type": "application/json"})
-	if code != 200 {
-		e.t.Fatalf("登录 = %d %s", code, b)
+	if st != 200 {
+		e.t.Fatalf("register = %d %s", st, b)
 	}
 	var out struct {
 		Token string `json:"token"`
+		Code  string `json:"code"`
 	}
 	json.Unmarshal(b, &out)
-	return out.Token
+	return out.Token, out.Code
 }
 
-// agentLogin 为已有账号签发一把 agent 令牌。
-func (e *env) agentLogin(phone string) string {
+func (e *env) tryPair(code, agentToken string) (int, []byte) {
 	e.t.Helper()
-	return e.agentLoginWithCode(phone, e.sendCode(phone))
+	hdr := map[string]string{"Content-Type": "application/json"}
+	if agentToken != "" {
+		hdr["Authorization"] = "Bearer " + agentToken
+	}
+	return e.req("POST", "/api/agent/pair",
+		fmt.Sprintf(`{"code":"%s","name":"itest"}`, code), hdr)
 }
 
-// agentLoginWithCode 不再发码：调用方已经让 sms_codes 里有了这条记录。
-// 固定手机号旁路下，先调 sendCode 写入固定验证码，再传固定 code 即可。
-func (e *env) agentLoginWithCode(phone, verifyCode string) string {
+func (e *env) pair(code, agentToken string) (token, dev, userID string) {
 	e.t.Helper()
-	code, b := e.req("POST", "/api/agent/login",
-		fmt.Sprintf(`{"phone":"%s","code":"%s","name":"itest-mac"}`, phone, verifyCode),
-		map[string]string{"Content-Type": "application/json"})
-	if code != 200 {
-		e.t.Fatalf("agent 登录 = %d %s", code, b)
+	st, b := e.tryPair(code, agentToken)
+	if st != 200 {
+		e.t.Fatalf("pair = %d %s", st, b)
 	}
 	var out struct {
-		Token string `json:"token"`
+		Token  string `json:"token"`
+		Dev    string `json:"dev"`
+		UserID string `json:"user_id"`
 	}
 	json.Unmarshal(b, &out)
-	return out.Token
-}
-
-func (e *env) enroll(token, dev string) string {
-	e.t.Helper()
-	code, b := e.req("POST", "/api/device/enroll", `{"dev":"`+dev+`"}`,
-		map[string]string{"Content-Type": "application/json",
-			"Authorization": "Bearer " + token})
-	if code != 200 {
-		e.t.Fatalf("enroll = %d %s", code, b)
-	}
-	var out struct {
-		DeviceKey string `json:"device_key"`
-	}
-	json.Unmarshal(b, &out)
-	return out.DeviceKey
+	return out.Token, out.Dev, out.UserID
 }
 
 func (e *env) reportUsage(agentToken string, body []byte) {
 	e.t.Helper()
-	code, b := e.req("POST", "/api/usage", string(body),
+	st, b := e.req("POST", "/api/usage", string(body),
 		map[string]string{"Content-Type": "application/json",
 			"Authorization": "Bearer " + agentToken})
-	if code != 200 {
-		e.t.Fatalf("上报用量 = %d %s", code, b)
+	if st != 200 {
+		e.t.Fatalf("上报用量 = %d %s", st, b)
+	}
+}
+
+func (e *env) unpair(agentToken, dev string) {
+	e.t.Helper()
+	st, b := e.req("POST", "/api/agent/unpair", `{"dev":"`+dev+`"}`,
+		map[string]string{"Content-Type": "application/json",
+			"Authorization": "Bearer " + agentToken})
+	if st != 200 {
+		e.t.Fatalf("解绑 = %d %s", st, b)
 	}
 }
 
@@ -271,6 +220,7 @@ type fakeDevice struct {
 	c     paho.Client
 	dev   string
 	usage chan []byte
+	pair  chan []byte
 }
 
 func (e *env) connectDevice(dev, key string) *fakeDevice {
@@ -292,12 +242,19 @@ func (e *env) tryConnectDevice(dev, key string) (*fakeDevice, error) {
 		SetConnectTimeout(5 * time.Second).
 		SetAutoReconnect(false)
 
-	fd := &fakeDevice{t: e.t, dev: dev, usage: make(chan []byte, 8)}
+	fd := &fakeDevice{t: e.t, dev: dev,
+		usage: make(chan []byte, 8), pair: make(chan []byte, 8)}
 	opts.SetDefaultPublishHandler(func(_ paho.Client, m paho.Message) {
-		if strings.HasSuffix(m.Topic(), "/usage") {
-			payload := append([]byte(nil), m.Payload()...)
+		payload := append([]byte(nil), m.Payload()...)
+		switch {
+		case strings.HasSuffix(m.Topic(), "/usage"):
 			select {
 			case fd.usage <- payload:
+			default:
+			}
+		case strings.HasSuffix(m.Topic(), "/pair"):
+			select {
+			case fd.pair <- payload:
 			default:
 			}
 		}
@@ -313,7 +270,7 @@ func (e *env) tryConnectDevice(dev, key string) (*fakeDevice, error) {
 }
 
 // subscribe 必须检查 SUBACK 的返回码：broker 拒绝订阅时回 0x80，
-// 而 paho 的 token.Error() 是 nil——只看 error 会以为订阅成功了。
+// 而 paho 的 token.Error() 是 nil。
 func (d *fakeDevice) subscribe(topic string) error {
 	tok := d.c.Subscribe(topic, 1, nil)
 	if !tok.WaitTimeout(5 * time.Second) {
@@ -337,19 +294,20 @@ func (d *fakeDevice) subscribe(topic string) error {
 func (d *fakeDevice) subscribeUsage() error {
 	return d.subscribe("printer/" + d.dev + "/usage")
 }
-
-func (d *fakeDevice) disconnect() {
-	d.c.Disconnect(100)
+func (d *fakeDevice) subscribePair() error {
+	return d.subscribe("printer/" + d.dev + "/pair")
 }
 
-func (d *fakeDevice) heartbeat(state string) {
+func (d *fakeDevice) heartbeat() {
 	d.t.Helper()
-	payload, _ := json.Marshal(map[string]any{"dev": d.dev, "state": state})
+	payload, _ := json.Marshal(map[string]any{"dev": d.dev, "state": "online"})
 	tok := d.c.Publish("printer/"+d.dev+"/status", 1, false, payload)
 	if !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
 		d.t.Fatalf("心跳发送失败：%v", tok.Error())
 	}
 }
+
+func (d *fakeDevice) disconnect() { d.c.Disconnect(100) }
 
 func (d *fakeDevice) waitUsage(timeout time.Duration) []byte {
 	d.t.Helper()
@@ -358,6 +316,17 @@ func (d *fakeDevice) waitUsage(timeout time.Duration) []byte {
 		return b
 	case <-time.After(timeout):
 		d.t.Fatal("没有收到用量")
+		return nil
+	}
+}
+
+func (d *fakeDevice) waitPair(timeout time.Duration) []byte {
+	d.t.Helper()
+	select {
+	case b := <-d.pair:
+		return b
+	case <-time.After(timeout):
+		d.t.Fatal("没有收到配对通知")
 		return nil
 	}
 }

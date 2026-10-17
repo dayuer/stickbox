@@ -28,6 +28,7 @@
 #include "cloud_client.h"
 #include "dlna.h"
 #include "lcd_ui.h"
+#include "pairband.h"
 #include "provision.h"
 #include "stream.h"
 
@@ -148,10 +149,20 @@ static void supervisor_task(void *arg)
 static void cycle_task(void *arg)
 {
     (void)arg;
+    int elapsed = 0;
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(CONFIG_STICKBOX_DLNA_CYCLE_S * 1000));
-        stream_set(stream_current() + 1);
-        ESP_LOGI(TAG, "换到第 %d 页", stream_current() + 1);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        if (!cloud_paired()) {
+            /* 还没配对：停在第 1 页，配对码条带要一直留在画面上。 */
+            if (stream_current() != 0) stream_set(0);
+            elapsed = 0;
+            continue;
+        }
+        if (++elapsed >= CONFIG_STICKBOX_DLNA_CYCLE_S) {
+            elapsed = 0;
+            stream_set(stream_current() + 1);
+            ESP_LOGI(TAG, "换到第 %d 页", stream_current() + 1);
+        }
     }
 }
 
@@ -231,8 +242,8 @@ void app_main(void)
     frames[0] = (frame_t){ f1_start, f1_end - f1_start };
     frames[1] = (frame_t){ f2_start, f2_end - f2_start };
     frames[2] = (frame_t){ f3_start, f3_end - f3_start };
-    /* T3 不发布动态条带（band_rows=0），省下两块 24KB 缓冲给 MQTT TLS。 */
-    stream_start(frames, 3, CONFIG_STICKBOX_DLNA_FPS, 0, 0);
+    /* 配对码条带占 MCU 行 46..51；未配对时停在第 1 页显示它。 */
+    stream_start(frames, 3, CONFIG_STICKBOX_DLNA_FPS, PAIR_ROW0, PAIR_ROWS);
 
     sntp_start();
     xTaskCreate(services_task, "svc", 8192, NULL, 4, NULL);

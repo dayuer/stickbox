@@ -1,7 +1,6 @@
 // Package httpapi 是纯 JSON API，没有网页。
 //
-// 行为以 docs/API-cloud-print.md 为准——固件和 App 是照那份写的，
-// 不一致时改这里，不是改文档。
+// T7 起没有手机号、短信和 App：设备注册后出配对码，agent 输码完成绑定。
 package httpapi
 
 import (
@@ -20,32 +19,40 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/usage"
 )
 
-// Invalidator 是 ACL 缓存的失效入口（由 broker.Membership 实现）。
-type Invalidator interface {
-	Invalidate(userID string)
-}
-
-// Publisher 是 httpapi 对 MQTT 的窄依赖：推 Claude 用量。
+// Publisher 是 httpapi 对 MQTT 的窄依赖：推用量、通知配对状态。
 type Publisher interface {
 	PublishUsage(dev string, payload []byte) error
+	PublishPair(dev string, payload []byte) error
 }
 
 type API struct {
 	cfg   *config.Config
 	store *store.Store
 	v     *auth.Verifier
-	phone *auth.PhoneBox
-	sms   *auth.SMS
 	reg   *registry.Registry
-	mem   Invalidator
 	pub   Publisher
 	usage *usage.Service
+
+	// 内存限流：注册、换配对码、配对失败。
+	regDev        *rateLimiter
+	regIP         *rateLimiter
+	pairCodeDev   *rateLimiter
+	pairFailIP    *rateLimiter
+	pairFailWorld *rateLimiter
 }
 
-func New(cfg *config.Config, st *store.Store, v *auth.Verifier, pb *auth.PhoneBox,
-	sms *auth.SMS, reg *registry.Registry, mem Invalidator, pub Publisher) *API {
-	return &API{cfg: cfg, store: st, v: v, phone: pb, sms: sms,
-		reg: reg, mem: mem, pub: pub, usage: usage.NewService(st, pub, time.Now)}
+func New(cfg *config.Config, st *store.Store, v *auth.Verifier,
+	reg *registry.Registry, pub Publisher) *API {
+	return &API{
+		cfg: cfg, store: st, v: v, reg: reg, pub: pub,
+		usage: usage.NewService(st, pub, time.Now),
+
+		regDev:        newRateLimiter(5, 10*time.Minute),
+		regIP:         newRateLimiter(20, 10*time.Minute),
+		pairCodeDev:   newRateLimiter(10, 10*time.Minute),
+		pairFailIP:    newRateLimiter(10, 10*time.Minute),
+		pairFailWorld: newRateLimiter(100, time.Minute),
+	}
 }
 
 // Usage 暴露用量服务，main 拿它接到 broker 上（设备订阅时补发）。
@@ -54,46 +61,28 @@ func (a *API) Usage() *usage.Service { return a.usage }
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// 不需要身份
-	mux.HandleFunc("POST /api/auth/sms", a.handleSMS)
-	mux.HandleFunc("POST /api/auth/verify", a.handleVerify)
-	mux.HandleFunc("POST /api/agent/login", a.handleAgentLogin)
+	// 设备注册不鉴权：设备还没有密钥，这正是它来领密钥的入口。
+	mux.HandleFunc("POST /api/device/register", a.handleDeviceRegister)
+	mux.Handle("POST /api/device/pair-code", a.requireDevice(a.handleDevicePairCode))
 
-	// app 角色
-	mux.Handle("POST /api/auth/logout", a.requireApp(a.handleLogout))
-	mux.Handle("POST /api/account/delete", a.requireApp(a.handleAccountDelete))
-	mux.Handle("GET /api/devices", a.requireApp(a.handleDevices))
-	mux.Handle("POST /api/device/enroll", a.requireApp(a.handleEnroll))
-	mux.Handle("POST /api/device/{dev}/unbind", a.requireApp(a.handleUnbind))
-
-	mux.Handle("GET /api/usage", a.requireApp(a.handleUsageGet))
-	mux.Handle("GET /api/agents", a.requireApp(a.handleAgents))
-	mux.Handle("POST /api/agent/{key_id}/revoke", a.requireApp(a.handleAgentRevoke))
-
-	// agent 角色（用户电脑上的 stickbox-agent）
+	// agent：pair 可选令牌（新用户不带，已有用户带着把新屏并入）。
+	mux.HandleFunc("POST /api/agent/pair", a.handleAgentPair)
+	mux.Handle("POST /api/agent/unpair", a.requireAgent(a.handleAgentUnpair))
+	mux.Handle("GET /api/agent/devices", a.requireAgent(a.handleAgentDevices))
+	mux.Handle("GET /api/agent/usage", a.requireAgent(a.handleUsageGet))
 	mux.Handle("POST /api/usage", a.requireAgent(a.handleUsagePost))
 	mux.Handle("POST /api/agent/logout", a.requireAgent(a.handleAgentLogout))
-
-	// device 角色：心跳走 MQTT，HTTP 只保留状态查询
-
-	// 两种角色都行
-	mux.Handle("GET /api/status", a.requireAny(a.handleStatus))
 
 	return drainBody(mux)
 }
 
-// 单次最多排掉多少请求体。设备自己的请求都 <4KB（SERVER-REQUIREMENTS 1.1），
-// 1MB 已经很宽松；再大就不值得为一个错误响应去读，直接关连接。
+// 单次最多排掉多少请求体。设备自己的请求都 <4KB，1MB 已经很宽松。
 const maxDrainBytes = 1 << 20
 
 // drainBody 保证带请求体的请求在响应之后把体读完。
 //
-// 这条是真踩过的故障（SERVER-REQUIREMENTS 3.1）：旧服务端对 POST 直接返回
-// 404 而不读 body，HTTP/1.1 长连接下连接失步——设备已经把 7KB 发出去了、
-// 服务端不收，客户端卡在那儿等一个读不完的响应，34 秒后连 MQTT 都跟着写
-// 超时，最后设备重启。
-//
-// 放在中间件里而不是每个 handler 各自处理：错误分支太多，漏一个就复现。
+// 这条是真踩过的故障：旧服务端对 POST 直接返回 404 而不读 body，
+// HTTP/1.1 长连接下连接失步，设备卡住直到超时重启。
 func drainBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r)
@@ -102,7 +91,6 @@ func drainBody(next http.Handler) http.Handler {
 		}
 		n, err := io.Copy(io.Discard, io.LimitReader(r.Body, maxDrainBytes))
 		if err != nil || n == maxDrainBytes {
-			// 排不完就别装作长连接还能用，让它关掉重开
 			w.Header().Set("Connection", "close")
 		}
 	})
@@ -110,13 +98,12 @@ func drainBody(next http.Handler) http.Handler {
 
 type handlerFn func(http.ResponseWriter, *http.Request, auth.Identity)
 
-func (a *API) requireApp(fn handlerFn) http.Handler    { return a.guard(fn, auth.RoleApp) }
-func (a *API) requireDevice(fn handlerFn) http.Handler { return a.guard(fn, auth.RoleDevice) }
-func (a *API) requireAgent(fn handlerFn) http.Handler  { return a.guard(fn, auth.RoleAgent) }
-
-// requireAny 是「app 或 device」，不含 agent：那些端点按 Dev / X-Device 查数据，
-// agent 的 Dev 是空串，放进去会拿空串去查。
-func (a *API) requireAny(fn handlerFn) http.Handler { return a.guard(fn, "") }
+func (a *API) requireDevice(fn handlerFn) http.Handler {
+	return a.guard(fn, auth.RoleDevice)
+}
+func (a *API) requireAgent(fn handlerFn) http.Handler {
+	return a.guard(fn, auth.RoleAgent)
+}
 
 func (a *API) guard(fn handlerFn, want auth.Role) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -131,11 +118,7 @@ func (a *API) guard(fn handlerFn, want auth.Role) http.Handler {
 			unauthorized(w)
 			return
 		}
-		if want != "" && id.Role != want {
-			unauthorized(w)
-			return
-		}
-		if want == "" && id.Role != auth.RoleApp && id.Role != auth.RoleDevice {
+		if id.Role != want {
 			unauthorized(w)
 			return
 		}
@@ -143,13 +126,13 @@ func (a *API) guard(fn handlerFn, want auth.Role) http.Handler {
 	})
 }
 
-// ownDevice 是 app 角色操作某台设备前的统一校验。
-func (a *API) ownDevice(id auth.Identity, dev string) bool {
-	if dev == "" {
+// ownsDevice 判定 agent 是否拥有这台屏。
+func (a *API) ownsDevice(userID, dev string) bool {
+	if userID == "" || dev == "" {
 		return false
 	}
 	owner, bound, err := a.store.OwnerOfDevice(dev)
-	return err == nil && bound && owner == id.UserID
+	return err == nil && bound && owner == userID
 }
 
 func bearerToken(r *http.Request) (string, bool) {
@@ -168,7 +151,7 @@ func unauthorized(w http.ResponseWriter) {
 // writeJSON 先编码再发头，为的是带上 Content-Length。
 //
 // 直接 WriteHeader 再 Encode 的话 Go 会用 chunked 传输编码，而设备用的
-// esp_http_client **不解 chunked 响应体**（SERVER-REQUIREMENTS 3.3）。
+// esp_http_client **不解 chunked 响应体**。
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -188,6 +171,15 @@ func fail(w http.ResponseWriter, code int, e, detail string) {
 		m["detail"] = detail
 	}
 	writeJSON(w, code, m)
+}
+
+// decodeJSON 读一个很小的 JSON 请求体。设备/agent 的请求都远小于 4KB。
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<12)).Decode(v); err != nil {
+		fail(w, 400, "bad request", "")
+		return false
+	}
+	return true
 }
 
 func clientIP(r *http.Request) string {

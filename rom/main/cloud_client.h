@@ -1,5 +1,9 @@
 #pragma once
+#include <stdbool.h>
 #include <stdint.h>
-/* 起云端 MQTT 长连接：发心跳（判在线）并订阅用量主题。
- * 打印链路的 HTTPS 取件 / 作业 / 档案 / 探针命令都已随打印退役。 */
+
+/* 起云端长连接：没有设备密钥先注册出配对码，然后发心跳、订阅用量与配对通知。 */
 void cloud_client_start(const uint8_t mac[6]);
+
+/* 配对是否已完成。未配对时电视停在第 1 页显示配对码。 */
+bool cloud_paired(void);

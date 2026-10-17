@@ -238,6 +238,15 @@ void lcd_ui_ip(const char *ip)     { set_str(s_st.ip, sizeof s_st.ip, ip); }
 void lcd_ui_cloud(const char *s)   { set_str(s_st.cloud, sizeof s_st.cloud, s); }
 void lcd_ui_log(const char *line)  { set_str(s_st.hint, sizeof s_st.hint, line); }
 
+void lcd_ui_pair(const char *code, bool paired)
+{
+    char b[32];
+    if (paired)                 snprintf(b, sizeof b, "已配对");
+    else if (code && code[0])   snprintf(b, sizeof b, "配对码 %s", code);
+    else                        b[0] = 0;
+    set_str(s_st.hint, sizeof s_st.hint, b);
+}
+
 void lcd_ui_tv(const char *name, const char *ip)
 {
     if (!s_mx) return;

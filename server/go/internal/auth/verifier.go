@@ -15,15 +15,14 @@ type Role string
 
 const (
 	RoleDevice Role = "device"
-	RoleApp    Role = "app"
-	// RoleAgent 是用户电脑上的 stickbox-agent：只能上报 Claude 用量，
-	// 不能打印、不能管设备、不能连 MQTT。丢了也只能往这个账号里写用量数字。
+	// RoleAgent 是用户电脑上的 stickbox-agent：上报用量、管理名下的屏。
+	// 它不能连 MQTT。
 	RoleAgent Role = "agent"
 )
 
 type Identity struct {
 	Dev    string // device 角色专用
-	UserID string // app / agent 角色专用
+	UserID string // agent 角色专用
 	Role   Role
 	KeyID  string
 }

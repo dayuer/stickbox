@@ -5,7 +5,9 @@
 #include "jband.h"
 
 #define STREAM_PORT 8080
-#define BAND_CAP (24 * 1024)  /* 时钟带编码后最坏约 21KB（88:88:88，主机实测） */
+/* T7 的配对码条带只有 6 位数字；12KB 足够，两块缓冲共 24KB，
+ * 给 MQTT TLS 留出余量。T4 做整页看板时再按需调大。 */
+#define BAND_CAP (12 * 1024)
 
 /* 预置页面：1080p baseline JPEG，DRI = 每行 MCU 数（tools/render_pages.py 生成） */
 typedef struct {

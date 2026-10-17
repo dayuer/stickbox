@@ -16,7 +16,6 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/config"
 	"github.com/dayuer/stickbox/server/go/internal/httpapi"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
-	"github.com/dayuer/stickbox/server/go/internal/sms"
 	"github.com/dayuer/stickbox/server/go/internal/store"
 	"github.com/dayuer/stickbox/server/go/internal/tlsx"
 	"github.com/dayuer/stickbox/server/go/internal/version"
@@ -56,23 +55,7 @@ func serve(cfg *config.Config) error {
 	}
 	defer st.Close()
 
-	pb, err := auth.NewPhoneBox(cfg.PhonePepper, cfg.PhoneKey)
-	if err != nil {
-		return err
-	}
-	sender, err := newSender(cfg)
-	if err != nil {
-		return err
-	}
 	v := auth.NewVerifier(st)
-	mem := broker.NewMembership(st)
-	smsSvc := auth.NewSMS(st, sender, time.Now)
-	if cfg.DevLogin.Enabled() {
-		smsSvc.SetDevLogin(pb.HMAC(cfg.DevLogin.Phone), cfg.DevLogin.Code)
-		// 每次启动都喊一遍。后门最危险的形态是「配上去之后没人记得」。
-		slog.Warn("⚠ 固定手机号登录已启用——这是登录后门，生产环境必须移除",
-			"phone", cfg.DevLogin.Phone)
-	}
 
 	reloader, err := tlsx.New(cfg.CertPath(), cfg.KeyPath())
 	if err != nil {
@@ -84,12 +67,12 @@ func serve(cfg *config.Config) error {
 	reg := registry.New(registry.Options{IdleTimeout: 120 * time.Second})
 	defer reg.Shutdown()
 
-	br, err := broker.New(cfg.MQTTAddr, reloader.Config(), v, mem, reg, st)
+	br, err := broker.New(cfg.MQTTAddr, reloader.Config(), v, reg)
 	if err != nil {
 		return err
 	}
 
-	api := httpapi.New(cfg, st, v, pb, smsSvc, reg, mem, br)
+	api := httpapi.New(cfg, st, v, reg, br)
 	// 设备订阅 usage 时补发最新一份；usage.Service 要用 broker 发消息，
 	// 所以只能在两边都构造完之后接上。
 	br.SetUsageResender(api.Usage())
@@ -134,19 +117,6 @@ func serve(cfg *config.Config) error {
 		br.Close()
 		return nil
 	}
-}
-
-func newSender(cfg *config.Config) (auth.Sender, error) {
-	if cfg.SMS.Provider == "aliyun" && cfg.SMS.AccessKeyID != "" {
-		return sms.NewAliyun(sms.AliyunConfig{
-			AccessKeyID:     cfg.SMS.AccessKeyID,
-			AccessKeySecret: cfg.SMS.AccessKeySecret,
-			SignName:        cfg.SMS.SignName,
-			TemplateCode:    cfg.SMS.TemplateCode,
-		})
-	}
-	slog.Warn("短信未配置，验证码只打日志——生产环境必须配 sms.*")
-	return sms.Logger{}, nil
 }
 
 func envOr(k, def string) string {

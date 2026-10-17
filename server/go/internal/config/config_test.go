@@ -15,7 +15,7 @@ func write(t *testing.T, body string) string {
 	return p
 }
 
-const minimal = `{"cert_dir":"/etc/le/live/x","phone_pepper":"p","phone_key":"k"}`
+const minimal = `{"cert_dir":"/etc/le/live/x"}`
 
 func TestLoadAppliesDefaults(t *testing.T) {
 	c, err := Load(write(t, minimal))
@@ -33,21 +33,14 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsMissingRequired(t *testing.T) {
-	cases := map[string]string{
-		"缺 cert_dir":     `{"phone_pepper":"p","phone_key":"k"}`,
-		"缺 phone_pepper": `{"cert_dir":"/c","phone_key":"k"}`,
-		"缺 phone_key":    `{"cert_dir":"/c","phone_pepper":"p"}`,
-	}
-	for name, body := range cases {
-		if _, err := Load(write(t, body)); err == nil {
-			t.Errorf("%s 时应当报错", name)
-		}
+func TestLoadRejectsMissingCertDir(t *testing.T) {
+	if _, err := Load(write(t, `{"root":"/srv/ap"}`)); err == nil {
+		t.Error("缺 cert_dir 时应当报错")
 	}
 }
 
 func TestDerivedPaths(t *testing.T) {
-	c, err := Load(write(t, `{"cert_dir":"/c","root":"/srv/ap","phone_pepper":"p","phone_key":"k"}`))
+	c, err := Load(write(t, `{"cert_dir":"/c","root":"/srv/ap"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,32 +58,5 @@ func TestDerivedPaths(t *testing.T) {
 func TestLoadReportsMissingFile(t *testing.T) {
 	if _, err := Load("/nope/config.json"); err == nil {
 		t.Error("配置文件不存在时应当报错")
-	}
-}
-
-func TestDevLoginValidation(t *testing.T) {
-	base := `"cert_dir":"/c","phone_pepper":"p","phone_key":"k"`
-
-	c, err := Load(write(t, `{`+base+`,"dev_login":{"phone":"13800000000","code":"123456"}}`))
-	if err != nil {
-		t.Fatalf("合法的 dev_login 被拒：%v", err)
-	}
-	if !c.DevLogin.Enabled() {
-		t.Error("Enabled() 应为 true")
-	}
-
-	if _, err := Load(write(t, `{`+base+`,"dev_login":{"phone":"13800000000","code":"123"}}`)); err == nil {
-		t.Error("验证码不是 6 位应当报错")
-	}
-
-	// 配了短信服务商就说明是生产环境，此时还留着后门是配置事故
-	if _, err := Load(write(t, `{`+base+`,"dev_login":{"phone":"13800000000","code":"123456"},`+
-		`"sms":{"provider":"aliyun","access_key_id":"x"}}`)); err == nil {
-		t.Error("dev_login 与 sms 同时配置应当拒绝启动")
-	}
-
-	c, _ = Load(write(t, `{`+base+`}`))
-	if c.DevLogin.Enabled() {
-		t.Error("没配时 Enabled() 应为 false")
 	}
 }

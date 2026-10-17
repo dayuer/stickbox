@@ -2,8 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,10 +15,9 @@ const cliUsage = `用法：
   stickboxd device list                 列出全部密钥
   stickboxd device revoke <key_id>      吊销一把密钥
   stickboxd device unbind <dev>         强制解绑（原持有人不配合时用）
-  stickboxd user list                   列出用户（只显示尾号）
-  stickboxd user phone <user_id>        解出完整号码，记审计日志
+  stickboxd user list                   列出用户
 
-正常用户走 App 的 enroll，不需要这些命令。`
+正常设备走 /api/device/register 出配对码，不需要这些命令。`
 
 // runCLI 是运维和排障用的。
 func runCLI(cfg *config.Config, args []string) error {
@@ -38,7 +35,7 @@ func runCLI(cfg *config.Config, args []string) error {
 		if dev == "" {
 			return fmt.Errorf("%s", cliUsage)
 		}
-		token, err := auth.IssueDeviceKey(st, "", dev, arg(args, 3))
+		token, _, err := auth.IssueDeviceKey(st, "", dev, arg(args, 3), false)
 		if err != nil {
 			return err
 		}
@@ -54,6 +51,8 @@ func runCLI(cfg *config.Config, args []string) error {
 			state := "启用"
 			if k.Disabled {
 				state = "已吊销"
+			} else if k.Pending {
+				state = "待配对"
 			}
 			fmt.Printf("%-12s %-7s dev=%-14s user=%-32s %-6s %s\n",
 				k.KeyID, k.Role, k.Dev, k.UserID, state, k.Name)
@@ -80,35 +79,12 @@ func runCLI(cfg *config.Config, args []string) error {
 			return err
 		}
 		for _, u := range users {
-			// 只打尾号——列表场景不需要完整号码
-			fmt.Printf("%-32s ***%s  创建=%s  最近登录=%s\n", u.ID, u.PhoneTail,
-				ts(u.Created), ts(u.LastLogin))
+			state := "启用"
+			if u.Disabled {
+				state = "停用"
+			}
+			fmt.Printf("%-32s 创建=%s  %s\n", u.ID, ts(u.Created), state)
 		}
-		return nil
-
-	// 唯一能解出完整号码的入口。每次调用记审计日志——得知道谁什么时候看过。
-	case "user phone":
-		userID := arg(args, 2)
-		if userID == "" {
-			return fmt.Errorf("%s", cliUsage)
-		}
-		pb, err := auth.NewPhoneBox(cfg.PhonePepper, cfg.PhoneKey)
-		if err != nil {
-			return err
-		}
-		enc, ok, err := st.GetPhone(userID)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return fmt.Errorf("该用户没有号码记录")
-		}
-		phone, err := pb.Open(enc)
-		if err != nil {
-			return fmt.Errorf("解密失败（phone_key 换过？）：%w", err)
-		}
-		audit(cfg, "解密查看完整号码 user=%s", userID)
-		fmt.Println(phone)
 		return nil
 	}
 	return fmt.Errorf("未知命令 %q\n\n%s", strings.Join(args, " "), cliUsage)
@@ -126,18 +102,4 @@ func ts(v int64) string {
 		return "-"
 	}
 	return time.Unix(v, 0).Format("2006-01-02 15:04")
-}
-
-// audit 记录敏感操作。写失败只打日志不中断——审计失败不该挡住运维干活，
-// 但要留下痕迹。
-func audit(cfg *config.Config, format string, a ...any) {
-	path := filepath.Join(cfg.Root, "audit.log")
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "警告：审计日志写不进 %s：%v\n", path, err)
-		return
-	}
-	defer f.Close()
-	fmt.Fprintf(f, "%s %s\n", time.Now().Format(time.RFC3339),
-		fmt.Sprintf(format, a...))
 }

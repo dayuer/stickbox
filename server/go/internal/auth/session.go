@@ -6,47 +6,42 @@ import "github.com/dayuer/stickbox/server/go/internal/store"
 type SessionStore interface {
 	InsertKey(k store.Key) error
 	DisableKey(keyID string) error
-	DisableKeysOfUser(userID, role string) ([]string, error)
 	DisableKeysOfDevice(dev, role string) ([]string, error)
+	DisableDeviceKeysExcept(dev, keepKeyID string) ([]string, error)
 }
 
-// IssueSession 为一台手机签发一把 app 令牌。
-//
-// 刻意不设过期：打印是低频操作，强制重新登录只会激怒用户。
-// 要下线就靠吊销——一台手机一把，丢了单独踢。
-func IssueSession(st SessionStore, userID, deviceName string) (string, error) {
-	return issueKey(st, store.Key{
-		Role: string(RoleApp), UserID: userID, Name: deviceName,
-	})
-}
-
-// IssueAgentKey 为用户的一台电脑签发 agent 令牌（stickbox-agent login）。
-// 同 session 一样不设过期，靠吊销下线；name 是电脑名，方便在 App 里认。
+// IssueAgentKey 为用户的一台电脑签发 agent 令牌。
+// 不设过期，靠 logout / 吊销下线；name 是电脑名。
 func IssueAgentKey(st SessionStore, userID, name string) (string, error) {
-	return issueKey(st, store.Key{
+	token, _, err := issueKey(st, store.Key{
 		Role: string(RoleAgent), UserID: userID, Name: name,
 	})
+	return token, err
 }
 
-// IssueDeviceKey 为一台桥签发 device 密钥，绑到该用户。
-// enroll 走这里，运维的 device add 也走这里。
-func IssueDeviceKey(st SessionStore, userID, dev, name string) (string, error) {
+// IssueDeviceKey 为一台屏签发 device 密钥。
+//
+// pending=true 时密钥还没完成配对：它属于 dev，但 user_id 为空，
+// 不能拿到任何用量，只能收配对通知。配对成功后由
+// store.ActivateDeviceKey 转正。
+func IssueDeviceKey(st SessionStore, userID, dev, name string, pending bool) (token, keyID string, err error) {
 	return issueKey(st, store.Key{
 		Dev: dev, Role: string(RoleDevice), UserID: userID, Name: name,
+		Pending: pending,
 	})
 }
 
-func issueKey(st SessionStore, k store.Key) (string, error) {
+func issueKey(st SessionStore, k store.Key) (token, keyID string, err error) {
 	keyID, secret, token := NewToken()
 	hash, err := HashSecret(secret)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	k.KeyID, k.Hash = keyID, hash
 	if err := st.InsertKey(k); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return token, nil
+	return token, keyID, nil
 }
 
 // RevokeSession 吊销一把。必须同时清校验缓存，否则它还能再活一小时。
@@ -58,8 +53,9 @@ func RevokeSession(st SessionStore, v *Verifier, keyID string) error {
 	return nil
 }
 
-func RevokeAllSessions(st SessionStore, v *Verifier, userID string) error {
-	ids, err := st.DisableKeysOfUser(userID, string(RoleApp))
+// RevokeDeviceKeys 吊销某台屏的全部 device 密钥。解绑走这里。
+func RevokeDeviceKeys(st SessionStore, v *Verifier, dev string) error {
+	ids, err := st.DisableKeysOfDevice(dev, string(RoleDevice))
 	if err != nil {
 		return err
 	}
@@ -69,9 +65,9 @@ func RevokeAllSessions(st SessionStore, v *Verifier, userID string) error {
 	return nil
 }
 
-// RevokeDeviceKeys 吊销某台桥的全部 device 密钥。重置设备与解绑都走这里。
-func RevokeDeviceKeys(st SessionStore, v *Verifier, dev string) error {
-	ids, err := st.DisableKeysOfDevice(dev, string(RoleDevice))
+// RevokeDeviceKeysExcept 配对转正时吊销旧主人的密钥，保留刚转正的那把。
+func RevokeDeviceKeysExcept(st SessionStore, v *Verifier, dev, keepKeyID string) error {
+	ids, err := st.DisableDeviceKeysExcept(dev, keepKeyID)
 	if err != nil {
 		return err
 	}
