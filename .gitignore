@@ -10,3 +10,6 @@ nvs.csv
 .DS_Store
 __pycache__/
 server/config.json
+
+# T13a 生成的预览/对照图（用 cmd/render-preview 现出）
+docs/design/preview/

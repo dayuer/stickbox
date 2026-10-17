@@ -60,7 +60,7 @@ func (r Report) Validate(now time.Time) error {
 	return nil
 }
 
-// DevicePayload 是推给设备的那份。字段见 docs/API-cloud-print.md 3.10。
+// DevicePayload 是推给设备的那份。字段见 docs/API.md 2.3.2。
 //
 // ts 是服务端收到这份数据的时间：设备据此显示「更新 X 分前」。
 // 不能用设备收到的时刻——重连补发会让一份很旧的数据看起来像刚到。
