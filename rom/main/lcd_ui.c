@@ -61,7 +61,9 @@ static lv_obj_t *s_cloud, *s_usage, *s_hint;
 
 static bool display_start(void)
 {
-    const lvgl_port_cfg_t pcfg = ESP_LVGL_PORT_INIT_CONFIG();
+    lvgl_port_cfg_t pcfg = ESP_LVGL_PORT_INIT_CONFIG();
+    /* T8：默认 7168 实测只用约 3.9KB；5120 仍留 1KB 以上余量。 */
+    pcfg.task_stack = 5120;
     if (lvgl_port_init(&pcfg) != ESP_OK) return false;
 
     esp_lcd_panel_handle_t panel = NULL;

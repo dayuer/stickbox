@@ -59,26 +59,57 @@ certbot 照旧。**deploy hook 不需要了**——进程按文件 mtime 自己�
 sudo touch /etc/letsencrypt/live/mqtt.stickbox.ai/fullchain.pem && sudo journalctl -u stickboxd -n 20 | grep 热重载
 ```
 
-## 4b. nginx 反代（HTTPS 不再直接暴露 9443）
+## 4b. 容器网络与 nginx 反代
 
-`compose.yml` 只把容器端口绑到 `127.0.0.1:9443`，外网 HTTPS 由宿主机
-nginx 在 443 终止 TLS，再反代到本机：
+容器用 `network_mode: host`，没有端口映射。`config.json` 里
+`http_addr` 必须是 `127.0.0.1:9443`，MQTT 仍是 `:8883`：
+
+```json
+{
+  "root": "/opt/stickbox",
+  "cert_dir": "/etc/letsencrypt/live/mqtt.stickbox.ai",
+  "http_addr": "127.0.0.1:9443",
+  "mqtt_addr": ":8883"
+}
+```
+
+```bash
+sudo mkdir -p /opt/stickbox/data
+sudo cp server/deploy/compose.yml /opt/stickbox/
+sudo cp server/config.example.json /opt/stickbox/config.json   # 改成上面的值
+sudo chmod 600 /opt/stickbox/config.json
+cd /opt/stickbox && sudo docker compose up -d
+```
+
+宿主机 nginx 在 443 终止 TLS，再反代到本机 9443（反代本身也走 TLS）。
+站点文件 `/etc/nginx/sites-available/mqtt.stickbox.ai`：
 
 ```nginx
 server {
     listen 443 ssl http2;
+    listen [::]:443 ssl http2;
     server_name mqtt.stickbox.ai;
 
-    ssl_certificate     /etc/letsencrypt/live/mqtt.stickbox.ai/fullchain.pem;
+    ssl_certificate /etc/letsencrypt/live/mqtt.stickbox.ai/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/mqtt.stickbox.ai/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    client_max_body_size 32k;
 
     location /api/ {
-        proxy_pass http://127.0.0.1:9443;
+        proxy_pass https://127.0.0.1:9443;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        # 覆盖写，不追加：服务端只在来源是回环时信这个头
         proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 30s;
+    }
+
+    location / {
+        return 404;
     }
 }
 ```
@@ -88,11 +119,15 @@ sudo ln -s /etc/nginx/sites-available/mqtt.stickbox.ai /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-服务端 `clientIP` 只在 `RemoteAddr` 是 `127.0.0.1`/`::1` 时采用
-`X-Forwarded-For`，其余来源一律忽略该头；IPv6 按 /64 作为限流键。
+要点：
 
-> **T6**：服务器上的 `/etc/nginx/sites-available/mqtt.stickbox.ai` 是最终
-> 版本，如与本段不同，以服务器文件为准并原样抄回这里。
+- **不写 80 端口的 server**。证书走 webroot 续期，80 端口的隐式默认
+  server（`conf.d/handmake.ai.conf`）已经给所有主机名提供 acme-challenge。
+- XFF 用 `$remote_addr` **覆盖写**，不追加。服务端 `clientIP` 只在
+  `RemoteAddr` 是 `127.0.0.1`/`::1` 时采用 `X-Forwarded-For`，
+  其余来源一律忽略该头；IPv6 按 /64 作为限流键。
+- 容器用 host 网络正是为了让容器看到的来源是回环地址；桥接网络里
+  会是 docker 网关（如 `172.21.0.1`），XFF 逻辑不会生效。
 
 ## 5. 备份
 
@@ -127,10 +162,10 @@ chown -R stickbox:stickbox /opt/stickbox && systemctl restart stickboxd
 ```bash
 sudo systemctl stop stickbox-job.service mosquitto.service
 sudo systemctl disable mosquitto.service
-sudo cp server/stickboxd.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now stickboxd.service
 ```
+
+然后按 4b 用 Docker Compose 起 `stickboxd`。`server/stickboxd.service`
+只保留给不用 Docker 的部署，生产不再使用它。
 
 打印功能在本次切换中整条退役。**MQTT 主题前缀仍然叫 `printer/{dev}/…`**：
 固件、ACL、部署校验脚本都按这个约定写好了，改名没有收益。现在只使用

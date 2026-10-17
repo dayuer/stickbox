@@ -104,10 +104,18 @@ static void supervisor_task(void *arg)
     char url[64];
     int backoff = CONFIG_STICKBOX_DLNA_REPUSH_IDLE_S;
     int64_t pushed_at = 0;
+    int64_t last_stat = 0;
 
     while (1) {
         xEventGroupWaitBits(s_evt, EVT_GOT_IP, pdFALSE, pdFALSE, portMAX_DELAY);
         int64_t now = esp_timer_get_time();
+        if (now - last_stat >= 60LL * 1000000) {
+            last_stat = now;
+            ESP_LOGI(TAG, "推流统计 frames=%lu clients=%d heap=%u min=%u",
+                     (unsigned long)stream_frames_sent(), stream_clients(),
+                     (unsigned)esp_get_free_heap_size(),
+                     (unsigned)esp_get_minimum_free_heap_size());
+        }
         int64_t last = stream_last_active_us();
         bool streaming = stream_clients() > 0 && now - last < 5000000;
         bool idle_long = !streaming &&
@@ -247,7 +255,8 @@ void app_main(void)
 
     sntp_start();
     xTaskCreate(services_task, "svc", 8192, NULL, 4, NULL);
-    xTaskCreate(supervisor_task, "dlna_sup", 6144, NULL, 4, NULL);
+    /* T8：实测栈余量 3.0KB，4096 仍留约 1KB。 */
+    xTaskCreate(supervisor_task, "dlna_sup", 4096, NULL, 4, NULL);
     if (CONFIG_STICKBOX_DLNA_CYCLE_S > 0)
         /* 4096：cycle_task 每 10 秒打一条 ESP_LOGI，而 netlog 装上的
          * vprintf 钩子会在调用任务栈上再拼一次日志——2048 实测会爆栈。 */
