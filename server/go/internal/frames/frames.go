@@ -93,6 +93,8 @@ type Options struct {
 	StaleAfter        time.Duration // 超过这么久没上报就重渲一次（更新「X 分前」）
 	StaleCheck        time.Duration // 检查跨天/过期的频率
 	Now               func() time.Time
+	// After 是防抖计时器；测试注入假时钟，默认 time.After。
+	After func(time.Duration) <-chan time.Time
 }
 
 type cached struct {
@@ -159,6 +161,9 @@ func New(root string, st Store, us Usage, pub Publisher, b Builder, opt Options)
 	}
 	if opt.Now == nil {
 		opt.Now = time.Now
+	}
+	if opt.After == nil {
+		opt.After = time.After
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
@@ -279,28 +284,27 @@ func (s *Service) workerLoop(ctx context.Context, userID string, w *worker) {
 
 		// 防抖：窗口内再来标脏就重置计时，合并成一次渲染。
 		// maxWait 是硬上限：持续每 2 秒上报时不能无限重置、永远不出帧。
-		start := time.Now()
+		start := s.opt.Now()
 		wait := s.opt.Debounce
 		if wait > s.opt.MaxWait {
 			wait = s.opt.MaxWait
 		}
 	debounce:
 		for {
-			timer := time.NewTimer(wait)
+			timer := s.opt.After(wait)
 			select {
 			case <-ctx.Done():
-				timer.Stop()
 				return
 			case <-w.ch:
-				timer.Stop()
-				if time.Since(start) >= s.opt.MaxWait {
+				if since := s.opt.Now().Sub(start); since >= s.opt.MaxWait {
 					break debounce
+				} else {
+					wait = s.opt.Debounce
+					if remaining := s.opt.MaxWait - since; remaining < wait {
+						wait = remaining
+					}
 				}
-				wait = s.opt.Debounce
-				if remaining := s.opt.MaxWait - time.Since(start); remaining < wait {
-					wait = remaining
-				}
-			case <-timer.C:
+			case <-timer:
 				break debounce
 			}
 		}

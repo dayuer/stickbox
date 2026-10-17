@@ -15,6 +15,7 @@ import (
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/broker"
+	"github.com/dayuer/stickbox/server/go/internal/command"
 	"github.com/dayuer/stickbox/server/go/internal/config"
 	"github.com/dayuer/stickbox/server/go/internal/frames"
 	"github.com/dayuer/stickbox/server/go/internal/httpapi"
@@ -104,6 +105,15 @@ func serve(cfg *config.Config) error {
 	dailyCtx, dailyStop := context.WithCancel(context.Background())
 	defer dailyStop()
 	go fs.Run(dailyCtx)
+
+	// 下行指令的确认跟踪：带 cid 下发，设备应用完回 ACK，没收到就重投。
+	// presence 用 registry——设备离线时不重投，发出去也没人收，白烧重试
+	// 预算；等它上线再补（T18）。
+	cmdTracker := command.New(br, reg)
+	br.SetCommandTracker(cmdTracker)
+	cmdDone := make(chan struct{})
+	defer close(cmdDone)
+	go cmdTracker.Run(cmdDone)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,

@@ -145,6 +145,82 @@ func TestInvalidateDropsCache(t *testing.T) {
 
 // 重连风暴：几十个并发校验不能把内存打爆，也不能出错。
 // 信号量把同时进行的 argon2 限制在 8 个以内。
+// blockingKeys 让第一次 KeyByID 卡在半路，模拟「Verify 已读到旧状态、
+// 正在跑 argon2 时配对转正」的竞态。
+type blockingKeys struct {
+	mu      sync.Mutex
+	key     store.Key
+	reads   int
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (f *blockingKeys) KeyByID(string) (store.Key, bool, error) {
+	f.mu.Lock()
+	k := f.key
+	f.reads++
+	first := f.reads == 1
+	f.mu.Unlock()
+	if first {
+		close(f.entered)
+		<-f.release
+	}
+	return k, true, nil
+}
+
+// 设备连接与配对同时发生时，Verify 可能读到 pending 并正在算 argon2；
+// 此时配对转正并 Invalidate。旧实现会在 Invalidate 之后把 pending 身份
+// 写回缓存，之后一小时的重连全部被当成待配对。修复后必须重新查库。
+func TestVerifyDoesNotCacheIdentityInvalidatedMidFlight(t *testing.T) {
+	keyID, secret, token := NewToken()
+	h, err := HashSecret(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &blockingKeys{
+		key: store.Key{KeyID: keyID, Dev: "dev1", Role: string(RoleDevice),
+			Hash: h, Pending: true},
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	v := NewVerifier(f)
+
+	type result struct {
+		id  Identity
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		id, err := v.Verify(token)
+		done <- result{id, err}
+	}()
+	<-f.entered // Verify 已经读到 pending
+
+	// 配对转正 + 缓存失效，然后放行这次校验。
+	f.mu.Lock()
+	k := f.key
+	k.Pending = false
+	k.UserID = "u1"
+	f.key = k
+	f.mu.Unlock()
+	v.Invalidate(keyID)
+	close(f.release)
+
+	got := <-done
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if got.id.Pending || got.id.UserID != "u1" {
+		t.Fatalf("正在进行的校验返回了旧身份 %+v，期望已转正", got.id)
+	}
+	if f.reads < 2 {
+		t.Errorf("转正后应重新查库，reads=%d", f.reads)
+	}
+	if id, err := v.Verify(token); err != nil || id.Pending {
+		t.Fatalf("后续校验 = %+v, %v；缓存里残留了 pending", id, err)
+	}
+}
+
 func TestVerifyConcurrentIsBounded(t *testing.T) {
 	v, _, token := newFixture(t)
 	var wg sync.WaitGroup

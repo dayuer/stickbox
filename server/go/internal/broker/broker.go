@@ -20,6 +20,12 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 )
 
+// CommandTracker 是 broker 对下行确认跟踪的窄依赖（见 internal/command）。
+type CommandTracker interface {
+	Send(dev, topic string, payload []byte, retain bool) (string, error)
+	Ack(dev, cid string, ok bool, errMsg string)
+}
+
 // idTable 记住每条连接校验通过的身份，ACL 判定直接取，不重复跑 argon2。
 //
 // 键必须是**连接**而不是 client id。设备重连时 client id 不变，mochi 会做
@@ -39,20 +45,41 @@ func newIDTable() *idTable { return &idTable{m: map[*mqtt.Client]auth.Identity{}
 // admit 在持有锁时完成「检查 + 登记」，避免 pending 和 active 同时
 // 连接时都通过检查、随后互相顶号。
 //
-// pending 身份不能顶掉已在线 active 连接；active 可以接管 pending
-// （合法设备重新上线时这是正常的）。
+// pending 身份不能用**同一个 client ID** 顶掉已在线 active 连接；
+// active 可以接管 pending（合法设备重新上线时这是正常的）。
+// 不同 client ID 的 pending 连接不会触发 MQTT 会话接管，只受 ACL 限制
+// （它读不到 usage/frame/ack），所以不拦——T18 的伪造 ACK 测试依赖这一点。
 func (t *idTable) admit(cl *mqtt.Client, id auth.Identity) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if id.Role == auth.RoleDevice && id.Pending {
-		for _, cur := range t.m {
-			if cur.Role == auth.RoleDevice && cur.Dev == id.Dev && !cur.Pending {
+		for cur, curID := range t.m {
+			if curID.Role == auth.RoleDevice && curID.Dev == id.Dev &&
+				!curID.Pending && cur.ID == cl.ID {
 				return false
 			}
 		}
 	}
 	t.m[cl] = id
 	return true
+}
+
+// dropWhere 移除满足 match 的身份，返回对应的连接。
+//
+// 用于「密钥已经被 CLI 吊销，但连接还挂着」：CLI 直接改库、不和 broker
+// 同进程，没法主动踢线；下一次认证或心跳时由这里把失效身份清掉。
+func (t *idTable) dropWhere(match func(auth.Identity) bool) []*mqtt.Client {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var out []*mqtt.Client
+	for cl, id := range t.m {
+		if !match(id) {
+			continue
+		}
+		delete(t.m, cl)
+		out = append(out, cl)
+	}
+	return out
 }
 
 // put 只给测试夹具直接登记身份用；生产路径走 admit。
@@ -79,6 +106,7 @@ type Broker struct {
 	srv     *mqtt.Server
 	hook    *Hook
 	healthy atomic.Bool
+	cmd     CommandTracker
 }
 
 func New(addr string, tlsCfg *tls.Config, v *auth.Verifier, r Router) (*Broker, error) {
@@ -134,16 +162,44 @@ func (b *Broker) ClientCount() int {
 	return n
 }
 
+// PublishRaw 是不带 cid、不跟踪确认的底层发布。command.Tracker 用它，
+// 其余地方一律走下面两个带确认的入口。
+func (b *Broker) PublishRaw(topic string, payload []byte, retain bool) error {
+	return b.srv.Publish(topic, payload, retain, 1)
+}
+
 // PublishUsage 推 Claude 用量。retain=0：payload 里的 now 是现场盖的，
 // 留着会过期；设备重连时由 OnSubscribed 触发补发一份新的（见 usage 包）。
+//
+// 经 command.Tracker 下发：带 cid，设备应用完回 ACK，没收到就重投。
+// QoS1 只保证投到设备的 MQTT 栈，不保证它真的应用了（T18）。
 func (b *Broker) PublishUsage(dev string, payload []byte) error {
-	return b.srv.Publish(fmt.Sprintf("printer/%s/usage", dev), payload, false, 1)
+	return b.send(dev, fmt.Sprintf("printer/%s/usage", dev), payload, false)
 }
 
 // PublishPair 通知设备配对状态。retain=1：设备离线时错过配对，
 // 重连后仍能拿到「已配对 / 已解绑」的当前状态。
+//
+// retain 和 T18 的重投是两件事：retain 解决「重连能拿到最后状态」，
+// 重投解决「收到了但没应用」。两者都要。
 func (b *Broker) PublishPair(dev string, payload []byte) error {
-	return b.srv.Publish(fmt.Sprintf("printer/%s/pair", dev), payload, true, 1)
+	return b.send(dev, fmt.Sprintf("printer/%s/pair", dev), payload, true)
+}
+
+// send 有 tracker 就走带确认的路，没有就退回裸发布（测试里、或还没接上时）。
+func (b *Broker) send(dev, topic string, payload []byte, retain bool) error {
+	if b.cmd == nil {
+		return b.PublishRaw(topic, payload, retain)
+	}
+	_, err := b.cmd.Send(dev, topic, payload, retain)
+	return err
+}
+
+// SetCommandTracker 接上下行指令的确认跟踪。用 setter 的原因同
+// SetUsageResender：tracker 要用 broker 发消息，构造时还没有 broker。
+func (b *Broker) SetCommandTracker(c CommandTracker) {
+	b.cmd = c
+	b.hook.cmd = c
 }
 
 // KickDevice 断开这台设备的全部 MQTT 连接。

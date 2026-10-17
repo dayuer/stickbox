@@ -25,6 +25,7 @@ import (
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/broker"
+	"github.com/dayuer/stickbox/server/go/internal/command"
 	"github.com/dayuer/stickbox/server/go/internal/config"
 	"github.com/dayuer/stickbox/server/go/internal/frames"
 	"github.com/dayuer/stickbox/server/go/internal/httpapi"
@@ -40,6 +41,7 @@ type env struct {
 	mqttAddr string
 	store    *store.Store
 	client   *http.Client
+	cmd      *command.Tracker
 }
 
 // startServer 起一套真的：内嵌 broker + HTTPS，自签证书，端口交给内核分配。
@@ -101,6 +103,12 @@ func startServerAt(t *testing.T, dir string) (*env, func()) {
 	api.SetFrames(fs)
 	br.SetFrameResender(fs)
 
+	// T18：下行指令走确认跟踪，和 main.go 的接法一致，让集成测试走真实路径。
+	cmdTracker := command.New(br, reg)
+	br.SetCommandTracker(cmdTracker)
+	cmdDone := make(chan struct{})
+	t.Cleanup(func() { close(cmdDone) })
+	go cmdTracker.Run(cmdDone)
 	ln, err := tls.Listen("tcp", freeAddr(t), reloader.Config())
 	if err != nil {
 		t.Fatal(err)
@@ -122,7 +130,7 @@ func startServerAt(t *testing.T, dir string) (*env, func()) {
 
 	return &env{
 		t: t, httpBase: "https://" + ln.Addr().String(), mqttAddr: mqttAddr,
-		store: st,
+		store: st, cmd: cmdTracker,
 		client: &http.Client{Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // 仅测试
 		}},
@@ -285,9 +293,19 @@ func (e *env) connectDevice(dev, key string) *fakeDevice {
 }
 
 func (e *env) tryConnectDevice(dev, key string) (*fakeDevice, error) {
+	return e.tryConnectDeviceAs(dev, key, dev)
+}
+
+// tryConnectDeviceAs 用指定的 client id 连接。
+//
+// 为什么需要它：MQTT 的会话接管按 client id 算，同 id 的新连接会把旧的踢掉。
+// 测「pending 密钥不能写 ack」时如果两边用同一个 client id，合法设备会先被
+// 顶掉，测出来的是顶号而不是 ACL。顶号本身是另一个问题（已单独报），
+// 这条测试要把它隔离开。
+func (e *env) tryConnectDeviceAs(dev, key, clientID string) (*fakeDevice, error) {
 	opts := paho.NewClientOptions().
 		AddBroker("ssl://" + e.mqttAddr).
-		SetClientID(dev).
+		SetClientID(clientID).
 		SetUsername(dev).
 		SetPassword(key).
 		SetTLSConfig(&tls.Config{InsecureSkipVerify: true}).
@@ -443,6 +461,52 @@ func (d *fakeDevice) heartbeat() {
 }
 
 func (d *fakeDevice) disconnect() { d.c.Disconnect(100) }
+
+// publishAck 发回执并返回 publish 的错误（ACL 拒绝时用得上）。
+func (d *fakeDevice) publishAck(cid string, ok bool, errMsg string) error {
+	n := 0
+	if ok {
+		n = 1
+	}
+	p := fmt.Sprintf(`{"cid":%q,"ok":%d}`, cid, n)
+	if errMsg != "" {
+		p = fmt.Sprintf(`{"cid":%q,"ok":%d,"e":%q}`, cid, n, errMsg)
+	}
+	tk := d.c.Publish("printer/"+d.dev+"/ack", 1, false, p)
+	if !tk.WaitTimeout(3 * time.Second) {
+		return fmt.Errorf("publish 超时")
+	}
+	return tk.Error()
+}
+
+// ack 回一条指令回执，模拟设备「应用完成」。
+func (d *fakeDevice) ack(cid string, ok bool, errMsg string) {
+	n := 0
+	if ok {
+		n = 1
+	}
+	p := fmt.Sprintf(`{"cid":%q,"ok":%d}`, cid, n)
+	if errMsg != "" {
+		p = fmt.Sprintf(`{"cid":%q,"ok":%d,"e":%q}`, cid, n, errMsg)
+	}
+	tk := d.c.Publish("printer/"+d.dev+"/ack", 1, false, p)
+	tk.WaitTimeout(3 * time.Second)
+}
+
+// cidOf 取出下行消息里的 cid。没有 cid 的指令设备无从确认。
+func cidOf(t *testing.T, payload []byte) string {
+	t.Helper()
+	var m struct {
+		CID string `json:"cid"`
+	}
+	if err := json.Unmarshal(payload, &m); err != nil {
+		t.Fatalf("下行不是 JSON：%s", payload)
+	}
+	if m.CID == "" {
+		t.Fatalf("下行缺 cid，设备无从回执：%s", payload)
+	}
+	return m.CID
+}
 
 func (d *fakeDevice) waitUsage(timeout time.Duration) []byte {
 	d.t.Helper()
