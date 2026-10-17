@@ -55,6 +55,8 @@ type API struct {
 	pairCodeDev   *rateLimiter
 	pairFailIP    *rateLimiter
 	pairFailWorld *rateLimiter
+	// 崩溃包：每台设备每小时一次。正常设备开机传一次就擦了。
+	coredumpDev *rateLimiter
 }
 
 func New(cfg *config.Config, st *store.Store, v *auth.Verifier,
@@ -68,6 +70,7 @@ func New(cfg *config.Config, st *store.Store, v *auth.Verifier,
 		pairCodeDev:   newRateLimiter("pair_code_dev", 10, 10*time.Minute),
 		pairFailIP:    newRateLimiter("pair_fail_ip", 10, 10*time.Minute),
 		pairFailWorld: newRateLimiter("pair_fail_world", 100, time.Minute),
+		coredumpDev:   newRateLimiter("coredump_dev", 1, time.Hour),
 	}
 }
 
@@ -92,6 +95,10 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /api/device/register", a.handleDeviceRegister)
 	mux.Handle("POST /api/device/pair-code", a.requireDevice(a.handleDevicePairCode))
 	mux.Handle("GET /api/device/frame", a.requireDevice(a.handleDeviceFrame))
+	mux.Handle("GET /api/device/firmware", a.requireDevice(a.handleDeviceFirmware))
+	// 固件二进制不鉴权：开源硬件，bin 本身不是秘密，防篡改靠签名不靠访问控制。
+	mux.HandleFunc("GET /fw/{name}", a.handleFirmwareFile)
+	mux.Handle("POST /api/device/coredump", a.requireDevice(a.handleDeviceCoredump))
 
 	// agent：pair 可选令牌（新用户不带，已有用户带着把新屏并入）。
 	mux.HandleFunc("POST /api/agent/pair", a.handleAgentPair)
@@ -99,6 +106,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/agent/devices", a.requireAgent(a.handleAgentDevices))
 	mux.Handle("GET /api/agent/usage", a.requireAgent(a.handleUsageGet))
 	mux.Handle("POST /api/usage", a.requireAgent(a.handleUsagePost))
+	mux.Handle("GET /api/agent/coredumps", a.requireAgent(a.handleAgentCoredumps))
 	mux.Handle("POST /api/agent/logout", a.requireAgent(a.handleAgentLogout))
 
 	return drainBody(mux)

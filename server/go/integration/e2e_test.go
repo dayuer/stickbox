@@ -468,3 +468,146 @@ func TestEndToEndPendingConnectRateLimited(t *testing.T) {
 		t.Fatal("第 7 次 pending 连接没有被限流")
 	}
 }
+
+// —— T18：下行指令必须拿到设备的明确确认 ——
+//
+// 热修之后配对流程多了一步：配对成功 → 服务端踢掉旧连接（旧身份是
+// pending）→ 设备以转正身份重连 → 收到 retained 的 paired=true。
+// pair 的 ACK 要在重连之后才发得出去——pending 密钥按 ACL 不能写 ack。
+
+// pairAndReconnect 走完整流程，返回转正后已订阅 pair 的连接和 agent 令牌。
+func pairAndReconnect(t *testing.T, e *env, dev, devKey, code string) (*fakeDevice, string) {
+	t.Helper()
+	d := e.connectDevice(dev, devKey)
+	d.heartbeat()
+	if err := d.subscribePair(); err != nil {
+		t.Fatalf("订阅配对 = %v", err)
+	}
+	agentTok, _, _ := e.pair(code, "")
+
+	time.Sleep(500 * time.Millisecond)
+	d.disconnect()
+	d = e.connectDevice(dev, devKey)
+	if err := d.subscribePair(); err != nil {
+		t.Fatalf("重连订阅配对 = %v", err)
+	}
+	return d, agentTok
+}
+
+// 设备转正重连后收到 retained 的 paired=true，确认它，服务端结案。
+func TestEndToEndPairAckAfterReconnect(t *testing.T) {
+	e := startServer(t)
+	devKey, code := e.register("f412fa87c9e0")
+	dev, _ := pairAndReconnect(t, e, "f412fa87c9e0", devKey, code)
+
+	cid := cidOf(t, dev.waitPair(5*time.Second))
+	dev.ack(cid, true, "")
+
+	waitPendingZero(t, e, "f412fa87c9e0")
+	if o, ok := e.cmd.LastOutcome("f412fa87c9e0"); !ok || !o.OK {
+		t.Errorf("结局 = %+v ok=%v", o, ok)
+	}
+}
+
+// 用量下行带 cid，设备确认后服务端结案、不再重投。
+func TestEndToEndUsageAckClearsPending(t *testing.T) {
+	e := startServer(t)
+	devKey, code := e.register("f412fa87c9e0")
+	dev, agentTok := pairAndReconnect(t, e, "f412fa87c9e0", devKey, code)
+	dev.ack(cidOf(t, dev.waitPair(5*time.Second)), true, "")
+	if err := dev.subscribeUsage(); err != nil {
+		t.Fatalf("转正后订阅用量 = %v", err)
+	}
+
+	e.reportUsage(agentTok, usageReport(time.Now(), 12.5))
+	cid := cidOf(t, dev.waitUsage(5*time.Second))
+	if e.cmd.Pending("f412fa87c9e0") == 0 {
+		t.Error("下行之后应当有待确认的指令")
+	}
+	dev.ack(cid, true, "")
+	waitPendingZero(t, e, "f412fa87c9e0")
+}
+
+// 设备回 ok=0（刻意不应用）是永久失败，立即结案不再重投。
+func TestEndToEndNackStopsRetry(t *testing.T) {
+	e := startServer(t)
+	devKey, code := e.register("f412fa87c9e0")
+	dev, _ := pairAndReconnect(t, e, "f412fa87c9e0", devKey, code)
+
+	cid := cidOf(t, dev.waitPair(5*time.Second))
+	dev.ack(cid, false, "stale_key")
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if o, ok := e.cmd.LastOutcome("f412fa87c9e0"); ok && !o.OK {
+			if o.Err != "stale_key" {
+				t.Errorf("err = %q，期望 stale_key", o.Err)
+			}
+			if n := e.cmd.Pending("f412fa87c9e0"); n != 0 {
+				t.Errorf("ok=0 之后还挂着 %d 条", n)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Error("没等到 ok=0 的结局")
+}
+
+// 重复投递：同一 cid 确认两次，服务端不能乱。
+// 设备侧的幂等（同一 cid 只应用一次）在固件里，这里验服务端这半边。
+func TestEndToEndDuplicateAckIsHarmless(t *testing.T) {
+	e := startServer(t)
+	devKey, code := e.register("f412fa87c9e0")
+	dev, _ := pairAndReconnect(t, e, "f412fa87c9e0", devKey, code)
+
+	cid := cidOf(t, dev.waitPair(5*time.Second))
+	dev.ack(cid, true, "")
+	dev.ack(cid, true, "") // 重投撞上在途回执时会出现
+
+	waitPendingZero(t, e, "f412fa87c9e0")
+}
+
+// pending 密钥不能替受害设备伪造回执——它的 dev 和受害设备完全一样，
+// 而 tracker 只比对 dev，全靠 ACL 这一道。
+func TestEndToEndPendingKeyCannotForgeAck(t *testing.T) {
+	e := startServer(t)
+	devKey, code := e.register("f412fa87c9e0")
+	dev, _ := pairAndReconnect(t, e, "f412fa87c9e0", devKey, code)
+	cid := cidOf(t, dev.waitPair(5*time.Second))
+
+	// 知道 MAC 的人注册一把 pending 密钥，连上来想替它回执。
+	// 用不同的 client id：同 id 会触发 MQTT 会话接管，把合法设备顶掉，
+	// 那测的就是顶号而不是 ACL（顶号是另一个问题，已单独报）。
+	pendingKey, _ := e.register("f412fa87c9e0")
+	imp, err := e.tryConnectDeviceAs("f412fa87c9e0", pendingKey, "f412fa87c9e0-imp")
+	if err != nil {
+		t.Fatalf("pending 密钥连不上：%v", err)
+	}
+	if !dev.c.IsConnected() {
+		t.Fatal("合法设备被顶掉了，这条测的就不是 ACL 了")
+	}
+	if err := imp.publishAck(cid, true, ""); err == nil {
+		// paho 的 publish 不一定报错（ACL 拒绝时 broker 可能静默丢弃），
+		// 真正的判据是服务端有没有被骗——下面那条。
+		t.Log("pending 的 publish 没报错，继续看服务端是否被骗")
+	}
+	time.Sleep(500 * time.Millisecond)
+	if n := e.cmd.Pending("f412fa87c9e0"); n != 1 {
+		t.Fatalf("待确认 = %d，pending 密钥把受害设备的指令结案了", n)
+	}
+	// 真正的设备仍能正常确认。
+	dev.ack(cid, true, "")
+	waitPendingZero(t, e, "f412fa87c9e0")
+}
+
+func waitPendingZero(t *testing.T, e *env, dev string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if e.cmd.Pending(dev) == 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("%s 仍有 %d 条待确认", dev, e.cmd.Pending(dev))
+}

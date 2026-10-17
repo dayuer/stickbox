@@ -1,9 +1,13 @@
 #pragma once
 /* 复制成 cloud_creds.h 后填自己的值。cloud_creds.h 不入库。
  *
- * 这里只放【地址】，不放口令。
- * 设备密钥是设备自己调 /api/device/register 领的，配对后写进 NVS
- * 的 cloud/devkey ——绝不编译进固件。
+ * 这里是服务器地址的【默认值】，不是唯一来源。运行期优先用配网页写进 NVS
+ * 的自托管地址（namespace "cloud" / key "mqtt_uri"、"api_base"），没配过才
+ * 回落到这里。所以官方预编译固件开箱即用，自托管的人在配网页改一次就行，
+ * 不需要装 ESP-IDF 自己编译。见 docs/PRODUCT.md 4.1。
+ *
+ * 这里不放口令。设备密钥是设备自己调 /api/device/register 领的，配对后写进
+ * NVS 的 cloud/devkey ——绝不编译进固件。
  *
  * 本机联调可以对自签证书的服务端临时加一行：
  *   #define STICKBOX_INSECURE_TLS 1

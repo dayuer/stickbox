@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"time"
@@ -45,6 +46,8 @@ type Hook struct {
 	usage UsageResender
 	frame FrameResender
 	pair  PairResender
+	// cmd 为 nil 时不处理 ACK（同上）。
+	cmd CommandTracker
 	// pending 限制同一 dev 的 pending 连接频率。
 	pending *pendingLimiter
 }
@@ -97,31 +100,32 @@ func (h *Hook) OnConnectAuthenticate(cl *mqtt.Client, pk packets.Packet) bool {
 			slog.Warn("pending 连接试图顶掉在线设备", "dev", id.Dev, "remote", cl.Net.Remote)
 			return false
 		}
-		h.evictStale(id.Dev)
+		h.evictStale(cl.ID)
 		return true
 	}
 	if !h.ids.admit(cl, id) {
 		return false
 	}
-	h.evictStale(id.Dev)
+	h.evictStale(cl.ID)
 	return true
 }
 
-// evictStale 在 mochi 走会话接管之前，把同 client ID 的旧连接踢掉并等它
-// 从 Clients 里消失。
+// evictStale 在 mochi 走会话接管之前，把**同一个 client ID** 的旧连接
+// 踢掉并等它从 Clients 里消失。不能按 dev 找：pending 密钥用不同的
+// client ID 连上来时，按 dev 找会误踢在线的合法设备。
 //
 // mochi v2.7.9 的 inheritClientSession 有竞态：被顶掉的旧连接可能在
 // isTakenOver 置位之前进入清理流程，于是它在 Clients.Add(新连接) 之后
 // 仍会按 client ID 执行 Clients.Delete，把新连接从路由表里删掉。表现是
 // 连接没断、订阅也 SUBACK 了，但之后所有消息都送不到，直到设备重连。
 // 先同步踢掉旧连接并等它清完，新连接就不会再走接管路径。
-func (h *Hook) evictStale(dev string) {
+func (h *Hook) evictStale(clientID string) {
 	if h.srv == nil {
 		return
 	}
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for {
-		old, ok := h.srv.Clients.Get(dev)
+		old, ok := h.srv.Clients.Get(clientID)
 		if !ok || old.Net.Inline {
 			return
 		}
@@ -132,7 +136,7 @@ func (h *Hook) evictStale(dev string) {
 		}
 		_ = h.srv.DisconnectClient(old, packets.ErrSessionTakenOver)
 		if !time.Now().Before(deadline) {
-			slog.Warn("旧连接未在期限内退出", "dev", dev)
+			slog.Warn("旧连接未在期限内退出", "client", clientID)
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -198,15 +202,34 @@ func (h *Hook) OnDisconnect(cl *mqtt.Client, err error, expire bool) {
 //
 // topic 是经过 ACL 校验的，dev 一律从 topic 取；payload 内容不参与判断。
 func (h *Hook) OnPublished(cl *mqtt.Client, pk packets.Packet) {
-	if h.router == nil {
-		return
-	}
 	parts := strings.Split(pk.TopicName, "/")
-	if len(parts) != 3 || parts[0] != "printer" || parts[2] != "status" {
+	if len(parts) != 3 || parts[0] != "printer" || !auth.ValidDev(parts[1]) {
 		return
 	}
-	if !auth.ValidDev(parts[1]) {
+	switch parts[2] {
+	case "status":
+		if h.router != nil {
+			h.router.Seen(parts[1])
+		}
+	case "ack":
+		h.onAck(parts[1], pk.Payload)
+	}
+}
+
+// onAck 处理设备回执。设备说 ok=0 表示「收到了但刻意不应用」，那是永久
+// 失败，tracker 会立即结案而不是继续重投同样会失败的东西。
+func (h *Hook) onAck(dev string, payload []byte) {
+	if h.cmd == nil {
 		return
 	}
-	h.router.Seen(parts[1])
+	var a struct {
+		CID string `json:"cid"`
+		OK  int    `json:"ok"`
+		Err string `json:"e"`
+	}
+	if err := json.Unmarshal(payload, &a); err != nil || a.CID == "" {
+		slog.Warn("ACK 不是合法 JSON 或缺 cid", "dev", dev)
+		return
+	}
+	h.cmd.Ack(dev, a.CID, a.OK == 1, a.Err)
 }

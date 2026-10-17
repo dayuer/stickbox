@@ -1,0 +1,134 @@
+# 打 v* tag 时发布：
+#   - 固件（ESP-IDF 5.5 容器，OTA 签名）
+#   - stickboxd Docker 镜像（ghcr.io/<owner>/stickboxd:<tag>）
+#   - stickbox-agent 六平台二进制 + SHA256SUMS
+#
+# 仓库 secret：OTA_SIGNING_KEY（PEM 私钥全文）。
+# 详见 docs/RELEASE.md。所有 action 钉到 commit SHA。
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: 检出
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: 检查发布配置
+        run: |
+          set -euo pipefail
+          test -f rom/sdkconfig.release || {
+            echo "::error::rom/sdkconfig.release 不存在：T9/M0 尚未合并，发布构建无法开启 OTA 签名"
+            exit 1
+          }
+          grep -q 'ota_0' rom/partitions.csv && grep -q 'ota_1' rom/partitions.csv || {
+            echo "::error::rom/partitions.csv 没有 ota_0/ota_1：T9/M0 的分区表尚未合并"
+            exit 1
+          }
+          test -n "${OTA_SIGNING_KEY:-}" || {
+            echo "::error::缺少仓库 secret OTA_SIGNING_KEY"
+            exit 1
+          }
+        env:
+          OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY }}
+
+      - name: 构建固件（ESP-IDF 5.5 容器）
+        run: |
+          set -euo pipefail
+          KEY_FILE="$(mktemp)"
+          trap 'rm -f "$KEY_FILE"' EXIT
+          printf '%s' "$OTA_SIGNING_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+
+          docker run --rm \
+            -v "$PWD/rom:/project" \
+            -v "$KEY_FILE:/run/secrets/ota_key.pem:ro" \
+            -e TAG="$TAG" \
+            -w /project \
+            espressif/idf:v5.5@sha256:00e94c6ff8bc1f7bd22b234ff43db3f3056cb33dedac6819df9fbedbcb5c6ebb \
+            bash tools/release_build.sh "$TAG" /run/secrets/ota_key.pem
+
+          # 容器以 root 写 build-release，后续步骤要读/打包
+          sudo chown -R "$(id -u):$(id -g)" rom/build-release
+        env:
+          OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY }}
+
+      - name: 打包固件 Release 附件
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cd rom/build-release
+          zip -q -r "$GITHUB_WORKSPACE/dist/stickbox-firmware.zip" \
+            bootloader/bootloader.bin \
+            partition_table/partition-table.bin \
+            ota_data_initial.bin \
+            app.bin \
+            stickbox.bin \
+            flasher_args.json \
+            ota-manifest.json
+          cp ota-manifest.json "$GITHUB_WORKSPACE/dist/stickbox-ota.json"
+          ls -lh "$GITHUB_WORKSPACE/dist"
+
+      - name: 安装 Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.26.0"
+          cache-dependency-path: server/go/go.sum
+
+      - name: 交叉编译 stickbox-agent
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cd server/go
+          for os in darwin linux windows; do
+            for arch in amd64 arm64; do
+              ext=""
+              [ "$os" = windows ] && ext=".exe"
+              out="$GITHUB_WORKSPACE/dist/stickbox-agent-${os}-${arch}${ext}"
+              GOOS=$os GOARCH=$arch CGO_ENABLED=0 \
+                go build -trimpath -ldflags "-s -w" -o "$out" ./cmd/stickbox-agent
+            done
+          done
+          cd "$GITHUB_WORKSPACE/dist"
+          sha256sum stickbox-agent-* > SHA256SUMS
+
+      - name: 构建并推送 stickboxd 镜像
+        run: |
+          set -euo pipefail
+          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/stickboxd:${TAG}"
+          docker build --build-arg VERSION="$TAG" -t "$IMAGE" server/go
+          docker push "$IMAGE"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 创建 Release
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            dist/stickbox-firmware.zip \
+            dist/stickbox-ota.json \
+            dist/stickbox-agent-* \
+            dist/SHA256SUMS \
+            --verify-tag \
+            --title "$TAG" \
+            --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

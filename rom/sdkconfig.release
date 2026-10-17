@@ -1,0 +1,17 @@
+# 官方发布固件的附加配置。本机开发不要用它。
+#
+#   idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.release" build
+#
+# 为什么不放进 sdkconfig.defaults：开启后编译需要签名私钥，而开源硬件要保证
+# 任何人 clone 下来 `idf.py build` 就能过。见 docs/PRODUCT.md 第 3 节。
+#
+# 生成私钥（只做一次，绝不入库，丢了就没法再发 OTA 给已售设备）：
+#   espsecure.py generate_signing_key --version 2 ota_key.pem
+#
+# 这里开的是「校验签名但不锁 bootloader」：
+#   - OTA 下发的固件必须由 ota_key.pem 签过，防服务端被攻破后批量刷砖
+#   - 不开 secure boot，用户仍可用串口刷自己编译的固件——这是开源硬件的前提
+
+CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y
+CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y
+CONFIG_SECURE_BOOT_SIGNING_KEY="ota_key.pem"
