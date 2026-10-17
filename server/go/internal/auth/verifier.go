@@ -138,6 +138,27 @@ func (v *Verifier) Verify(token string) (Identity, error) {
 	}
 }
 
+// Lookup 实时查库判断一把密钥现在是否仍然有效，绕过缓存。
+//
+// 已在线连接的 ACL 用的是连接建立时的缓存身份；CLI 的 device unbind /
+// device revoke 直接改库、不会踢线，所以下一次认证或心跳必须用这里
+// 重新核对，才能发现密钥已经被吊销/禁用。
+// 返回 (零值, false, nil) 表示密钥不存在或已吊销；DB 错误单独返回，
+// 调用方不应把一次查询失败当成吊销。
+func (v *Verifier) Lookup(keyID string) (Identity, bool, error) {
+	k, ok, err := v.keys.KeyByID(keyID)
+	if err != nil {
+		return Identity{}, false, err
+	}
+	if !ok || k.Disabled {
+		return Identity{}, false, nil
+	}
+	return Identity{
+		Dev: k.Dev, UserID: k.UserID, Role: Role(k.Role), KeyID: k.KeyID,
+		Pending: k.Pending,
+	}, true, nil
+}
+
 // Invalidate 在吊销密钥后立即调用，否则缓存会让它再活最多一小时。
 func (v *Verifier) Invalidate(keyID string) {
 	v.mu.Lock()

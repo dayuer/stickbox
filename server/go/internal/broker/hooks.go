@@ -95,6 +95,10 @@ func (h *Hook) OnConnectAuthenticate(cl *mqtt.Client, pk packets.Packet) bool {
 			slog.Warn("pending 连接过频，拒绝", "dev", id.Dev, "remote", cl.Net.Remote)
 			return false
 		}
+		// CLI 的 device unbind/revoke 直接改库，不和 broker 同进程，没法
+		// 主动踢线。先清掉已经失效的在线身份，否则那条幽灵连接会把新
+		// pending 连接一直挡在门外（设备表现为清密钥→重启→再注册的死循环）。
+		h.dropRevoked(id.Dev)
 		if !h.ids.admit(cl, id) {
 			metrics.IncPendingTakeoverRejected()
 			slog.Warn("pending 连接试图顶掉在线设备", "dev", id.Dev, "remote", cl.Net.Remote)
@@ -108,6 +112,27 @@ func (h *Hook) OnConnectAuthenticate(cl *mqtt.Client, pk packets.Packet) bool {
 	}
 	h.evictStale(cl.ID)
 	return true
+}
+
+// dropRevoked 把同 dev、非 pending、但密钥已在库里被吊销/禁用的连接
+// 从身份表移除并断开。查询失败（DB 繁忙等）不当成吊销，保留连接。
+func (h *Hook) dropRevoked(dev string) {
+	if h.v == nil {
+		return
+	}
+	stale := h.ids.dropWhere(func(id auth.Identity) bool {
+		if id.Role != auth.RoleDevice || id.Dev != dev || id.Pending {
+			return false
+		}
+		_, valid, err := h.v.Lookup(id.KeyID)
+		return err == nil && !valid
+	})
+	for _, cl := range stale {
+		slog.Warn("密钥已吊销，断开在线连接", "dev", dev)
+		if h.srv != nil {
+			_ = h.srv.DisconnectClient(cl, packets.ErrNotAuthorized)
+		}
+	}
 }
 
 // evictStale 在 mochi 走会话接管之前，把**同一个 client ID** 的旧连接
@@ -202,6 +227,19 @@ func (h *Hook) OnDisconnect(cl *mqtt.Client, err error, expire bool) {
 //
 // topic 是经过 ACL 校验的，dev 一律从 topic 取；payload 内容不参与判断。
 func (h *Hook) OnPublished(cl *mqtt.Client, pk packets.Packet) {
+	// 心跳时实时核对密钥：CLI 吊销不会踢线，已吊销的密钥不能继续
+	// 收用量/帧，发现即断开，让设备重新认证并走注册流程。
+	if h.ids != nil && h.v != nil {
+		if id, ok := h.ids.get(cl); ok && id.Role == auth.RoleDevice {
+			if _, valid, err := h.v.Lookup(id.KeyID); err == nil && !valid {
+				slog.Warn("密钥已吊销，断开连接", "dev", id.Dev, "key_id", id.KeyID)
+				if h.srv != nil {
+					_ = h.srv.DisconnectClient(cl, packets.ErrNotAuthorized)
+				}
+				return
+			}
+		}
+	}
 	parts := strings.Split(pk.TopicName, "/")
 	if len(parts) != 3 || parts[0] != "printer" || !auth.ValidDev(parts[1]) {
 		return
