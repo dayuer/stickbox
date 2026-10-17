@@ -590,23 +590,22 @@ func (d *Device) mqttSession(ctx context.Context) error {
 	d.dataSubscribed = false
 	d.mu.Unlock()
 	pairTopic := "printer/" + st.Dev + "/pair"
-	pt := c.Subscribe(pairTopic, 1, nil)
-	if !pt.WaitTimeout(5*time.Second) || pt.Error() != nil {
-		return fmt.Errorf("sim: 订阅 %s 失败：%v", pairTopic, pt.Error())
+	res := subscribeWithRetry(ctx, map[string]byte{pairTopic: 1},
+		func(filters map[string]byte) (map[string]byte, error) {
+			return subscribeFilters(c, filters)
+		}, subRetryWaits, d.logf)
+	if res == subDenied {
+		return fmt.Errorf("sim: 订阅 %s 被拒", pairTopic)
 	}
-	if sub, ok := pt.(*paho.SubscribeToken); ok {
-		for f, code := range sub.Result() {
-			if code >= 0x80 {
-				return fmt.Errorf("sim: 订阅 %s 被拒 0x%02x", f, code)
-			}
-		}
+	if res != subOK {
+		return fmt.Errorf("sim: 订阅 %s 失败", pairTopic)
 	}
 
 	d.mu.RLock()
 	wasPaired := d.st.Paired
 	d.mu.RUnlock()
 	if wasPaired {
-		switch d.subscribeData(c) {
+		switch d.subscribeData(ctx, c) {
 		case subOK:
 			go d.fetchAsync(ctx)
 		case subDenied:
@@ -638,8 +637,9 @@ func (d *Device) mqttSession(ctx context.Context) error {
 		d.logf("MQTT 会话结束：连接丢失")
 		return errors.New("sim: MQTT 连接断开")
 	case <-kick:
-		// 配对刚转正，旧连接的身份还是 pending；主动重连拿 active 身份。
-		return errors.New("sim: 数据订阅被拒，主动重连")
+		// 数据订阅失败（可能是身份还是 pending，也可能只是临时报文号冲突）；
+		// 主动重连，重连后会再试一次。
+		return errors.New("sim: 需要重连后重试订阅")
 	case <-time.After(24 * time.Hour):
 		return errors.New("sim: MQTT 会话到期")
 	}
@@ -649,13 +649,87 @@ type subResult int
 
 const (
 	subOK     subResult = iota
-	subDenied           // SUBACK 0x80：这把密钥其实还是 pending
-	subFailed           // 超时/连接问题，重连后重试
+	subDenied           // 真被拒（0x80/0x87/0x8F）：这把密钥还是 pending 等
+	subFailed           // 重试后仍失败或超时：重连再试，不要回退配对
 )
 
-// subscribeData 订阅 usage/frame。全部成功后才置 dataSubscribed，
-// 之后同一连接上的重复调用直接返回成功。
-func (d *Device) subscribeData(c paho.Client) subResult {
+// subRetryWaits 是临时 SUBACK 错误（例如 0x91 Packet Identifier in use）
+// 的重试间隔：先等 broker 把占用的报文号放掉。
+var subRetryWaits = []time.Duration{500 * time.Millisecond, time.Second}
+
+// subackVerdict 区分「真被拒」和「临时错误」。
+//
+// 0x80 Unspecified / 0x87 Not authorized / 0x8F Topic filter invalid
+// 才是权限或主题问题；0x91 Packet Identifier in use 之类的只是并发
+// 报文号冲突，退避重试即可。
+func subackVerdict(codes map[string]byte) (denied, retry bool) {
+	for _, code := range codes {
+		switch code {
+		case 0x80, 0x87, 0x8f:
+			denied = true
+		default:
+			if code >= 0x80 {
+				retry = true
+			}
+		}
+	}
+	return denied, retry
+}
+
+// subscribeFilters 发一次 SUBSCRIBE（多个主题合并成一个包，避免报文号
+// 被重复占用），返回 SUBACK 的每个主题结果。
+func subscribeFilters(c paho.Client, filters map[string]byte) (map[string]byte, error) {
+	tok := c.SubscribeMultiple(filters, nil)
+	if !tok.WaitTimeout(5 * time.Second) {
+		return nil, errors.New("sim: 订阅超时")
+	}
+	if err := tok.Error(); err != nil {
+		return nil, err
+	}
+	if sub, ok := tok.(*paho.SubscribeToken); ok {
+		return sub.Result(), nil
+	}
+	return map[string]byte{}, nil
+}
+
+// subscribeWithRetry 对临时 SUBACK 错误按 waits 退避重试。
+func subscribeWithRetry(
+	ctx context.Context,
+	filters map[string]byte,
+	do func(map[string]byte) (map[string]byte, error),
+	waits []time.Duration,
+	logf func(string, ...any),
+) subResult {
+	for attempt := 0; ; attempt++ {
+		codes, err := do(filters)
+		if err != nil {
+			logf("订阅失败：%v", err)
+			return subFailed
+		}
+		denied, retry := subackVerdict(codes)
+		if denied {
+			logf("订阅被拒：%v", codes)
+			return subDenied
+		}
+		if !retry {
+			return subOK
+		}
+		if attempt >= len(waits) {
+			logf("订阅一直返回临时错误：%v", codes)
+			return subFailed
+		}
+		logf("订阅暂时失败（%v），%s 后重试", codes, waits[attempt])
+		select {
+		case <-ctx.Done():
+			return subFailed
+		case <-time.After(waits[attempt]):
+		}
+	}
+}
+
+// subscribeData 订阅 usage/frame（合并成一个 SUBSCRIBE）。全部成功后才
+// 置 dataSubscribed，之后同一连接上的重复调用直接返回成功。
+func (d *Device) subscribeData(ctx context.Context, c paho.Client) subResult {
 	d.subMu.Lock()
 	defer d.subMu.Unlock()
 
@@ -666,21 +740,16 @@ func (d *Device) subscribeData(c paho.Client) subResult {
 		return subOK
 	}
 
-	for _, leaf := range []string{"usage", "frame"} {
-		topic := fmt.Sprintf("printer/%s/%s", dev, leaf)
-		tok := c.Subscribe(topic, 1, nil)
-		if !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
-			d.logf("订阅 %s 失败：%v", topic, tok.Error())
-			return subFailed
-		}
-		if sub, ok := tok.(*paho.SubscribeToken); ok {
-			for f, code := range sub.Result() {
-				if code >= 0x80 {
-					d.logf("订阅 %s 被拒 0x%02x", f, code)
-					return subDenied
-				}
-			}
-		}
+	filters := map[string]byte{
+		"printer/" + dev + "/usage": 1,
+		"printer/" + dev + "/frame": 1,
+	}
+	res := subscribeWithRetry(ctx, filters,
+		func(filters map[string]byte) (map[string]byte, error) {
+			return subscribeFilters(c, filters)
+		}, subRetryWaits, d.logf)
+	if res != subOK {
+		return res
 	}
 	d.mu.Lock()
 	d.dataSubscribed = true
@@ -729,7 +798,7 @@ func (d *Device) onMessage(ctx context.Context, c paho.Client, kick chan<- struc
 			// 不在 paho 的消息回调里同步等 SUBACK：服务端可能同时踢连接，
 			// 阻塞会拖住连接丢失的处理。
 			go func() {
-				switch d.subscribeData(c) {
+				switch d.subscribeData(ctx, c) {
 				case subOK:
 					d.fetchAsync(ctx)
 				case subDenied, subFailed:
