@@ -15,6 +15,10 @@ import (
 
 const avtService = "urn:schemas-upnp-org:service:AVTransport:1"
 
+// stopSettle 是 Stop 之后等电视真的进入 STOPPED 的时间。
+// 三星从 PLAYING 切到 STOPPED 要 200–500ms，不等就 SetAVTransportURI 会 701。
+const stopSettle = 500 * time.Millisecond
+
 // discoverAVTransport 用 SSDP 找 MediaRenderer，再读设备描述里的
 // AVTransport controlURL。targetIP 非空时只接受该地址的响应。
 func discoverAVTransport(ctx context.Context, targetIP, name string) (string, error) {
@@ -123,26 +127,37 @@ func fetchAVControl(ctx context.Context, hc *http.Client, loc string) (control, 
 	return "", d.Device.FriendlyName, fmt.Errorf("sim: 设备没有 AVTransport 服务")
 }
 
-func soapCall(ctx context.Context, controlURL, action string, args [][2]string) error {
+// soapEnvelope 拼 SOAP 请求体。参数值由调用方转义后原样放入（和
+// dlna_push.py 一致）——DIDL 本身已经转义过一遍。
+func soapEnvelope(action string, args [][2]string) string {
 	var body strings.Builder
 	for _, kv := range args {
 		fmt.Fprintf(&body, "<%s>%s</%s>", kv[0], kv[1], kv[0])
 	}
-	env := `<?xml version="1.0" encoding="utf-8"?>` +
+	return `<?xml version="1.0" encoding="utf-8"?>` +
 		`<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" ` +
 		`s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body>` +
 		`<u:` + action + ` xmlns:u="` + avtService + `">` + body.String() +
 		`</u:` + action + `></s:Body></s:Envelope>`
+}
 
+func soapCall(ctx context.Context, controlURL, action string, args [][2]string) error {
+	_, err := soapDo(ctx, controlURL, action, args)
+	return err
+}
+
+// soapDo 发 SOAP 请求并返回响应体。
+func soapDo(ctx context.Context, controlURL, action string, args [][2]string) ([]byte, error) {
+	env := soapEnvelope(action, args)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, controlURL, strings.NewReader(env))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", `text/xml; charset="utf-8"`)
 	req.Header.Set("SOAPACTION", `"`+avtService+`#`+action+`"`)
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
@@ -150,17 +165,38 @@ func soapCall(ctx context.Context, controlURL, action string, args [][2]string) 
 		// 图片/直播流没有可 Play 的状态迁移时电视回 701，不算失败。
 		if (action == "Play" || action == "Stop" || action == "Next") &&
 			bytes.Contains(raw, []byte("<errorCode>701<")) {
-			return nil
+			return raw, nil
 		}
-		return fmt.Errorf("sim: %s 失败 %d：%s", action, resp.StatusCode, strings.TrimSpace(string(raw)))
+		return raw, fmt.Errorf("sim: %s 失败 %d：%s", action, resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
-	return nil
+	return raw, nil
 }
 
+// xmlEscape 只转义 & < >。不能用 xml.EscapeText：它会把引号写成
+// &#34; / &#39;，三星 Room C 的 SOAP 解析器不认数字实体（402）。
+// 这里与 T17 dlna_push.py 用的 saxutils.escape 一致。
+var xmlEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+
 func xmlEscape(s string) string {
-	var b bytes.Buffer
-	_ = xml.EscapeText(&b, []byte(s))
-	return b.String()
+	return xmlEscaper.Replace(s)
+}
+
+// transportState 读 AVTransport 当前状态（PLAYING / STOPPED / …）。
+func transportState(ctx context.Context, controlURL string) (string, error) {
+	raw, err := soapDo(ctx, controlURL, "GetTransportInfo", [][2]string{{"InstanceID", "0"}})
+	if err != nil {
+		return "", err
+	}
+	var r struct {
+		State string `xml:"Body>GetTransportInfoResponse>CurrentTransportState"`
+	}
+	if err := xml.Unmarshal(raw, &r); err != nil {
+		return "", fmt.Errorf("sim: 解析 GetTransportInfo：%w", err)
+	}
+	if r.State == "" {
+		return "", fmt.Errorf("sim: GetTransportInfo 没有 CurrentTransportState：%s", strings.TrimSpace(string(raw)))
+	}
+	return r.State, nil
 }
 
 func didl(url, title, mime string) string {
@@ -179,22 +215,42 @@ func didl(url, title, mime string) string {
 	return xmlEscape(item)
 }
 
-// pushDLNA 把直播流地址推给电视（Stop → SetAVTransportURI → Play）。
+// pushDLNA 把直播流地址推给电视（Stop → SetAVTransportURI → Play），
+// 并读 GetTransportInfo 确认真的进了 PLAYING。
 // SSDP 找不到时回落到 T17 实测的三星控制地址。
 func pushDLNA(ctx context.Context, tvIP, streamURL string) error {
 	control, err := discoverAVTransport(ctx, tvIP, "")
 	if err != nil {
 		control = "http://" + net.JoinHostPort(tvIP, "9197") + "/upnp/control/AVTransport1"
 	}
-	_ = soapCall(ctx, control, "Stop", [][2]string{{"InstanceID", "0"}})
-	if err := soapCall(ctx, control, "SetAVTransportURI", [][2]string{
+	return pushToControl(ctx, control, streamURL)
+}
+
+func pushToControl(ctx context.Context, controlURL, streamURL string) error {
+	_ = soapCall(ctx, controlURL, "Stop", [][2]string{{"InstanceID", "0"}})
+	select {
+	case <-time.After(stopSettle):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if err := soapCall(ctx, controlURL, "SetAVTransportURI", [][2]string{
 		{"InstanceID", "0"},
 		{"CurrentURI", xmlEscape(streamURL)},
 		{"CurrentURIMetaData", didl(streamURL, "StickBox", "video/avi")},
 	}); err != nil {
 		return err
 	}
-	return soapCall(ctx, control, "Play", [][2]string{
+	if err := soapCall(ctx, controlURL, "Play", [][2]string{
 		{"InstanceID", "0"}, {"Speed", "1"},
-	})
+	}); err != nil {
+		return err
+	}
+	state, err := transportState(ctx, controlURL)
+	if err != nil {
+		return err
+	}
+	if state != "PLAYING" {
+		return fmt.Errorf("sim: 推送后电视状态是 %s，不是 PLAYING", state)
+	}
+	return nil
 }

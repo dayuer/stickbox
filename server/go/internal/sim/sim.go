@@ -723,18 +723,54 @@ func (d *Device) fetchAsync(ctx context.Context) {
 	}
 }
 
+// pushRetryDelays 是 DLNA 推送失败后的退避：5s、15s、60s。
+var pushRetryDelays = []time.Duration{5 * time.Second, 15 * time.Second, 60 * time.Second}
+
 func (d *Device) pushToTV(ctx context.Context) {
 	if d.stream == nil || d.cfg.TV == "" {
 		return
 	}
-	u, err := buildStreamURL(d.stream.Addr(), d.cfg.TV, localIPToward)
+	u, err := pushWithRetry(ctx, d.cfg.TV, d.stream.Addr(), localIPToward,
+		pushDLNA, pushRetryDelays, d.logf)
 	if err != nil {
-		d.logf("找不到电视可达的本机地址：%v", err)
-		return
-	}
-	if err := pushDLNA(ctx, d.cfg.TV, u); err != nil {
-		d.logf("DLNA 推送失败：%v", err)
+		if ctx.Err() == nil {
+			d.logf("DLNA 推送失败：%v（已重试 %d 次）", err, len(pushRetryDelays))
+		}
 		return
 	}
 	d.logf("已推送到电视 %s：%s", d.cfg.TV, u)
+}
+
+// pushWithRetry 初次失败后按 delays 退避重试，每次重试都重新解析局域网地址，
+// 网络恢复/变化后不需要重启模拟器。成功时返回推送用的 URL。
+func pushWithRetry(
+	ctx context.Context,
+	tv, listenAddr string,
+	ipFor func(string) (string, error),
+	push func(context.Context, string, string) error,
+	delays []time.Duration,
+	logf func(string, ...any),
+) (string, error) {
+	var last error
+	for attempt := 0; ; attempt++ {
+		u, err := buildStreamURL(listenAddr, tv, ipFor)
+		if err == nil {
+			if err = push(ctx, tv, u); err == nil {
+				return u, nil
+			}
+		}
+		last = err
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		if attempt >= len(delays) {
+			return "", last
+		}
+		logf("DLNA 推送失败：%v；%s 后重试", err, delays[attempt])
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(delays[attempt]):
+		}
+	}
 }
