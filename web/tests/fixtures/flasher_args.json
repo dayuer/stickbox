@@ -1,0 +1,32 @@
+{
+  "flash_settings": {
+    "flash_mode": "dio",
+    "flash_size": "8MB",
+    "flash_freq": "80m"
+  },
+  "flash_files": {
+    "0x0": "bootloader/bootloader.bin",
+    "0x8000": "partition_table/partition-table.bin",
+    "0xf000": "ota_data_initial.bin",
+    "0x20000": "stickbox.bin"
+  },
+  "app": {
+    "offset": "0x20000",
+    "bin": "stickbox.bin"
+  },
+  "bootloader": {
+    "offset": "0x0",
+    "bin": "bootloader/bootloader.bin"
+  },
+  "partition-table": {
+    "offset": "0x8000",
+    "bin": "partition_table/partition-table.bin"
+  },
+  "ota_data_initial": {
+    "offset": "0xf000",
+    "bin": "ota_data_initial.bin"
+  },
+  "extra_esptool_args": {
+    "chip": "esp32s3"
+  }
+}

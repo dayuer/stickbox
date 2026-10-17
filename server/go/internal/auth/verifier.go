@@ -22,15 +22,19 @@ const (
 
 type Identity struct {
 	Dev    string // device 角色专用
-	UserID string // agent 角色专用
+	UserID string // agent 角色专用；不要用它判定设备的数据权限
 	Role   Role
 	KeyID  string
+	// Pending 表示这把 device 密钥还没完成配对。待配对密钥可以连 MQTT
+	// 收配对通知，但绝对不能读 usage / frame 这类用户数据。
+	// 权限判定要看这把密钥自己的记录（按 KeyID 查库），不要按 dev 反查主人。
+	Pending bool
 }
 
 var ErrDenied = errors.New("auth: 拒绝")
 
 // devRe 是设备 ID 的形状：STA MAC 去掉冒号的小写十六进制，12 个字符
-// （docs/API-cloud-print.md 第 0 节）。
+// （docs/API.md 第 0 节）。
 var devRe = regexp.MustCompile(`^[0-9a-f]{12}$`)
 
 // ValidDev 判断这个字符串是不是合法的设备 ID。
@@ -107,7 +111,10 @@ func (v *Verifier) Verify(token string) (Identity, error) {
 		return Identity{}, ErrDenied
 	}
 
-	id := Identity{Dev: k.Dev, UserID: k.UserID, Role: Role(k.Role), KeyID: k.KeyID}
+	id := Identity{
+		Dev: k.Dev, UserID: k.UserID, Role: Role(k.Role), KeyID: k.KeyID,
+		Pending: k.Pending,
+	}
 	v.mu.Lock()
 	v.c[keyID] = cacheEntry{sum: sum, id: id, exp: v.now().Add(cacheTTL)}
 	v.mu.Unlock()

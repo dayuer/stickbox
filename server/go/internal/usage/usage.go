@@ -14,7 +14,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
+
+	"github.com/dayuer/stickbox/server/go/internal/metrics"
 )
 
 // Window 是一个限额窗口，字段名沿用 Claude Code statusline 的 rate_limits。
@@ -30,6 +33,9 @@ type Report struct {
 	// Limits 是 /usage 原始的 limits 行，原样存给 App 看（按模型的周用量等）。
 	// 设备用不上，不下发。
 	Limits json.RawMessage `json:"limits,omitempty"`
+	// TZ 是 agent 所在机器的 IANA 时区（如 Asia/Bangkok）。渲染帧时
+	// 日期、星期和跨天重建要按用户本地时间算，不能按服务器的 UTC。
+	TZ string `json:"tz,omitempty"`
 }
 
 var ErrInvalid = errors.New("usage: 数据非法")
@@ -57,10 +63,13 @@ func (r Report) Validate(now time.Time) error {
 	if len(r.Limits) > maxLimitsBytes {
 		return fmt.Errorf("%w: limits 过大", ErrInvalid)
 	}
+	if len(r.TZ) > 64 {
+		return fmt.Errorf("%w: tz 过长", ErrInvalid)
+	}
 	return nil
 }
 
-// DevicePayload 是推给设备的那份。字段见 docs/API-cloud-print.md 3.10。
+// DevicePayload 是推给设备的那份。字段见 docs/API.md 2.3.2。
 //
 // ts 是服务端收到这份数据的时间：设备据此显示「更新 X 分前」。
 // 不能用设备收到的时刻——重连补发会让一份很旧的数据看起来像刚到。
@@ -102,6 +111,17 @@ func NewService(st Store, pub Publisher, now func() time.Time) *Service {
 // 推送失败不算上报失败：数据已经落库，设备下次重连会由 Resend 补上。
 func (s *Service) Ingest(userID string, r Report) (int, error) {
 	now := s.now()
+	// tz 只影响渲染排版，不合法不能让整条用量被拒（例如 agent 的
+	// tzdata 比服务端新，或从 /etc/localtime 截出 "posix/Asia/Shanghai"）。
+	// 清掉后由帧服务回退到 config.default_tz。
+	if r.TZ != "" {
+		tz := strings.TrimPrefix(strings.TrimPrefix(r.TZ, "posix/"), "right/")
+		if _, err := time.LoadLocation(tz); err != nil {
+			slog.Warn("忽略无法识别的时区，回退默认", "user", userID, "tz", r.TZ)
+			tz = ""
+		}
+		r.TZ = tz
+	}
 	if err := r.Validate(now); err != nil {
 		return 0, err
 	}
@@ -112,6 +132,7 @@ func (s *Service) Ingest(userID string, r Report) (int, error) {
 	if err := s.st.PutUsage(userID, body, now.Unix()); err != nil {
 		return 0, err
 	}
+	metrics.IncUsageReport()
 	devs, err := s.st.DevicesOfUser(userID)
 	if err != nil {
 		return 0, err

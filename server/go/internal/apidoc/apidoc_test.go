@@ -19,7 +19,9 @@ import (
 var routeRe = regexp.MustCompile(`mux\.Handle(?:Func)?\(\s*"([A-Z]+) ([^"]+)"`)
 
 // 端点表的一行：| POST | `/api/device/register` | 无 | ... |
-var rowRe = regexp.MustCompile("^\\|\\s*(GET|POST)\\s*\\|\\s*`(/api/[^`]+)`\\s*\\|")
+// 路径前缀要和 api.go 里真实注册的保持一致。/fw/ 是固件下载（不在 /api
+// 下，因为它不鉴权、也不返回 JSON），漏掉它会让这条测试放过未写文档的端点。
+var rowRe = regexp.MustCompile("^\\|\\s*(GET|POST)\\s*\\|\\s*`(/(?:api|healthz|fw)[^`]*)`\\s*\\|")
 
 const (
 	startMarker = "<!-- endpoints:start -->"

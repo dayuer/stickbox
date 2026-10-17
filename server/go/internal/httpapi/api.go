@@ -4,25 +4,29 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/config"
+	"github.com/dayuer/stickbox/server/go/internal/frames"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
 	"github.com/dayuer/stickbox/server/go/internal/store"
 	"github.com/dayuer/stickbox/server/go/internal/usage"
 )
 
-// Publisher 是 httpapi 对 MQTT 的窄依赖：推用量、通知配对状态。
+// Publisher 是 httpapi 对 MQTT 的窄依赖：推用量、通知配对状态、踢连接。
 type Publisher interface {
 	PublishUsage(dev string, payload []byte) error
 	PublishPair(dev string, payload []byte) error
+	KickDevice(dev string)
 }
 
 type API struct {
@@ -32,6 +36,18 @@ type API struct {
 	reg   *registry.Registry
 	pub   Publisher
 	usage *usage.Service
+	// frames 在 main 里构造后注入；测试里可以为 nil。
+	frames *frames.Service
+
+	// health 由 main 接上（broker 是否在监听）；测试里可以为 nil。
+	health HealthChecker
+
+	// pairSent 记录本进程已经发布过的配对状态（dev -> "true:<key_id>" /
+	// "false"）。broker 的 retained 也在本进程内存里，进程重启后两边同时
+	// 清空；有了它，订阅时只在 retained 缺失（或状态变了）才补发，避免
+	// 同一条 paired=true 发两遍、以及补发压过随后的解绑通知。
+	pairMu   sync.Mutex
+	pairSent map[string]string
 
 	// 内存限流：注册、换配对码、配对失败。
 	regDev        *rateLimiter
@@ -49,20 +65,31 @@ func New(cfg *config.Config, st *store.Store, v *auth.Verifier,
 		cfg: cfg, store: st, v: v, reg: reg, pub: pub,
 		usage: usage.NewService(st, pub, time.Now),
 
-		regDev:        newRateLimiter(5, 10*time.Minute),
-		regIP:         newRateLimiter(20, 10*time.Minute),
-		pairCodeDev:   newRateLimiter(10, 10*time.Minute),
-		pairFailIP:    newRateLimiter(10, 10*time.Minute),
-		pairFailWorld: newRateLimiter(100, time.Minute),
-		coredumpDev:   newRateLimiter(1, time.Hour),
+		regDev:        newRateLimiter("reg_dev", 5, 10*time.Minute),
+		regIP:         newRateLimiter("reg_ip", 20, 10*time.Minute),
+		pairCodeDev:   newRateLimiter("pair_code_dev", 10, 10*time.Minute),
+		pairFailIP:    newRateLimiter("pair_fail_ip", 10, 10*time.Minute),
+		pairFailWorld: newRateLimiter("pair_fail_world", 100, time.Minute),
+		coredumpDev:   newRateLimiter("coredump_dev", 1, time.Hour),
 	}
 }
 
 // Usage 暴露用量服务，main 拿它接到 broker 上（设备订阅时补发）。
 func (a *API) Usage() *usage.Service { return a.usage }
 
+// SetFrames 注入帧服务。构造 API 时还没有渲染器，所以用 setter。
+func (a *API) SetFrames(f *frames.Service) { a.frames = f }
+
+// HealthChecker 是 /healthz 对 broker 的窄依赖。
+type HealthChecker interface{ Healthy() bool }
+
+func (a *API) SetHealth(h HealthChecker) { a.health = h }
+
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
+
+	// 不鉴权、不暴露内部信息，只回答 200/503。
+	mux.HandleFunc("GET /healthz", a.handleHealthz)
 
 	// 设备注册不鉴权：设备还没有密钥，这正是它来领密钥的入口。
 	mux.HandleFunc("POST /api/device/register", a.handleDeviceRegister)
@@ -71,6 +98,7 @@ func (a *API) Handler() http.Handler {
 	// 固件二进制不鉴权：开源硬件，bin 本身不是秘密，防篡改靠签名不靠访问控制。
 	mux.HandleFunc("GET /fw/{name}", a.handleFirmwareFile)
 	mux.Handle("POST /api/device/coredump", a.requireDevice(a.handleDeviceCoredump))
+	mux.Handle("GET /api/device/frame", a.requireDevice(a.handleDeviceFrame))
 
 	// agent：pair 可选令牌（新用户不带，已有用户带着把新屏并入）。
 	mux.HandleFunc("POST /api/agent/pair", a.handleAgentPair)
@@ -82,6 +110,28 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/agent/logout", a.requireAgent(a.handleAgentLogout))
 
 	return drainBody(mux)
+}
+
+// handleHealthz 检查两件事：sqlite 能读、MQTT broker 还在监听。
+// 失败时不返回任何内部错误文本，避免把文件路径/连接地址暴露出去。
+func (a *API) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := a.store.Health(ctx); err != nil {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte("unavailable\n"))
+		return
+	}
+	if a.health != nil && !a.health.Healthy() {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte("unavailable\n"))
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("ok\n"))
 }
 
 // 单次最多排掉多少请求体。设备自己的请求都 <4KB，1MB 已经很宽松。

@@ -10,8 +10,8 @@
 
 | 角色 | 负责 |
 |---|---|
-| **整合 / 审计**（会话 `USB-TV`，2026-10-17 起） | 任务分配与拆解、代码审计、上板与端到端测试、合并 `main` |
-| **开发**（会话 `esp`、`esp1`、M0 会话） | 按任务实现，自测通过后报审计 |
+| **整合 / 审计**（会话「屏幕翻转显示控制台页面」） | 工程结构、任务拆解、代码审计、上板与端到端测试、合并 `main` |
+| **开发**（会话 `esp`） | 按任务实现，自测通过后提交审计 |
 | **用户** | 定方向、看电视画面验收 |
 
 ## 工作流
@@ -24,6 +24,8 @@
 5. 板子只有一块：要烧录前先确认没有别的会话在用。烧录后板子停在下载模式要按 RST
    （或 `--after watchdog_reset`）。
 
+5. **worktree 只有创建者能删**；集成方只清理「已合并且干净」的。派子 agent 前先向整合报备分工，避免重复实现。
+
 ## 任务看板
 
 状态：待办 / 进行中 / 待审计 / 完成
@@ -32,18 +34,29 @@
 |---|---|---|---|---|
 | T0 | 工程重组：固件移入 `rom/`、删除过时目录、README 与本计划 | 整合 | — | 完成 |
 | T1 | 服务端：删除打印功能，补完用量链路 | esp | T0 | 完成 |
-| T2 | 电脑端 `stickbox-agent` | esp | T7 | 待办 |
+| T2 | 电脑端 `stickbox-agent` | esp1 | T7 | 完成 |
 | T3 | 固件：删除打印，接入 DLNA 推流引擎与 MQTT 用量 | esp | T0 | 完成 |
-| T4 | 固件：按设计稿渲染 1080p 看板（多页轮播） | esp | T3 | **搁置**，见 T13 |
+| T4 | 固件：按设计稿渲染 1080p 看板（多页轮播） | esp | T3 | **取消**：T13 定为服务端渲染 |
 | T5 | 端到端联调、上板与电视验收 | 整合 | T1–T4 | 待办 |
-| T6 | 文档收尾：接口文档重写、删除 `probe/`、交接文档 | esp + 整合 | T5 | 待办 |
+| T6 | 文档收尾：接口文档重写、删除 `probe/`、交接文档 | esp + 整合 | T5 | 完成（T6a 接口文档 + T6b 清理） |
 | T7 | 配对码绑定（无手机号）：设备自注册出码，agent 输码配对；删除短信与 App 角色 | esp | T1、T3 | 完成 |
 | T8 | 固件内存压缩（T4 动态条带的前提） | esp | T7 | 完成 |
-| T9 | OTA 双槽与签名升级通道 | esp（M0 会话） | T7 | 待审计 |
-| T10 | 崩溃回传：coredump 上传服务端 | esp（M0 会话） | T9 | 待审计 |
+| T9 | OTA 双槽与签名升级通道 | esp（M0 会话） | T7 | 进行中 |
+| T10 | 崩溃回传：coredump 上传服务端 | esp（M0 会话） | T9 | 待办 |
 | T11 | 服务器地址进 NVS 与配网页 | esp（M0 会话） | T7 | 待审计 |
-| T12 | 换 N16R8 板：开 PSRAM、删 BSP 与 LCD、板级引脚抽象 | esp | T9–T11 | 待办 |
-| T13 | 渲染位置决策：板上（T4）还是服务端 | 用户 | T8 | **待定，见下** |
+| T12 | 换 N16R8 板：开 PSRAM、删 BSP 与 LCD、板级引脚抽象 | esp | T9–T11 | **降级为可选**：先用现板（T13） |
+| T13 | 渲染位置决策 | 用户 | T8 | **完成：服务端渲染，先用现板** |
+| T13a | 服务端渲染器 + 数据源插件（纯 Go） | esp | T13 | 完成 |
+| T13c | 服务端帧分发：按用户渲染帧包、GET /api/device/frame、MQTT 通知 | esp1 | T13a | 完成 |
+| T13b | 固件取帧：flash 帧缓存环 + 离线兜底帧 | 项目改名 StickBox | T9、T11、T13a | 进行中 |
+| T13b-1 | 固件开机取真实画面：读 flash 最新槽先起播，联网后 GET /api/device/frame 写槽 | StickBox | T13c | 进行中 |
+| T13b-2 | 固件文字页：正在连接 / 配对码 / 网络离线 / 正在获取数据（构建期 1-bit 掩码，无 demo 图） | StickBox | — | 待审计（7101607） |
+| T23 | stickbox-agent doctor 诊断 + 一键安装脚本 + 用户文档 | esp1 | T2、T15b | 待办 |
+| T13b-3 | 固件无缝换帧：新帧包校验后在帧边界切换，推流不断、不重推 | StickBox | T13b-1 | 进行中 |
+| T15a | 浏览器烧录页（ESP Web Tools 自托管） | esp1 | — | 完成 |
+| T15b | 发布流水线：签名固件、镜像、agent 多平台 Release | esp1 | T15a | 暂停（让位 T13c） |
+| T17 | 电视首次出画慢（实测约 15 秒）：查三星播放器起播流程，定推流参数 | esp | T13a | 进行中 |
+| T18 | 云端下行 MQTT 指令要设备 ACK（cid、应用后回执、退避重投、幂等） | 项目改名 StickBox | T7 | 待办 |
 | T14 | 电视兼容矩阵、电视背后 RF 实测、72h soak | 整合 + 用户 | T13 | 待办 |
 | T15 | 发布工程：浏览器烧录页、Release、自托管、许可 | esp + 整合 | T14 | 待办 |
 | T16 | 开源 PCB 与外壳 | 整合 | T14 | 待办 |
@@ -103,7 +116,7 @@ T9–T16 属产品化里程碑 M0–M5，背景与取舍见 [`PRODUCT.md`](PRODU
   USB host 切换（`board_usb_host_power`）
 - **保留**：热点配网门户 `provision.*`、设备密钥、MQTT 长连接（心跳照发，判在线用）、
   LCD（`lcd_ui.*`，180° 翻转）、netlog
-- **接入**：从 `probe/dlna-tv/` 搬入 `dlna.*`、`stream.*`、`jband.*`、SNTP 对时；
+- **接入**：从验证工程搬入 `dlna.*`、`stream.*`、`jband.*`、SNTP 对时（验证工程已在 T6b 删除）；
   订阅 `printer/{dev}/usage`，解析为 `usage_report_t`（payload 格式见 `server/go/internal/usage`）
 - 板载 LCD 改为状态屏：Wi-Fi / 电视 / 推流 / 云端 / 最近一次用量时间
 
@@ -136,8 +149,16 @@ agent 上报 → 服务端 → MQTT → 板子 → 电视，全链路；断网 /
 
 ### T6 文档收尾
 
-`docs/API-cloud-print.md` 改写为只含账号、设备、MQTT、用量与 agent 的接口文档（改名）；
-`docs/HANDOFF-usb-tv-probe.md` 补 DLNA 结论；删除 `probe/`；`rom/README.md` 写烧录与调试要点。
+**接口文档部分（T6a，待审计）**：原 `docs/API-cloud-print.md` 已改名为
+[`docs/API.md`](API.md)，按 T7 之后的真实接口重写：设备注册与配对码、MQTT 主题与 ACL、
+agent 配对 / 解绑 / 设备 / 用量、错误与限流、部署拓扑；打印、短信、App 内容已全部删除。
+`server/go/internal/apidoc/apidoc_test.go` 在 `go test` 中比对文档端点表与
+`server/go/internal/httpapi/api.go` 的路由表，防止文档漂移。
+
+**其余部分（T6b，完成）**：删除整个 `probe/`（推流引擎已在 `rom/main`；
+实验脚本在 `docs/experiments/tvstart/`；`render_pages.py` 移到 `rom/tools/`）；
+`docs/HANDOFF-usb-tv-probe.md` 补 DLNA 结论并引用 `docs/HANDOFF-tv-startup.md`；
+`rom/README.md` 补编译、烧录、串口、配网、配对与故障排查。
 
 ### T7 配对码绑定（无手机号、无短信）
 
@@ -225,13 +246,8 @@ phy_init, data, phy,      0xf000,   0x1000     # 4K
 otadata,  data, ota,      0x10000,  0x2000     # 8K
 ota_0,    app,  ota_0,    0x20000,  0x300000   # 3M，app 分区须 64K 对齐
 ota_1,    app,  ota_1,    0x320000, 0x300000   # 3M
-frames,   data, 0x40,     0x620000, 0x180000   # 1.5M，服务端渲染帧缓存（T13）
-coredump, data, coredump, 0x7a0000, 0x10000    # 64K
+coredump, data, coredump, 0x620000, 0x10000    # 64K
 ```
-
-frames 划 6 槽 × 256K 环形轮换。槽给 256K 而不是 128K：1080p JPEG 实测约
-120KB，128K 槽只剩 6% 余量。寿命取决于写入策略不是槽数——整帧每分钟重写
-只有 1.1 年，只在数据变化时重写底帧则是 11 年，见 T13b 的硬约束。
 
 当前固件 2.03MB，3M 槽余量约 48%。0x12000–0x20000 的 56KB 空隙是对齐代价，留作后用。
 
@@ -297,6 +313,55 @@ MINI-1-N8 无 PSRAM 放不下；T8 实测内部 RAM 历史最低 32KB）。
 `heap_caps_get_free_size(MALLOC_CAP_SPIRAM)` 串口可见且 ≥7MB；WS2812 三态正确。
 
 ### T13 渲染位置决策：板上（T4）还是服务端（M2）
+
+> **决策（2026-10-17，用户）：服务端渲染，先用现在的板子（无 PSRAM）顶着。** T4 取消，T12 降级为可选。
+
+**现板上怎么做**：整帧（约 120KB）放不进内部 RAM，所以写进 flash 帧缓存、推流时从 mmap 地址读
+（预置页现在就是这么推的，零 RAM）。
+
+- 分区（随 T9 定型，OTA 改不了）：
+
+  | 分区 | 偏移 | 大小 |
+  |---|---|---|
+  | nvs / phy_init / otadata | 0x9000 / 0xf000 / 0x10000 | 24K / 4K / 8K |
+  | ota_0 / ota_1 | 0x20000 / 0x320000 | 3M / 3M（固件 2.07MB） |
+  | frames（data 0x40） | 0x620000 | 1.5M = **6 槽 × 256K** |
+  | coredump | 0x7a0000 | 64K（末尾 320K 未分配） |
+
+  槽用 256K 不用 128K：1080p 帧约 120KB，128K 槽余量只有 6%，写不下的表现是电视黑屏
+- **硬约束：底帧只在数据变化时落 flash（约每 10 分钟），时钟 HH:MM 条带每分钟在内存里用 jband 重编码后拼进推流。**
+  整帧每分钟重写 = 每槽每天 240 次 = 寿命约 1.1 年，加槽救不回来，只能少写。按约束写：每槽每天 24 次 ≈ 11 年
+- 服务端底帧与设备时钟条带之间的接口约定写在 `docs/FRAME.md`（T13a 起草，T13b 签字）：时钟区 MCU 行范围、
+  框外纯色、框内两色、0–9 与冒号的 1 位字形掩码随帧元数据下发、每 MCU 行一个 restart marker
+- 帧变化经 MQTT 通知（帧版本号），设备 HTTPS 拉取，带 `If-None-Match`；断网 / 拉取失败时继续推最后一张好帧，
+  超过 15 分钟没有新帧切到固件内置的离线兜底帧
+
+#### T13a 服务端渲染器 + 数据源插件（esp）
+
+- 新包 `server/go/internal/render`：按 `docs/design/README.md` 的版面坐标、配色、状态判定、主次自动、计算公式，
+  出 1920×1080 baseline JPEG，单帧 ≤ 120KB（超了降质量，不得超过 128KB 槽位）
+- 字体：Barlow Condensed / Barlow / Noto Sans SC（OFL），放 `server/go/internal/render/fonts/` 并附 OFL 许可文本
+- 新包 `server/go/internal/source`：数据源插件接口（产出结构化数据，渲染器消费）；Claude 用量是第一个实现
+- 主机侧对照：`go run ./cmd/render-preview` 把 5 种状态各出一张 JPEG，与 `docs/design/screenshots/` 并排比对
+- 冒号闪烁、翻页动画都不做（帧每分钟一换），偏差写进提交说明
+- **本任务不接路由、不动 `httpapi` / `config`**（那两处归 T9 会话）；帧分发端点（`GET /api/device/frame` + MQTT 通知）
+  在 T9 合并后另开小任务接入
+
+**验收**：5 种状态的渲染图与截图逐区域一致（附并排对照图）；单帧大小、渲染耗时写进提交说明；`go test` 有黄金图回归测试。
+
+**实现（待审计）**：`internal/render` + `internal/source` + `internal/jpegrestart`（支持 DRI 的编码器）
++ `internal/frame`（底帧/图集/索引与拼接）+ `cmd/render-preview`。按 T13b 的方案 D 做 DRI=8
+按 MCU 字节拼接：底帧 146,899–184,418 B、图集 28,459 B、索引 4,965 B，最坏合计 217,842 B（256KB 槽）；
+逐行时钟列 12 段共 6,030 B；遍历 1440 个时刻的实际最坏 13,089 B（上界 14,626 B）；设备 `BAND_CAP` 16KB（双缓冲 32KB）按行拼接，加载时校验 `max_band_bytes`；
+拼接帧与直接渲染整帧逐像素一致，Go 解码器与 `djpeg` 均通过。时钟卡片改为 128×192 并左移，
+偏离见 [`docs/FRAME.md`](FRAME.md) 第 6 节，待用户确认。
+
+#### T13b 固件取帧（项目改名 StickBox，T9/T11 之后）
+
+- `frames` 分区环形写：每槽头部写版本号 + 长度 + CRC，开机找最新的有效槽；写一半掉电不能破坏上一张好帧
+- 推流从 `esp_partition_mmap` 地址出帧，不占 RAM；离线兜底帧用 EMBED_FILES 打进 app
+- **验收**：拔网线 15 分钟内切到离线帧，恢复后自动回到看板；连续 1 小时帧更新不丢；写一半断电（手动拔电）后重启仍显示上一张好帧
+
 
 > **这是一个待用户拍板的决策，不是一个实现任务。** 定了之后才有实现任务。
 

@@ -5,10 +5,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
+	"github.com/dayuer/stickbox/server/go/internal/metrics"
 )
 
 // handleAgentPair：POST /api/agent/pair {code, name}
@@ -43,6 +45,7 @@ func (a *API) handleAgentPair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	failPair := func() {
+		metrics.IncPairFail()
 		a.pairFailIP.hit(ip)
 		a.pairFailWorld.hit("global")
 	}
@@ -141,13 +144,75 @@ func (a *API) handleAgentPair(w http.ResponseWriter, r *http.Request) {
 	// 带上 key_id：设备只认发给「自己这把密钥」的通知，
 	// 避免上一轮配对 retain 的消息被下一轮注册误读。
 	pairMsg := fmt.Sprintf(`{"paired":true,"key_id":"%s"}`, pc.KeyID)
-	a.pub.PublishPair(pc.Dev, []byte(pairMsg))
+	a.pairMu.Lock()
+	a.publishPairLocked(pc.Dev, []byte(pairMsg), "true:"+pc.KeyID)
+	a.pairMu.Unlock()
+	// retained 的 pair 已存进 broker。现在踢掉旧连接：旧固件只在
+	// MQTT_EVENT_CONNECTED 时订阅 usage，而这条连接的身份还是 pending。
+	// 重连后身份是 active，usage 订阅就能通过，也能收到 retained 的 paired=true。
+	a.pub.KickDevice(pc.Dev)
 	// 配对成功立即补发最新用量；设备这时才第一次拿到主人的数据。
 	a.usage.Resend(pc.Dev)
+	// 新屏可能马上就要取帧：标脏让后台 worker 出一份
+	// （没有用量就是「等待上报」帧）。
+	a.markFramesDirty(userID)
 
+	metrics.IncPairOK()
 	writeJSON(w, 200, map[string]any{
 		"dev": pc.Dev, "user_id": userID, "token": newToken,
 	})
+}
+
+// ResendPair 实现 broker.PairResender：设备订阅 printer/{dev}/pair 时，
+// 按这条连接自己那把密钥的当前状态补发一条配对通知。
+//
+// retained 的 pair 只存在 broker 内存里，服务端一重启就没了。新固件要
+// 收到 paired=true 才订阅 usage/frame，只靠 retained 会永远卡在配对页。
+// 这里按 KeyID 查库，和 usage/frame 的 Resend 一样，不依赖 retained。
+func (a *API) ResendPair(dev, keyID string) {
+	// 持锁查库 + 发布：和配对/解绑的发布串行，避免补发的 true 压过
+	// 随后到达的 false（解绑后设备还误以为已配对）。
+	a.pairMu.Lock()
+	defer a.pairMu.Unlock()
+
+	k, ok, err := a.store.KeyByID(keyID)
+	if err != nil {
+		slog.Warn("补发配对状态失败", "dev", dev, "key_id", keyID, "err", err)
+		return
+	}
+	var payload []byte
+	var state string
+	switch {
+	case !ok || k.Disabled:
+		// 密钥已吊销（或库里已不存在）：让设备清掉密钥重新注册。
+		payload, _ = json.Marshal(map[string]any{
+			"paired": false, "key_ids": []string{keyID},
+		})
+		state = "false"
+	case k.Pending:
+		// 还没配对，继续等 agent 输码。
+		return
+	case k.Role != string(auth.RoleDevice) || k.Dev != dev:
+		// 身份与订阅主题不一致，防御性忽略。
+		return
+	default:
+		payload = []byte(fmt.Sprintf(`{"paired":true,"key_id":"%s"}`, k.KeyID))
+		state = "true:" + k.KeyID
+	}
+	// 本进程已经发过同样的状态：broker 的 retained 还在，不用重复发。
+	if a.pairSent[dev] == state {
+		return
+	}
+	a.publishPairLocked(dev, payload, state)
+}
+
+// publishPairLocked 发布并记录配对状态；调用方必须持有 a.pairMu。
+func (a *API) publishPairLocked(dev string, payload []byte, state string) {
+	_ = a.pub.PublishPair(dev, payload)
+	if a.pairSent == nil {
+		a.pairSent = map[string]string{}
+	}
+	a.pairSent[dev] = state
 }
 
 // handleAgentUnpair：POST /api/agent/unpair {dev}
@@ -178,7 +243,19 @@ func (a *API) handleAgentUnpair(w http.ResponseWriter, r *http.Request, id auth.
 	msg, _ := json.Marshal(map[string]any{
 		"paired": false, "key_ids": revoked,
 	})
-	a.pub.PublishPair(in.Dev, msg)
+	a.pairMu.Lock()
+	a.publishPairLocked(in.Dev, msg, "false")
+	a.pairMu.Unlock()
+	// 解绑后旧密钥已失效，连接不应该继续挂着。先让 pair=false 送达
+	// （设备要清掉密钥并重新注册），再踢；直接踢会丢掉这条通知。
+	go func(dev string) {
+		time.Sleep(300 * time.Millisecond)
+		a.pub.KickDevice(dev)
+	}(in.Dev)
+	// 解绑不重渲染；名下已无设备时由帧服务清掉缓存（见 DeviceRemoved）。
+	if a.frames != nil {
+		a.frames.DeviceRemoved(id.UserID)
+	}
 	writeJSON(w, 200, map[string]int{"ok": 1})
 }
 

@@ -37,15 +37,22 @@ func (p *recPub) PublishPair(dev string, payload []byte) error {
 	return nil
 }
 
+func (p *recPub) KickDevice(dev string) {} // 测试里没有真连接可踢
+
 type testDeps struct {
 	store *store.Store
 	reg   *registry.Registry
 	v     *auth.Verifier
 	cfg   *config.Config
 	pub   *recPub
+	api   *API // 用于在 New 之后注入帧服务
 }
 
 func newTestAPI(t *testing.T) (http.Handler, *testDeps) {
+	return newTestAPIWithHealth(t, nil)
+}
+
+func newTestAPIWithHealth(t *testing.T, h HealthChecker) (http.Handler, *testDeps) {
 	t.Helper()
 	dir := t.TempDir()
 	st, err := store.Open(filepath.Join(dir, "test.db"))
@@ -60,7 +67,10 @@ func newTestAPI(t *testing.T) (http.Handler, *testDeps) {
 	dep.reg = reg
 	dep.v = auth.NewVerifier(st)
 	dep.cfg = &config.Config{Root: dir}
-	return New(dep.cfg, st, dep.v, reg, dep.pub).Handler(), dep
+	api := New(dep.cfg, st, dep.v, reg, dep.pub)
+	api.SetHealth(h)
+	dep.api = api
+	return api.Handler(), dep
 }
 
 // —— 请求辅助 ——

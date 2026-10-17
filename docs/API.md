@@ -70,15 +70,27 @@ agent 不能连 MQTT；设备不能调 agent 的 HTTP 端点。
 |---|---|---|---|
 | POST | `/api/device/register` | 无 | 设备注册，领 device 令牌和配对码 |
 | POST | `/api/device/pair-code` | device | 配对码过期后换一个新码 |
+| GET | `/api/device/firmware` | device | 取 OTA manifest；不在本轮放量里返回 204 |
+| POST | `/api/device/coredump` | device | 上传崩溃镜像；只收已配对设备 |
+| GET | `/fw/{name}` | 无 | 下载固件 bin；开源硬件，防篡改靠签名 |
+| GET | `/api/device/frame` | device | 取当前帧包（ETag/304） |
 | POST | `/api/agent/pair` | 可选 agent | 输码配对；新用户或并入已有用户 |
 | POST | `/api/agent/unpair` | agent | 解绑自己名下的屏 |
 | GET | `/api/agent/devices` | agent | 列出名下设备与在线状态 |
 | GET | `/api/agent/usage` | agent | 读取本用户最新用量 |
 | POST | `/api/usage` | agent | 上报一次用量 |
+| GET | `/api/agent/coredumps` | agent | 列出自己名下设备的崩溃记录 |
 | POST | `/api/agent/logout` | agent | 注销当前 agent 令牌 |
+| GET | `/healthz` | 无 | 健康检查，只返回 200/503 |
 <!-- endpoints:end -->
 
 ---
+
+### 1.1 `GET /healthz`
+
+不鉴权，只返回 `200`（`ok`）或 `503`（`unavailable`）。检查 sqlite 可读与
+内嵌 MQTT broker 是否在监听；失败时不返回任何内部信息。容器 healthcheck
+和外部监控都用它。指标在另一个只监听回环的端口，见 `docs/OPS.md`。
 
 ## 2. 设备
 
@@ -153,7 +165,63 @@ device 鉴权。电视/LCD 上的码过期后，用当前待配对密钥换一�
 - 错误：`400 bad dev`、`400 bad request`、`409 already paired`、
   `429 rate limited`、`500 server error`。
 
-### 2.3 MQTT 连接
+### 2.3 `GET /api/device/frame`
+
+device 鉴权，且密钥必须已配对（pending 密钥返回 `403`）。
+
+成功 `200`，`Content-Type: application/octet-stream`，body 是帧包：
+
+```
+"SBF1" | baseLen uint32 | atlasLen uint32 | metaLen uint32 | base | atlas | meta
+```
+
+三个长度都是大端。`base` / `atlas` 是 `FRAME.md` 约定的 DRI=8 JPEG 底帧与
+字形图集；`meta` 是 `FRAME.md` 的 JSON 索引。
+
+- `ETag` 是帧版本号（形如 `"7"`），同时返回 `X-Frame-Version`。
+- 带 `If-None-Match` 且版本没变时返回 `304`，无 body。
+- 还没出过帧时返回 `404 frame not ready`，带 `Retry-After: 30`。
+- 未配对返回 `403 forbidden`。
+
+帧版本变化时服务端往 MQTT `printer/{dev}/frame` 发 `{"ver":N}`（QoS 1，
+不 retain）。设备重连订阅该主题时服务端补发当前版本。
+
+### 2.4 `GET /api/device/firmware`
+
+设备鉴权。返回 OTA manifest：
+
+```json
+{"version":"v1.2.0","url":"https://host/fw/stickbox-1.2.0.bin","sha256":"…","size":2063040}
+```
+
+**没有配置固件、或这台设备不在本轮放量范围里，返回 `204`。** 204 是「现在
+没有你的份」，不是错误——设备见到非 200 安静跳过。
+
+分阶段放量按 `dev` 哈希分桶，不是随机：同一台设备每次问得到的答案一致，
+放量比例调大时原先在的设备仍然在。一版坏固件如果一次推给所有设备，等发现
+时已经全军覆没。
+
+### 2.5 `POST /api/device/coredump`
+
+设备鉴权，请求体是原始 ELF，`Content-Type: application/octet-stream`。
+固件版本和复位原因走 `X-Stickbox-Version` / `X-Stickbox-Reset` 头——服务端
+不解 ELF，没有版本号就还原不了符号。
+
+**只收已配对设备**：密钥不能是待配对的，设备也必须已经绑定。两道都要——
+知道 MAC 的人可以重新 register 拿一把 pending 密钥冒用已配对设备。
+
+每台设备每小时 1 次；单包 256KB 封顶；全局 512MB 配额，超了返回 `507`。
+
+### 2.6 `GET /fw/{name}`
+
+**不鉴权。** 固件二进制不是秘密（开源硬件），防篡改靠固件签名而不是访问
+控制。只认 `{Root}/fw` 下的文件名。
+
+> 自托管注意：设备的 TLS 接收缓冲是 8KB，而 nginx 默认 `ssl_buffer_size`
+> 是 16k，两者都不支持 MFL 协商——必须给这个路径设 `ssl_buffer_size 4k`，
+> 否则 OTA 下载直接失败。见 `server/DEPLOY.md`。
+
+### 2.7 MQTT 连接
 
 ```
 mqtts://mqtt.stickbox.ai:8883
@@ -182,6 +250,7 @@ mqtts://mqtt.stickbox.ai:8883
 
 - `printer/{dev}/usage`（QoS 1）
 - `printer/{dev}/pair`（QoS 1）
+- `printer/{dev}/frame`（QoS 1；payload `{"ver":N}`，收到后 GET `/api/device/frame`）
 
 并每 30 秒发布一次心跳：
 
@@ -260,6 +329,18 @@ ACL 只有两条：
 - 其他通知（例如上一轮配对留下的 retain 消息）一律忽略。
 
 固件在 token 的第一个 `.` 之前取出自己的 key_id，与通知比对。
+
+服务端在设备**订阅** `printer/{dev}/pair` 时（`OnSubscribed`）还会按这条
+连接自己的 KeyID 查库补发一条当前状态，不只依赖 retained——broker 的
+retained 只在内存里，服务端一重启就没了：
+
+- 密钥已转正：补发 `paired=true`（带自己的 `key_id`）
+- 仍是 pending：不发，设备继续等 agent 输码
+- 已吊销：补发 `paired=false`（`key_ids` 含自己的 `key_id`）
+
+所以服务端重启后，已配对设备重连也能立刻拿到 `paired=true`，不会卡在
+配对页。`paired=true` 可能收到两次（retained + 订阅补发），设备处理必须
+幂等。
 
 ---
 
@@ -392,7 +473,8 @@ agent 上报一次用量。服务端保存为该用户的最新一份，并推�
 {
   "five_hour": {"used_percentage": 37.5, "resets_at": 1762223000},
   "seven_day": {"used_percentage": 19.5, "resets_at": 1762395800},
-  "limits": [{"kind":"weekly_all","percent":19.5}]
+  "limits": [{"kind":"weekly_all","percent":19.5}],
+  "tz": "Asia/Bangkok"
 }
 ```
 
@@ -402,6 +484,8 @@ agent 上报一次用量。服务端保存为该用户的最新一份，并推�
 - `used_percentage` 在 0..1000（正常是 0..100）。
 - `resets_at` 必须大于 0，且不超过服务端当前时间 + 30 天。
 - `limits` 原样保存，最大 8KB。
+- `tz` 可选，是 agent 本机的 IANA 时区；服务端按它渲染日期/星期并判断
+  跨天。没有时用 `config.json` 的 `default_tz`。
 - 请求体上限 16KB。
 
 成功 `200`：
@@ -416,7 +500,11 @@ agent 上报一次用量。服务端保存为该用户的最新一份，并推�
 错误：`400 bad request`（校验失败，`detail` 说明哪项越界）、
 `401 unauthorized`、`500 server error`。
 
-### 3.6 `POST /api/agent/logout`
+### 3.6 `GET /api/agent/coredumps`
+
+agent 鉴权。列出自己名下设备的崩溃记录（`dev`、`at`、`size`），新的在前。
+
+### 3.7 `POST /api/agent/logout`
 
 注销当前 agent 令牌（只影响这一把）。
 

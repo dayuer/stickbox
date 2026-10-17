@@ -1,4 +1,0 @@
-dependencies:
-  idf: ">=5.3"
-  # 跟主工程同一个 BSP：ST7789 屏 + 背光 + LVGL port
-  espressif/esp32_s3_usb_otg: "*"

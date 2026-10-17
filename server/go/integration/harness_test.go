@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,8 +26,10 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/broker"
 	"github.com/dayuer/stickbox/server/go/internal/config"
+	"github.com/dayuer/stickbox/server/go/internal/frames"
 	"github.com/dayuer/stickbox/server/go/internal/httpapi"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
+	"github.com/dayuer/stickbox/server/go/internal/render"
 	"github.com/dayuer/stickbox/server/go/internal/store"
 	"github.com/dayuer/stickbox/server/go/internal/tlsx"
 )
@@ -42,7 +45,14 @@ type env struct {
 // startServer 起一套真的：内嵌 broker + HTTPS，自签证书，端口交给内核分配。
 func startServer(t *testing.T) *env {
 	t.Helper()
-	dir := t.TempDir()
+	e, _ := startServerAt(t, t.TempDir())
+	return e
+}
+
+// startServerAt 在指定目录起一套服务（同一个库可以关掉再起，模拟重启）。
+// 返回的 stop 可提前调用且可重复调用；测试结束也会自动 stop。
+func startServerAt(t *testing.T, dir string) (*env, func()) {
+	t.Helper()
 	certDir := filepath.Join(dir, "certs")
 	if err := os.MkdirAll(certDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -54,7 +64,6 @@ func startServer(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { st.Close() })
 
 	v := auth.NewVerifier(st)
 	reloader, err := tlsx.New(cfg.CertPath(), cfg.KeyPath())
@@ -63,7 +72,6 @@ func startServer(t *testing.T) *env {
 	}
 
 	reg := registry.New(registry.Options{IdleTimeout: time.Hour})
-	t.Cleanup(reg.Shutdown)
 
 	mqttAddr := freeAddr(t)
 	br, err := broker.New(mqttAddr, reloader.Config(), v, reg)
@@ -73,17 +81,44 @@ func startServer(t *testing.T) *env {
 	if err := br.Serve(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { br.Close() })
 
 	api := httpapi.New(cfg, st, v, reg, br)
 	br.SetUsageResender(api.Usage())
+	br.SetPairResender(api)
+	rr, err := render.New()
+	if err != nil {
+		t.Fatalf("初始化渲染器：%v", err)
+	}
+	fs, err := frames.New(cfg.Root, st, api.Usage(), br, frames.RenderBuilder{R: rr}, frames.Options{
+		DefaultTZ:         "UTC",
+		Debounce:          100 * time.Millisecond, // 测试里缩短防抖
+		RenderConcurrency: 1,
+		Now:               time.Now,
+	})
+	if err != nil {
+		t.Fatalf("初始化帧服务：%v", err)
+	}
+	api.SetFrames(fs)
+	br.SetFrameResender(fs)
+
 	ln, err := tls.Listen("tcp", freeAddr(t), reloader.Config())
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv := &http.Server{Handler: api.Handler()}
 	go srv.Serve(ln)
-	t.Cleanup(func() { srv.Close() })
+
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			srv.Close()
+			br.Close()
+			fs.Close()
+			reg.Shutdown()
+			st.Close()
+		})
+	}
+	t.Cleanup(stop)
 
 	return &env{
 		t: t, httpBase: "https://" + ln.Addr().String(), mqttAddr: mqttAddr,
@@ -91,7 +126,7 @@ func startServer(t *testing.T) *env {
 		client: &http.Client{Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // 仅测试
 		}},
-	}
+	}, stop
 }
 
 func freeAddr(t *testing.T) string {
@@ -133,6 +168,12 @@ func writeSelfSigned(t *testing.T, dir string) {
 
 func (e *env) req(method, path, body string, hdr map[string]string) (int, []byte) {
 	e.t.Helper()
+	st, b, _ := e.reqHeaders(method, path, body, hdr)
+	return st, b
+}
+
+func (e *env) reqHeaders(method, path, body string, hdr map[string]string) (int, []byte, http.Header) {
+	e.t.Helper()
 	var r io.Reader
 	if body != "" {
 		r = strings.NewReader(body)
@@ -150,7 +191,7 @@ func (e *env) req(method, path, body string, hdr map[string]string) (int, []byte
 	}
 	defer resp.Body.Close()
 	out, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, out
+	return resp.StatusCode, out, resp.Header
 }
 
 func (e *env) register(dev string) (token, code string) {
@@ -203,6 +244,16 @@ func (e *env) reportUsage(agentToken string, body []byte) {
 	}
 }
 
+func (e *env) getFrame(devKey, ifNoneMatch string) (int, []byte, string) {
+	e.t.Helper()
+	hdr := map[string]string{"Authorization": "Bearer " + devKey}
+	if ifNoneMatch != "" {
+		hdr["If-None-Match"] = ifNoneMatch
+	}
+	st, b, h := e.reqHeaders("GET", "/api/device/frame", "", hdr)
+	return st, b, h.Get("ETag")
+}
+
 func (e *env) unpair(agentToken, dev string) {
 	e.t.Helper()
 	st, b := e.req("POST", "/api/agent/unpair", `{"dev":"`+dev+`"}`,
@@ -221,6 +272,7 @@ type fakeDevice struct {
 	dev   string
 	usage chan []byte
 	pair  chan []byte
+	frame chan []byte
 }
 
 func (e *env) connectDevice(dev, key string) *fakeDevice {
@@ -243,7 +295,8 @@ func (e *env) tryConnectDevice(dev, key string) (*fakeDevice, error) {
 		SetAutoReconnect(false)
 
 	fd := &fakeDevice{t: e.t, dev: dev,
-		usage: make(chan []byte, 8), pair: make(chan []byte, 8)}
+		usage: make(chan []byte, 8), pair: make(chan []byte, 8),
+		frame: make(chan []byte, 8)}
 	opts.SetDefaultPublishHandler(func(_ paho.Client, m paho.Message) {
 		payload := append([]byte(nil), m.Payload()...)
 		switch {
@@ -257,6 +310,11 @@ func (e *env) tryConnectDevice(dev, key string) (*fakeDevice, error) {
 			case fd.pair <- payload:
 			default:
 			}
+		case strings.HasSuffix(m.Topic(), "/frame"):
+			select {
+			case fd.frame <- payload:
+			default:
+			}
 		}
 	})
 	c := paho.NewClient(opts)
@@ -267,6 +325,80 @@ func (e *env) tryConnectDevice(dev, key string) (*fakeDevice, error) {
 	fd.c = c
 	e.t.Cleanup(func() { c.Disconnect(100) })
 	return fd, nil
+}
+
+// legacyDevice 模拟旧固件：MQTT_EVENT_CONNECTED 时无条件订阅 usage+pair，
+// 断线后自动重连并重订。用来验证服务端踢连接后旧固件能恢复。
+type legacyDevice struct {
+	t          *testing.T
+	c          paho.Client
+	dev        string
+	usage      chan []byte
+	subscribed chan struct{}
+}
+
+func (e *env) connectLegacyDevice(dev, key string) (*legacyDevice, error) {
+	d := &legacyDevice{t: e.t, dev: dev,
+		usage: make(chan []byte, 8), subscribed: make(chan struct{}, 8)}
+	opts := paho.NewClientOptions().
+		AddBroker("ssl://" + e.mqttAddr).
+		SetClientID(dev).
+		SetUsername(dev).
+		SetPassword(key).
+		SetTLSConfig(&tls.Config{InsecureSkipVerify: true}).
+		SetConnectTimeout(5 * time.Second).
+		SetAutoReconnect(true).
+		SetConnectRetry(true).
+		SetMaxReconnectInterval(time.Second).
+		SetCleanSession(true)
+	opts.SetDefaultPublishHandler(func(_ paho.Client, m paho.Message) {
+		if !strings.HasSuffix(m.Topic(), "/usage") {
+			return
+		}
+		select {
+		case d.usage <- append([]byte(nil), m.Payload()...):
+		default:
+		}
+	})
+	opts.SetOnConnectHandler(func(c paho.Client) {
+		c.Subscribe("printer/"+dev+"/pair", 1, nil)
+		tok := c.Subscribe("printer/"+dev+"/usage", 1, nil)
+		go func() {
+			if !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
+				return
+			}
+			if st, ok := tok.(*paho.SubscribeToken); ok {
+				for _, code := range st.Result() {
+					if code >= 0x80 {
+						return // 还没配对，usage 被拒
+					}
+				}
+			}
+			select {
+			case d.subscribed <- struct{}{}:
+			default:
+			}
+		}()
+	})
+	c := paho.NewClient(opts)
+	tok := c.Connect()
+	if !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
+		return nil, fmt.Errorf("连接失败：%v", tok.Error())
+	}
+	d.c = c
+	e.t.Cleanup(func() { c.Disconnect(100) })
+	return d, nil
+}
+
+func (d *legacyDevice) waitUsage(timeout time.Duration) []byte {
+	d.t.Helper()
+	select {
+	case b := <-d.usage:
+		return b
+	case <-time.After(timeout):
+		d.t.Fatal("旧固件没有收到用量")
+		return nil
+	}
 }
 
 // subscribe 必须检查 SUBACK 的返回码：broker 拒绝订阅时回 0x80，
@@ -296,6 +428,9 @@ func (d *fakeDevice) subscribeUsage() error {
 }
 func (d *fakeDevice) subscribePair() error {
 	return d.subscribe("printer/" + d.dev + "/pair")
+}
+func (d *fakeDevice) subscribeFrame() error {
+	return d.subscribe("printer/" + d.dev + "/frame")
 }
 
 func (d *fakeDevice) heartbeat() {
@@ -328,5 +463,22 @@ func (d *fakeDevice) waitPair(timeout time.Duration) []byte {
 	case <-time.After(timeout):
 		d.t.Fatal("没有收到配对通知")
 		return nil
+	}
+}
+
+func (d *fakeDevice) waitFrameVer(timeout time.Duration) uint64 {
+	d.t.Helper()
+	select {
+	case b := <-d.frame:
+		var p struct {
+			Ver uint64 `json:"ver"`
+		}
+		if err := json.Unmarshal(b, &p); err != nil || p.Ver == 0 {
+			d.t.Fatalf("帧版本通知 = %s", b)
+		}
+		return p.Ver
+	case <-time.After(timeout):
+		d.t.Fatal("没有收到帧版本通知")
+		return 0
 	}
 }
