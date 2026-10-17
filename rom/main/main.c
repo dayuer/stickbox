@@ -26,6 +26,7 @@
 #include "nvs_flash.h"
 
 #include "cloud_client.h"
+#include "coredump.h"
 #include "dlna.h"
 #include "lcd_ui.h"
 #include "ota.h"
@@ -96,6 +97,7 @@ static void services_task(void *arg)
     snprintf(devid, sizeof devid, "%02x%02x%02x%02x%02x%02x",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     ota_start(devid);
+    coredump_start();
     vTaskDelete(NULL);
 }
 

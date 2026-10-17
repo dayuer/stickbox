@@ -24,7 +24,9 @@
 #include "cJSON.h"
 
 #include "cloud_client.h"
+#include "coredump.h"
 #include "lcd_ui.h"
+#include "ota.h"
 #include "pairband.h"
 #include "provision.h"
 
@@ -318,15 +320,18 @@ static void handle_pair(const char *json, int len)
 static void heartbeat_task(void *arg)
 {
     (void)arg;
-    char p[192];
+    char p[256];
     while (1) {
         if (s_mqtt) {
+            /* fw 和 reset：服务端不解 ELF，没有版本号的 coredump 还原不了符号；
+             * reset 让「设备为什么又上线了」有答案（T10）。 */
             int n = snprintf(p, sizeof p,
                 "{\"dev\":\"%s\",\"state\":\"online\",\"heap\":%u,\"heap_min\":%u,"
-                "\"uptime\":%lld}",
+                "\"uptime\":%lld,\"fw\":\"%s\",\"reset\":\"%s\"}",
                 s_devid, (unsigned)esp_get_free_heap_size(),
                 (unsigned)esp_get_minimum_free_heap_size(),
-                (long long)(esp_timer_get_time() / 1000000));
+                (long long)(esp_timer_get_time() / 1000000),
+                ota_version(), coredump_reset_reason());
             esp_mqtt_client_publish(s_mqtt, s_topic_status, p, n, 1, 0);
             ESP_LOGI(TAG, "心跳 heap=%u min=%u",
                      (unsigned)esp_get_free_heap_size(),

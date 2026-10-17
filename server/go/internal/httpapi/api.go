@@ -67,6 +67,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/device/firmware", a.requireDevice(a.handleDeviceFirmware))
 	// 固件二进制不鉴权：开源硬件，bin 本身不是秘密，防篡改靠签名不靠访问控制。
 	mux.HandleFunc("GET /fw/{name}", a.handleFirmwareFile)
+	mux.Handle("POST /api/device/coredump", a.requireDevice(a.handleDeviceCoredump))
 
 	// agent：pair 可选令牌（新用户不带，已有用户带着把新屏并入）。
 	mux.HandleFunc("POST /api/agent/pair", a.handleAgentPair)
@@ -74,6 +75,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/agent/devices", a.requireAgent(a.handleAgentDevices))
 	mux.Handle("GET /api/agent/usage", a.requireAgent(a.handleUsageGet))
 	mux.Handle("POST /api/usage", a.requireAgent(a.handleUsagePost))
+	mux.Handle("GET /api/agent/coredumps", a.requireAgent(a.handleAgentCoredumps))
 	mux.Handle("POST /api/agent/logout", a.requireAgent(a.handleAgentLogout))
 
 	return drainBody(mux)
