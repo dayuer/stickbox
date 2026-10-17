@@ -42,6 +42,13 @@ type Config struct {
 	Burst      int
 	Dev        string // 可选：固定设备 ID（默认随机生成并持久化）
 	Logf       func(string, ...any)
+
+	// NoFetch 只订阅不收帧：压测时用来把「渲染 + 通知」和「取帧」拆开。
+	NoFetch bool
+	// OnFrameNotify 在收到 frame 版本通知时回调（压测计时用）。
+	OnFrameNotify func(dev string, ver uint64)
+	// Heartbeat 是 status 心跳间隔；0 表示默认 30 秒（真设备行为）。
+	Heartbeat time.Duration
 }
 
 type state struct {
@@ -102,6 +109,9 @@ func New(cfg Config) (*Device, error) {
 		cfg.Burst = 0
 	} else if cfg.Burst == 0 {
 		cfg.Burst = 8
+	}
+	if cfg.Heartbeat <= 0 {
+		cfg.Heartbeat = 30 * time.Second
 	}
 	if cfg.Logf == nil {
 		cfg.Logf = log.Printf
@@ -582,6 +592,9 @@ func (d *Device) mqttSession(ctx context.Context) error {
 	}
 	d.logf("MQTT 已连接")
 	defer c.Disconnect(100)
+	hbCtx, hbCancel := context.WithCancel(ctx)
+	defer hbCancel()
+	go d.heartbeat(hbCtx, c, st.Dev)
 
 	// 新连接：先订 pair。usage/frame 属于配对后才订阅的主题；
 	// 本地已经是配对状态时直接订，不等 paired=true——服务端重启后
@@ -600,7 +613,6 @@ func (d *Device) mqttSession(ctx context.Context) error {
 	if res != subOK {
 		return fmt.Errorf("sim: 订阅 %s 失败", pairTopic)
 	}
-
 	d.mu.RLock()
 	wasPaired := d.st.Paired
 	d.mu.RUnlock()
@@ -646,6 +658,25 @@ func (d *Device) mqttSession(ctx context.Context) error {
 }
 
 type subResult int
+
+// heartbeat 周期性上报在线状态，压测时服务端 online_devices 才准确。
+func (d *Device) heartbeat(ctx context.Context, c paho.Client, dev string) {
+	tick := time.NewTicker(d.cfg.Heartbeat)
+	defer tick.Stop()
+	pub := func() {
+		payload := fmt.Sprintf(`{"dev":"%s","state":"online"}`, dev)
+		c.Publish("printer/"+dev+"/status", 1, false, payload)
+	}
+	pub()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			pub()
+		}
+	}
+}
 
 const (
 	subOK     subResult = iota
@@ -836,13 +867,21 @@ func (d *Device) onMessage(ctx context.Context, c paho.Client, kick chan<- struc
 			return
 		}
 		d.logf("帧版本通知：%d", p.Ver)
-		go d.fetchAsync(ctx)
+		if d.cfg.OnFrameNotify != nil {
+			d.cfg.OnFrameNotify(parts[1], p.Ver)
+		}
+		if !d.cfg.NoFetch {
+			go d.fetchAsync(ctx)
+		}
 	case "usage":
 		d.logf("收到用量：%s", string(payload))
 	}
 }
 
 func (d *Device) fetchAsync(ctx context.Context) {
+	if d.cfg.NoFetch {
+		return
+	}
 	if err := d.FetchFrame(ctx); err != nil && !errors.Is(err, errNeedRereg) {
 		d.logf("取帧失败：%v", err)
 	}

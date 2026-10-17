@@ -105,6 +105,7 @@ type cached struct {
 type worker struct {
 	ch     chan struct{}
 	cancel context.CancelFunc
+	active bool // 有未完成的标记（排队/防抖/渲染）
 }
 
 // Service 维护全部用户的当前帧。
@@ -122,6 +123,7 @@ type Service struct {
 
 	workersMu sync.Mutex
 	workers   map[string]*worker
+	pending   int // 有排队/防抖/渲染任务的用户数
 
 	renderSem chan struct{}
 	commitMu  sync.Mutex // 串行提交，保证版本号按提交顺序递增
@@ -174,11 +176,12 @@ func New(root string, st Store, us Usage, pub Publisher, b Builder, opt Options)
 	return s, nil
 }
 
-// PendingUsers 是当前有 worker 在排队/防抖/渲染的用户数。
+// PendingUsers 是当前真正有排队/防抖/渲染任务的用户数。
+// 注意不是 worker 总数：worker 会常驻，空闲时不能算排队。
 func (s *Service) PendingUsers() int {
 	s.workersMu.Lock()
 	defer s.workersMu.Unlock()
-	return len(s.workers)
+	return s.pending
 }
 
 // Close 停掉所有 worker。服务退出时调用。
@@ -249,10 +252,14 @@ func (s *Service) MarkDirty(userID string) {
 	w, ok := s.workers[userID]
 	if !ok {
 		wctx, cancel := context.WithCancel(s.ctx)
-		w = &worker{ch: make(chan struct{}, 1), cancel: cancel}
+		w = &worker{ch: make(chan struct{}, 1), cancel: cancel, active: true}
 		s.workers[userID] = w
+		s.pending++
 		s.wg.Add(1)
 		go s.workerLoop(wctx, userID, w)
+	} else if !w.active {
+		w.active = true
+		s.pending++
 	}
 	s.workersMu.Unlock()
 	select {
@@ -310,6 +317,10 @@ func (s *Service) workerLoop(ctx context.Context, userID string, w *worker) {
 			s.workersMu.Lock()
 			if s.workers[userID] == w {
 				delete(s.workers, userID)
+				if w.active {
+					w.active = false
+					s.pending--
+				}
 			}
 			s.workersMu.Unlock()
 			return
@@ -317,6 +328,15 @@ func (s *Service) workerLoop(ctx context.Context, userID string, w *worker) {
 		if err != nil {
 			slog.Warn("重建帧失败，保留旧帧", "user", userID, "err", err)
 		}
+
+		// 渲染期间来的上报已经进了 ch：保持 active，让循环顶部去消费；
+		// 这里不能把信号取走，否则循环会永远等在下一次上报上。
+		s.workersMu.Lock()
+		if len(w.ch) == 0 && w.active {
+			w.active = false
+			s.pending--
+		}
+		s.workersMu.Unlock()
 	}
 }
 

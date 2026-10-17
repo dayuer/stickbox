@@ -617,3 +617,28 @@ func TestCorruptCacheIsIgnored(t *testing.T) {
 		t.Error("损坏的缓存不该被加载")
 	}
 }
+
+// PendingUsers 只算真正有排队/防抖/渲染任务的用户；worker 常驻，
+// 空闲后不能继续计数。
+func TestPendingUsersDropsWhenIdle(t *testing.T) {
+	f := newFixture(t)
+	if got := f.svc.PendingUsers(); got != 0 {
+		t.Fatalf("初始 PendingUsers = %d，期望 0", got)
+	}
+	f.svc.MarkDirty("u1")
+
+	deadline := time.Now().Add(2 * time.Second)
+	for f.b.count() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if f.b.count() == 0 {
+		t.Fatal("worker 没有渲染")
+	}
+	for time.Now().Before(deadline) {
+		if f.svc.PendingUsers() == 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("渲染完成后 PendingUsers = %d，期望 0", f.svc.PendingUsers())
+}

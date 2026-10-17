@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/pprof"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -163,6 +165,7 @@ func (m *Registry) renderText() []byte {
 	writeGauge(&b, "stickbox_online_devices", "最近 120 秒内发过心跳的设备数", online)
 	writeGauge(&b, "stickbox_mqtt_connections", "当前 MQTT 连接数（不含服务端内联客户端）", mqtt)
 	writeGauge(&b, "stickbox_frame_pending_users", "帧渲染排队或防抖中的用户数", framePending)
+	writeGauge(&b, "stickbox_go_goroutines", "当前 goroutine 数", runtime.NumGoroutine())
 
 	writeCounter(&b, "stickbox_usage_reports_total", "成功落库的用量上报次数", m.usageReports)
 	writeCounter(&b, "stickbox_render_failures_total", "看板渲染失败次数", m.renderFails)
@@ -228,8 +231,16 @@ func (m *Registry) Serve(addr string) (*http.Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", m.Handler())
+	// 只在这个回环端口上暴露 pprof；不经过 nginx。
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 	srv := &http.Server{
-		Handler:           m.Handler(),
+		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go srv.Serve(ln)
