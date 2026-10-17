@@ -1153,7 +1153,7 @@ App 侧用 `GET /api/device/{dev}/printers` 的 `queued_jobs` 告诉用户
    `tools/reference/render.py` 的 `fix_page_count` 早先按 `0x80` 断行，那是错的
    ——真实数据里 `0x80` 不作包首字节出现，一行就会吞完整个文件，多页文档被数成
    1 页。已修正。依据是 `app/shared/urf/tests/fixtures/` 里 Apple 光栅器的真实
-   产物。可运行的编码器与校验器见 `app/shared/urf/`，直接用它，不要重新推格式。
+   产物。可运行的编码器与校验器原在 `app/shared/urf/`（App 已删除，见提交 f25e56f 及之前的历史），要用时从历史里取出来，不要重新推格式。
 3. **这台机器只支持 600dpi**（能力串 `RS600`），不能降到 300 省流量。
 4. **色彩是 8 位灰度**（`W8`）。传彩色数据打印机不认。
 5. **算好流量再传**。600dpi 8bpp A4 单页未压缩 34MB，RLE 后纯文字页
