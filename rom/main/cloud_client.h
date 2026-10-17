@@ -18,3 +18,7 @@ const char *cloud_api_base(void);
 
 /* 设备密钥，作 Bearer 用。未注册时是空串。 */
 const char *cloud_devkey(void);
+
+/* 电视上是不是正挂着配对码。挂着的时候屏幕归配对码，
+ * 「连接中…」/「离线」状态页不要去覆盖它。 */
+bool cloud_pair_pending(void);

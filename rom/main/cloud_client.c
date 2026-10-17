@@ -25,6 +25,7 @@
 
 #include "cloud_client.h"
 #include "coredump.h"
+#include "framefetch.h"
 #include "lcd_ui.h"
 #include "ota.h"
 #include "pairband.h"
@@ -79,7 +80,7 @@ static uint32_t s_backoff_ms = BACKOFF_MIN_MS;
 
 /* MQTT DATA 可能分片。topic 只在第一片（offset==0）里有效，
  * 后续分片靠 s_rx_kind 记住「正在收什么」。 */
-enum { RX_NONE, RX_USAGE, RX_PAIR };
+enum { RX_NONE, RX_USAGE, RX_PAIR, RX_FRAME };
 static int  s_rx_kind;
 static int  s_rx_len;
 static char s_rx_buf[RX_MAX + 1];
@@ -95,6 +96,10 @@ bool cloud_connected(void) { return s_connected; }
 const char *cloud_api_base(void) { return s_api_base; }
 
 const char *cloud_devkey(void) { return s_devkey; }
+
+/* 有码就意味着还没配对，电视上挂的是配对码。配对成功时 handle_pair()
+ * 会清掉它。 */
+bool cloud_pair_pending(void) { return s_pair_code[0] != 0; }
 
 /* 把 API 路径拼到运行期的 base 上。以前是 API_BASE "/x" 的字面量拼接，
  * 地址进 NVS 之后不能再在编译期拼。 */
@@ -431,6 +436,9 @@ static void handle_pair(const char *json, int len)
         lcd_ui_cloud("已配对");
         pairband_clear();
         subscribe_paired_topics();
+        /* 刚转正，手里大概还没有帧：配对前 /device/frame 一律 403，设备只能
+         * 等。这里主动叫一次，省掉最长 60 秒的兜底轮询。 */
+        framefetch_request("配对完成");
         ESP_LOGI(TAG, "配对成功，切到看板");
         if (cid[0]) { cid_remember_pair(cid); send_ack(cid, true, NULL); }
     } else {
@@ -446,6 +454,34 @@ static void handle_pair(const char *json, int len)
         vTaskDelay(pdMS_TO_TICKS(1500));
         esp_restart();
     }
+}
+
+/* 帧版本通知：payload 是 {"ver":N}，不 retain。
+ *
+ * 这里只做「解出版本串」这一件事，拉帧交给 framefetch——MQTT 事件跑在 mqtt
+ * 任务上，在它栈上开 TLS 下 218KB 是找崩溃。
+ *
+ * ver 两种写法都认：服务端现在发数字（docs/API.md 的 `{"ver":N}`），但槽头部
+ * 存的是字符串，将来换成带时间戳的版本串也不用改固件。 */
+static void handle_frame(const char *json, int len)
+{
+    cJSON *root = cJSON_ParseWithLength(json, len);
+    if (!root) {
+        ESP_LOGW(TAG, "帧通知不是合法 JSON（%d 字节）", len);
+        return;
+    }
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(root, "ver");
+    char ver[24] = { 0 };
+    if (cJSON_IsNumber(v))      snprintf(ver, sizeof ver, "%lld", (long long)v->valuedouble);
+    else if (cJSON_IsString(v)) strlcpy(ver, v->valuestring, sizeof ver);
+    cJSON_Delete(root);
+
+    if (!ver[0]) {
+        ESP_LOGW(TAG, "帧通知里没有 ver，忽略");
+        return;
+    }
+    ESP_LOGI(TAG, "服务端通知新帧版本 %s", ver);
+    framefetch_notify(ver);
 }
 
 static void heartbeat_task(void *arg)
@@ -575,6 +611,9 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
             else if (e->topic && e->topic_len == (int)strlen(s_topic_pair) &&
                      strncmp(e->topic, s_topic_pair, e->topic_len) == 0)
                 s_rx_kind = RX_PAIR;
+            else if (e->topic && e->topic_len == (int)strlen(s_topic_frame) &&
+                     strncmp(e->topic, s_topic_frame, e->topic_len) == 0)
+                s_rx_kind = RX_FRAME;
         }
         if (s_rx_kind == RX_NONE) break;
         if (e->total_data_len <= 0 || e->total_data_len > RX_MAX ||
@@ -590,8 +629,9 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
         s_rx_len += e->data_len;
         if (s_rx_len >= e->total_data_len) {
             s_rx_buf[s_rx_len] = 0;
-            if (s_rx_kind == RX_USAGE) handle_usage(s_rx_buf, s_rx_len);
-            else                       handle_pair(s_rx_buf, s_rx_len);
+            if (s_rx_kind == RX_USAGE)      handle_usage(s_rx_buf, s_rx_len);
+            else if (s_rx_kind == RX_FRAME) handle_frame(s_rx_buf, s_rx_len);
+            else                            handle_pair(s_rx_buf, s_rx_len);
             s_rx_kind = RX_NONE;
             s_rx_len = 0;
         }
