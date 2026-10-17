@@ -228,25 +228,67 @@ static void client_task(void *arg)
     uint32_t n = 0;
     bool ok = send_all(fd, s_hdr, s_hdr_len);
     while (ok) {
-        const int cur = s_cur;
-        const jb_page_t *pg = &s_pages[cur];
-        /* 有对应本页的带就拼进去，否则原样发页面（带里是纯背景色） */
+        /* 取一块当前有效的带（帧包模式下只有一页，编号 0）。s_busy 保证
+         * 正在发的这块不会被 publish 覆盖掉。 */
+        const int cur = s_fp_mode ? 0 : s_cur;
         int bi = -1;
+        bool fp;
+        const fp_index_t *ix;
+        const uint8_t *fpbase;
+        size_t fpbase_len;
         xSemaphoreTake(s_mx, portMAX_DELAY);
         if (s_front >= 0 && s_band_page[s_front] == cur) { bi = s_front; s_busy[bi]++; }
+        fp = s_fp_mode; ix = s_fp_ix; fpbase = s_fp_base; fpbase_len = s_fp_base_len;
         xSemaphoreGive(s_mx);
 
-        size_t a = pg->row_off[s_row0], b = pg->row_off[s_row0 + s_rows];
-        size_t len = bi >= 0 ? a + s_band_len[bi] + (pg->len - b) : pg->len;
+        size_t len = 0;
+        fp_seg_t segs[FP_MAX_SEGS];
+        int nseg = 0;
+        const jb_page_t *pg = NULL;
+
+        if (fp && ix && fpbase && bi >= 0) {
+            /* 帧包模式：底帧那些段直接指向 flash 映射地址，整帧从不在 RAM
+             * 里拼起来。这个编排和主机侧 bandtest 验的是同一个函数。 */
+            nseg = fp_frame_segments(ix, fpbase, fpbase_len, s_band[bi],
+                                     s_row_off[bi], s_row_len[bi],
+                                     segs, FP_MAX_SEGS, &len);
+            if (!nseg) {
+                /* 索引不合法。绝不能把错位的字节发出去——电视上是花屏，
+                 * 而且会一直花下去。下面会退回「只发纯底帧」：画面是带
+                 * 空白卡片的看板，不好看但不是花屏，流也不断。 */
+                ESP_LOGE(TAG, "帧段编排失败，本帧退回纯底帧");
+            }
+        }
+        if (!nseg) {
+            /* 预置页模式，或者帧包还没就绪：老的三段拼接。 */
+            if (fp) {
+                /* 帧包模式但带还没发布：发纯底帧，画面是纯色，不是花屏。 */
+                if (fpbase) { segs[0].p = fpbase; segs[0].n = fpbase_len; nseg = 1; len = fpbase_len; }
+            }
+            if (!nseg) {
+                pg = &s_pages[cur];
+                size_t a = pg->row_off[s_row0], b = pg->row_off[s_row0 + s_rows];
+                if (bi >= 0) {
+                    segs[0].p = pg->jpg;                segs[0].n = a;
+                    segs[1].p = s_band[bi];             segs[1].n = s_band_len[bi];
+                    segs[2].p = pg->jpg + b;            segs[2].n = pg->len - b;
+                    nseg = 3;
+                    len = a + s_band_len[bi] + (pg->len - b);
+                } else {
+                    segs[0].p = pg->jpg; segs[0].n = pg->len;
+                    nseg = 1; len = pg->len;
+                }
+            }
+        }
+
         uint8_t ch[8];
         pcc(ch, "00dc"); p32(ch + 4, len);
         static const uint8_t pad = 0;
-        if (bi >= 0)
-            ok = send_all(fd, ch, 8) && send_all(fd, pg->jpg, a) &&
-                 send_all(fd, s_band[bi], s_band_len[bi]) && send_all(fd, pg->jpg + b, pg->len - b);
-        else
-            ok = send_all(fd, ch, 8) && send_all(fd, pg->jpg, pg->len);
+        ok = send_all(fd, ch, 8);
+        for (int i = 0; ok && i < nseg; i++)
+            ok = send_all(fd, segs[i].p, segs[i].n);
         ok = ok && (!(len & 1) || send_all(fd, &pad, 1));
+
         if (bi >= 0) {
             xSemaphoreTake(s_mx, portMAX_DELAY);
             s_busy[bi]--;
