@@ -30,7 +30,6 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/render"
 	"github.com/dayuer/stickbox/server/go/internal/source"
 	"github.com/dayuer/stickbox/server/go/internal/store"
-	"github.com/dayuer/stickbox/server/go/internal/usage"
 )
 
 const (
@@ -70,11 +69,6 @@ type Store interface {
 	KeyByID(keyID string) (store.Key, bool, error)
 }
 
-// Usage 提供用户最近一次上报。
-type Usage interface {
-	Latest(userID string) (usage.Report, time.Time, bool, error)
-}
-
 // Publisher 把帧版本通知推给一台设备。
 type Publisher interface {
 	PublishFrame(dev string, payload []byte) error
@@ -93,7 +87,6 @@ func (b RenderBuilder) Build(s source.Snapshot) (*frame.Bundle, error) {
 }
 
 type Options struct {
-	DefaultTZ         string        // agent 没上报时区时的兜底
 	Debounce          time.Duration // 同一用户多次标脏的合并窗口
 	MaxWait           time.Duration // 防抖硬上限，避免持续上报把渲染饿死
 	RenderConcurrency int           // 全局同时渲染数
@@ -140,7 +133,7 @@ type evicted struct {
 type Service struct {
 	root    string
 	store   Store
-	usage   Usage
+	src     source.Source
 	pub     Publisher
 	builder Builder
 	opt     Options
@@ -171,15 +164,12 @@ type Service struct {
 	backfillSet map[string]struct{}
 }
 
-func New(root string, st Store, us Usage, pub Publisher, b Builder, opt Options) (*Service, error) {
+func New(root string, st Store, src source.Source, pub Publisher, b Builder, opt Options) (*Service, error) {
 	if root == "" {
 		return nil, errors.New("frames: root 为空")
 	}
-	if st == nil || us == nil || pub == nil || b == nil {
+	if st == nil || src == nil || pub == nil || b == nil {
 		return nil, errors.New("frames: 缺依赖")
-	}
-	if opt.DefaultTZ == "" {
-		opt.DefaultTZ = "UTC"
 	}
 	if opt.Debounce <= 0 {
 		opt.Debounce = 2 * time.Second
@@ -213,7 +203,7 @@ func New(root string, st Store, us Usage, pub Publisher, b Builder, opt Options)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
-		root: root, store: st, usage: us, pub: pub, builder: b, opt: opt,
+		root: root, store: st, src: src, pub: pub, builder: b, opt: opt,
 		ctx: ctx, cancel: cancel,
 		workers:     map[string]*worker{},
 		renderSem:   make(chan struct{}, opt.RenderConcurrency),
@@ -409,22 +399,10 @@ func (s *Service) Rebuild(userID string) error {
 	if len(devs) == 0 {
 		return errNoDevices
 	}
-	rep, received, ok, err := s.usage.Latest(userID)
-	if err != nil {
-		return fmt.Errorf("frames: 读用量：%w", err)
-	}
-	loc := s.locationFor(rep.TZ)
 	now := s.opt.Now()
-
-	var snap source.Snapshot
-	if ok {
-		snap, err = source.Claude{Report: rep, ReceivedAt: received}.Snapshot(context.Background(), now.In(loc))
-	} else {
-		// 刚配对、agent 还没上报过：也要出一张「等待上报」的帧。
-		snap, err = source.Claude{}.Snapshot(context.Background(), now.In(loc))
-	}
+	snap, err := s.src.Snapshot(s.ctx, userID, now)
 	if err != nil {
-		return fmt.Errorf("frames: 生成快照：%w", err)
+		return fmt.Errorf("frames: 取 %s 数据：%w", s.src.ID(), err)
 	}
 
 	bun, err := s.builder.Build(snap)
@@ -437,7 +415,7 @@ func (s *Service) Rebuild(userID string) error {
 		slog.Warn("打包帧失败，保留旧帧", "user", userID, "err", err)
 		return fmt.Errorf("frames: 打包：%w", err)
 	}
-	return s.commit(userID, data, now, received, ok)
+	return s.commit(userID, data, now, snap.LastUpdate, snap.HasData())
 }
 
 // commit 写临时文件（含 fsync）在提交锁内、读锁外；内存里只做 rename 和替换。
@@ -870,11 +848,12 @@ func (s *Service) checkStale(now time.Time) {
 			s.drop(id)
 			continue
 		}
-		rep, received, ok, err := s.usage.Latest(id)
+		// 只为了拿时区与上报时刻；换算很便宜，不值得给 Source 再开一个方法。
+		snap, err := s.src.Snapshot(s.ctx, id, now)
 		if err != nil {
 			continue
 		}
-		loc := s.locationFor(rep.TZ)
+		loc := snap.Now.Location()
 
 		s.mu.RLock()
 		c := s.cache[id]
@@ -889,7 +868,7 @@ func (s *Service) checkStale(now time.Time) {
 		}
 		// 超过 15 分钟没上报：重渲一次，让「更新 X 分前」和告警色跟上；
 		// 之后每 15 分钟一次（帧的 at 会更新）。
-		if ok && now.Sub(received) >= s.opt.StaleAfter &&
+		if snap.HasData() && now.Sub(snap.LastUpdate) >= s.opt.StaleAfter &&
 			now.Sub(time.Unix(c.at, 0)) >= s.opt.StaleAfter {
 			s.MarkDirty(id)
 		}
@@ -971,21 +950,6 @@ func (s *Service) backfillLoop(ctx context.Context) {
 		}
 		s.MarkDirty(id)
 	}
-}
-
-func (s *Service) locationFor(tz string) *time.Location {
-	if tz != "" {
-		if l, err := time.LoadLocation(tz); err == nil {
-			return l
-		}
-		slog.Warn("未知时区，回退默认", "tz", tz)
-	}
-	if s.opt.DefaultTZ != "" {
-		if l, err := time.LoadLocation(s.opt.DefaultTZ); err == nil {
-			return l
-		}
-	}
-	return time.UTC
 }
 
 // Pack 生成下发格式：

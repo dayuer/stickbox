@@ -231,8 +231,7 @@ func newFixture(t *testing.T) *fixture {
 		b:   &fakeBuilder{},
 		now: time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC),
 	}
-	svc, err := New(f.root, f.st, f.us, f.pub, f.b, Options{
-		DefaultTZ:         "UTC",
+	svc, err := New(f.root, f.st, source.NewClaude(f.us, "UTC"), f.pub, f.b, Options{
 		Debounce:          5 * time.Millisecond,
 		RenderConcurrency: 1,
 		BackfillPerSec:    1000,
@@ -561,8 +560,8 @@ func TestPersistenceAcrossRestart(t *testing.T) {
 	f.svc.Close() // 停掉 worker
 
 	b2 := &fakeBuilder{failErr: errors.New("不该重新渲染")}
-	svc2, err := New(f.root, f.st, f.us, f.pub, b2, Options{
-		DefaultTZ: "UTC", Debounce: 5 * time.Millisecond,
+	svc2, err := New(f.root, f.st, source.NewClaude(f.us, "UTC"), f.pub, b2, Options{
+		Debounce:          5 * time.Millisecond,
 		RenderConcurrency: 1, Now: f.currentTime,
 	})
 	if err != nil {
@@ -686,7 +685,7 @@ func TestCorruptCacheIsIgnored(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "frame.cache"), []byte("garbage"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	svc, err := New(f.root, f.st, f.us, f.pub, f.b, Options{DefaultTZ: "UTC"})
+	svc, err := New(f.root, f.st, source.NewClaude(f.us, "UTC"), f.pub, f.b, Options{})
 	if err != nil {
 		t.Fatalf("损坏的缓存不该让 New 失败：%v", err)
 	}
@@ -702,8 +701,8 @@ func TestLoadKeepsFrameDataOnDisk(t *testing.T) {
 	f.rebuild("u1")
 	f.svc.Close()
 
-	svc2, err := New(f.root, f.st, f.us, f.pub, f.b, Options{
-		DefaultTZ: "UTC", Debounce: 5 * time.Millisecond,
+	svc2, err := New(f.root, f.st, source.NewClaude(f.us, "UTC"), f.pub, f.b, Options{
+		Debounce:          5 * time.Millisecond,
 		RenderConcurrency: 1, Now: f.currentTime,
 	})
 	if err != nil {

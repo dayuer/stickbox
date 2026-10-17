@@ -90,8 +90,7 @@ func newFrameAPI(t *testing.T) (http.Handler, *testDeps, *frames.Service, *fakeF
 	t.Helper()
 	h, dep := newTestAPI(t)
 	b := &fakeFrameBuilder{}
-	fs, err := frames.New(dep.cfg.Root, dep.store, fakeFrameUsage{}, fakeFramePub{}, b, frames.Options{
-		DefaultTZ:         "UTC",
+	fs, err := frames.New(dep.cfg.Root, dep.store, source.NewClaude(fakeFrameUsage{}, "UTC"), fakeFramePub{}, b, frames.Options{
 		Debounce:          5 * time.Millisecond, // 测试里缩短防抖
 		RenderConcurrency: 1,
 		Now:               time.Now,

@@ -31,6 +31,7 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/httpapi"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
 	"github.com/dayuer/stickbox/server/go/internal/render"
+	"github.com/dayuer/stickbox/server/go/internal/source"
 	"github.com/dayuer/stickbox/server/go/internal/store"
 	"github.com/dayuer/stickbox/server/go/internal/tlsx"
 )
@@ -94,8 +95,7 @@ func startServerAt(t *testing.T, dir string) (*env, func()) {
 	if err != nil {
 		t.Fatalf("初始化渲染器：%v", err)
 	}
-	fs, err := frames.New(cfg.Root, st, api.Usage(), br, frames.RenderBuilder{R: rr}, frames.Options{
-		DefaultTZ:         "UTC",
+	fs, err := frames.New(cfg.Root, st, source.NewClaude(api.Usage(), "UTC"), br, frames.RenderBuilder{R: rr}, frames.Options{
 		Debounce:          100 * time.Millisecond, // 测试里缩短防抖
 		RenderConcurrency: 1,
 		BackfillPerSec:    100,

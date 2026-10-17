@@ -80,11 +80,10 @@ func TestFramesBackfillOnStartup(t *testing.T) {
 	fs, err := frames.New(
 		t.TempDir(), // 全新的 frames 目录，模拟刚部署
 		e.store,
-		usage.NewService(e.store, usageNoopPub{}, time.Now),
+		source.NewClaude(usage.NewService(e.store, usageNoopPub{}, time.Now), "UTC"),
 		pub,
 		tinyBuilder{},
 		frames.Options{
-			DefaultTZ:         "UTC",
 			Debounce:          50 * time.Millisecond,
 			RenderConcurrency: 1,
 		},

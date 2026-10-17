@@ -22,6 +22,7 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/metrics"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
 	"github.com/dayuer/stickbox/server/go/internal/render"
+	"github.com/dayuer/stickbox/server/go/internal/source"
 	"github.com/dayuer/stickbox/server/go/internal/store"
 	"github.com/dayuer/stickbox/server/go/internal/tlsx"
 	"github.com/dayuer/stickbox/server/go/internal/version"
@@ -97,12 +98,13 @@ func serve(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("初始化渲染器：%w", err)
 	}
-	fs, err := frames.New(cfg.Root, st, api.Usage(), br, frames.RenderBuilder{R: rr}, frames.Options{
-		DefaultTZ:         cfg.DefaultTZ,
-		CacheMaxBytes:     cfg.FrameCacheMaxBytes,
-		MemoryMaxBytes:    cfg.FrameMemoryMaxBytes,
-		BackfillPerSec:    cfg.BackfillPerSec,
-		Now:               time.Now,
+	// Claude 用量是其中一路数据源：时区由这路数据自带（agent 机器的时区）。
+	src := source.NewClaude(api.Usage(), cfg.DefaultTZ)
+	fs, err := frames.New(cfg.Root, st, src, br, frames.RenderBuilder{R: rr}, frames.Options{
+		CacheMaxBytes:  cfg.FrameCacheMaxBytes,
+		MemoryMaxBytes: cfg.FrameMemoryMaxBytes,
+		BackfillPerSec: cfg.BackfillPerSec,
+		Now:            time.Now,
 	})
 	if err != nil {
 		return fmt.Errorf("初始化帧服务：%w", err)
