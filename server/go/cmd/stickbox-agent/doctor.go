@@ -62,13 +62,14 @@ type doctor struct {
 	out io.Writer
 	now func() time.Time
 
-	runUsage    func() (usagePayload, string, error)
-	apiCall     func(method, path string, out any) error
-	lookupHost  func(string) ([]string, error)
-	checkHealth func(base string) error
-	service     func() (bool, string)
-	logPath     string
-	tz          func() string
+	runUsage      func() (usagePayload, string, error)
+	apiCall       func(method, path string, out any) error
+	lookupHost    func(string) ([]string, error)
+	checkHealth   func(base string) error
+	probeFirmware func(base string) (fwProbe, error)
+	service       func() (bool, string)
+	logPath       string
+	tz            func() string
 }
 
 func newDoctor(c *agentConfig) *doctor {
@@ -87,11 +88,12 @@ func newDoctor(c *agentConfig) *doctor {
 			}
 			return cl.call(method, path, true, nil, out)
 		},
-		lookupHost:  net.LookupHost,
-		checkHealth: healthCheck(c),
-		service:     serviceInstalled,
-		logPath:     logPath,
-		tz:          localTZ,
+		lookupHost:    net.LookupHost,
+		checkHealth:   healthCheck(c),
+		probeFirmware: firmwareRouteProbe(c),
+		service:       serviceInstalled,
+		logPath:       logPath,
+		tz:            localTZ,
 	}
 }
 
@@ -114,6 +116,7 @@ func (d *doctor) run() error {
 		d.checkUsage(),
 		d.checkToken(),
 		d.checkServer(),
+		d.checkFirmwareRoute(),
 		d.checkService(),
 		d.checkTZ(),
 	}
@@ -353,6 +356,74 @@ func healthCheck(c *agentConfig) func(string) error {
 			return fmt.Errorf("健康检查返回 %d", resp.StatusCode)
 		}
 		return nil
+	}
+}
+
+// ---- 4b. 固件下载路由 ----
+
+// 用一个不存在的文件名探测 /fw/：正常应返回 stickboxd 自己的 404
+// （text/plain "404 page not found"）；如果返回 nginx 的 HTML 404，
+// 说明请求落到了 location / 的兜底，OTA 下载同样会 404。
+const fwProbeName = "__stickbox_doctor_probe__.bin"
+
+type fwProbe struct {
+	status      int
+	contentType string
+	body        string
+}
+
+func firmwareRouteProbe(c *agentConfig) func(base string) (fwProbe, error) {
+	return func(base string) (fwProbe, error) {
+		cl, err := newAPIClient(c)
+		if err != nil {
+			return fwProbe{}, err
+		}
+		req, err := http.NewRequest("GET", base+"/fw/"+fwProbeName, nil)
+		if err != nil {
+			return fwProbe{}, err
+		}
+		req.Header.Set("User-Agent", "stickbox-agent/"+version)
+		resp, err := cl.hc.Do(req)
+		if err != nil {
+			return fwProbe{}, err
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fwProbe{
+			status:      resp.StatusCode,
+			contentType: resp.Header.Get("Content-Type"),
+			body:        string(body),
+		}, nil
+	}
+}
+
+func (d *doctor) checkFirmwareRoute() checkResult {
+	base, err := normalizeServer(d.cfg.Server)
+	if err != nil {
+		return failResult("固件下载路由", err.Error(),
+			"先修正服务端地址（stickbox-agent status 可看）；对外地址必须是 https://")
+	}
+	p, err := d.probeFirmware(base)
+	if err != nil {
+		return failResult("固件下载路由", "探测 /fw/ 失败："+firstLine(err.Error()),
+			"先看下面的「服务端连通性」；自托管用户检查 nginx 与 stickboxd 状态")
+	}
+	switch p.status {
+	case http.StatusNotFound:
+		if strings.Contains(strings.ToLower(p.contentType), "text/html") ||
+			strings.Contains(strings.ToLower(p.body), "<html") {
+			return failResult("固件下载路由",
+				"不存在的固件返回了 nginx 的 HTML 404，/fw/ 没有转发到 stickboxd",
+				"在 nginx 站点加 location /fw/（proxy_pass https://127.0.0.1:9443; proxy_read_timeout 120s;），"+
+					"参考 server/deploy/nginx-stickbox.conf；改完 nginx -t && systemctl reload nginx")
+		}
+		return okResult("固件下载路由", "不存在的固件返回 stickboxd 自己的 404（/fw/ 已正确反代）")
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return failResult("固件下载路由", fmt.Sprintf("反向代理转发失败（HTTP %d）", p.status),
+			"确认 stickboxd 在 127.0.0.1:9443 监听且 /healthz 正常；查看 nginx error_log 与 stickboxd 日志")
+	default:
+		return failResult("固件下载路由", fmt.Sprintf("不存在的固件返回 HTTP %d（期望 404）", p.status),
+			"检查 /fw/ 路由：请求应转发到 stickboxd，由它返回 404；参考 server/deploy/nginx-stickbox.conf")
 	}
 }
 

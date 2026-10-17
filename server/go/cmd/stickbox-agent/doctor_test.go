@@ -173,6 +173,63 @@ func TestDoctorServerTLSCertificate(t *testing.T) {
 	}
 }
 
+// /fw/ 后面是 stickboxd 自己的 404（text/plain）时，说明 nginx 把请求转给了后端。
+func TestDoctorFirmwareRouteProxied(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/fw/") {
+			t.Errorf("请求路径 = %q", r.URL.Path)
+		}
+		http.NotFound(w, r) // Go 的 404：text/plain "404 page not found"
+	}))
+	defer srv.Close()
+	d, _ := newTestDoctor(t, &agentConfig{Server: srv.URL})
+	r := d.checkFirmwareRoute()
+	if r.status != statusOK || !strings.Contains(r.detail, "stickboxd") {
+		t.Fatalf("结果 = %+v", r)
+	}
+}
+
+// nginx 没配 /fw/ 时落到 location / { return 404; }，返回 nginx 的 HTML 错误页。
+func TestDoctorFirmwareRouteCaughtByNginx(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, "<html><head><title>404 Not Found</title></head><body><center><h1>404 Not Found</h1></center><hr><center>nginx</center></body></html>")
+	}))
+	defer srv.Close()
+	d, _ := newTestDoctor(t, &agentConfig{Server: srv.URL})
+	r := d.checkFirmwareRoute()
+	if r.status != statusFail || !strings.Contains(r.fix, "/fw/") {
+		t.Fatalf("结果 = %+v", r)
+	}
+}
+
+// 路由存在但后端挂了：502/504 不能当成“路由缺失”，要指向 stickboxd。
+func TestDoctorFirmwareRouteBackendError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	d, _ := newTestDoctor(t, &agentConfig{Server: srv.URL})
+	r := d.checkFirmwareRoute()
+	if r.status != statusFail || !strings.Contains(r.detail, "502") {
+		t.Fatalf("结果 = %+v", r)
+	}
+}
+
+// 不存在的文件返回 200：更危险，可能把别的文件当固件发出去。
+func TestDoctorFirmwareRouteUnexpectedOK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "not a firmware")
+	}))
+	defer srv.Close()
+	d, _ := newTestDoctor(t, &agentConfig{Server: srv.URL})
+	r := d.checkFirmwareRoute()
+	if r.status != statusFail || !strings.Contains(r.detail, "200") {
+		t.Fatalf("结果 = %+v", r)
+	}
+}
+
 func TestDoctorServiceLastReport(t *testing.T) {
 	d, _ := newTestDoctor(t, &agentConfig{})
 	d.service = func() (bool, string) { return true, "launchd" }
@@ -234,6 +291,9 @@ func TestDoctorRunAllGood(t *testing.T) {
 	d.apiCall = func(string, string, any) error { return nil }
 	d.lookupHost = func(string) ([]string, error) { return []string{"127.0.0.1"}, nil }
 	d.checkHealth = func(string) error { return nil }
+	d.probeFirmware = func(string) (fwProbe, error) {
+		return fwProbe{status: 404, contentType: "text/plain; charset=utf-8", body: "404 page not found\n"}, nil
+	}
 	d.service = func() (bool, string) { return true, "launchd" }
 	d.tz = func() string { return "Asia/Bangkok" }
 	if err := os.WriteFile(d.logPath, []byte("2026/10/17 11:59:00 已上报：x\n"), 0o600); err != nil {
@@ -243,7 +303,7 @@ func TestDoctorRunAllGood(t *testing.T) {
 		t.Fatalf("run: %v\n%s", err, buf.String())
 	}
 	out := buf.String()
-	for _, want := range []string{"claude 可执行文件", "用量读取", "配对令牌", "服务端连通性", "后台服务", "时区", "1 分钟"} {
+	for _, want := range []string{"claude 可执行文件", "用量读取", "配对令牌", "服务端连通性", "固件下载", "后台服务", "时区", "1 分钟"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("输出缺少 %q：\n%s", want, out)
 		}
@@ -258,6 +318,9 @@ func TestDoctorRunReportsFailure(t *testing.T) {
 	d.apiCall = func(string, string, any) error { return nil }
 	d.lookupHost = func(string) ([]string, error) { return []string{"127.0.0.1"}, nil }
 	d.checkHealth = func(string) error { return nil }
+	d.probeFirmware = func(string) (fwProbe, error) {
+		return fwProbe{status: 404, contentType: "text/plain; charset=utf-8", body: "404 page not found\n"}, nil
+	}
 	d.service = func() (bool, string) { return false, "" }
 	d.tz = func() string { return "Asia/Bangkok" }
 	if err := d.run(); err == nil {

@@ -109,6 +109,7 @@ stickbox-agent doctor
 | 用量读取 | 在白名单环境 + 专用工作目录里跑一次 `/usage`，能否拿到 `rate_limits` |
 | 配对令牌 | 有没有令牌；调 `GET /api/agent/devices`，401 就是失效 |
 | 服务端连通性 | DNS、TLS 证书、`/healthz` |
+| 固件下载路由 | 不存在的固件应返回 stickboxd 的 404，而不是 nginx 的 HTML 404 |
 | 后台服务 | 是否安装、日志里最近一次成功上报是什么时候 |
 | 时区 | 当前上报的 IANA 时区 |
 
@@ -123,6 +124,8 @@ stickbox-agent doctor
        有效（名下 1 台屏）
 [OK  ] 服务端连通性
        mqtt.stickbox.ai：DNS / TLS / healthz 正常
+[OK  ] 固件下载路由
+       不存在的固件返回 stickboxd 自己的 404（/fw/ 已正确反代）
 [OK  ] 后台服务
        已安装（~/Library/LaunchAgents/ai.stickbox.agent.plist）；最近一次上报 3 分钟 前
 [OK  ] 时区
