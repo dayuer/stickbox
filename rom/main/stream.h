@@ -1,13 +1,27 @@
 #pragma once
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #include "jband.h"
 
 #define STREAM_PORT 8080
-/* T7 的配对码条带只有 6 位数字；12KB 足够，两块缓冲共 24KB，
- * 给 MQTT TLS 留出余量。T4 做整页看板时再按需调大。 */
-#define BAND_CAP (12 * 1024)
+
+/* 时钟条带的单块缓冲上限，双缓冲共 32KB。
+ *
+ * 必须与 server/go/internal/frame/frame.go 的 frame.BandCap 保持一致。
+ *
+ * 16KB 的来历（docs/FRAME.md 第 4 节）：时钟带逐行只替换 4 个卡片
+ * interval，12 行合计最坏 13,089 字节，出现在 08:28——最宽的数字 8 单个
+ * 就比最窄的 1 多 1KB，四个槽凑齐宽数字才顶得到。保守上界 14,626 字节。
+ *
+ * **不要按整条时钟带算。** 整带是 28,885~32,315 字节，双缓冲就是 63KB，
+ * 而 T8 实测带 MQTT TLS 的历史最低空闲堆正好是 63.5KB——那条路会把余量
+ * 吃光，设备必然 OOM。
+ *
+ * 光靠这个常量也不够：段长会随渲染器的字体和 q 值变化。帧包自带
+ * max_band_bytes，设备加载时先拿 stream_band_cap() 比对，超了拒绝整包。 */
+#define BAND_CAP (16 * 1024)
 
 /* 预置页面：1080p baseline JPEG，DRI = 每行 MCU 数（tools/render_pages.py 生成） */
 typedef struct {
@@ -23,9 +37,16 @@ int stream_frame_count(void);
 int stream_current(void);
 void stream_set(int idx);
 
-/* 带的双缓冲：取一块空闲缓冲写，写完发布。发布后下一帧起所有连接都用它 */
+/* 带的双缓冲：取一块空闲缓冲写，写完发布。发布后下一帧起所有连接都用它。
+ *
+ * publish 会校验 len：超过 BAND_CAP 就拒绝发布并返回 false，画面停在上一
+ * 版而不是把缓冲区外的垃圾推给电视。写入方自己也必须守住上限——越界在
+ * 写的时候就已经发生了，这里只是最后一道能被看见的关卡。 */
 uint8_t *stream_band_begin(void);
-void stream_band_publish(uint8_t *buf, size_t len, int page);
+bool stream_band_publish(uint8_t *buf, size_t len, int page);
+
+/* 单块带缓冲的容量。加载帧包时拿它和 meta 里的 max_band_bytes 比对。 */
+size_t stream_band_cap(void);
 
 int stream_clients(void);
 uint32_t stream_frames_sent(void);
