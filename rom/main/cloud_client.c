@@ -345,8 +345,12 @@ static void send_ack(const char *cid, bool ok, const char *err)
      * publish 等于让它读越界。 */
     if (n < 0) return;
     if (n >= (int)sizeof p) n = (int)sizeof p - 1;
-    esp_mqtt_client_publish(s_mqtt, s_topic_ack, p, n, 1, 0);
-    ESP_LOGI(TAG, "ACK cid=%s ok=%d%s%s", cid, ok ? 1 : 0,
+    /* 未转正时 ACL 不允许写 ack：用 QoS1 会留在 outbox，每次重连都重发，
+     * 被拒后又断线，形成“重连→发 ACK→被拒→重连”的循环。pending 阶段
+     * 用 QoS0，发出去就被丢，不占 outbox。转正后仍用 QoS1 保证送达。 */
+    int qos = s_paired ? 1 : 0;
+    esp_mqtt_client_publish(s_mqtt, s_topic_ack, p, n, qos, 0);
+    ESP_LOGI(TAG, "ACK cid=%s ok=%d qos=%d%s%s", cid, ok ? 1 : 0, qos,
              (err && err[0]) ? " e=" : "", (err && err[0]) ? err : "");
 }
 
