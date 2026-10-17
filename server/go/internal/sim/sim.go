@@ -61,13 +61,14 @@ type Device struct {
 	regMu   sync.Mutex
 	fetchMu sync.Mutex
 
-	mu           sync.RWMutex
-	st           state
-	bundle       *Bundle
-	etag         string
-	jpeg         []byte
-	lastMinute   string
-	needRegister bool
+	mu             sync.RWMutex
+	st             state
+	bundle         *Bundle
+	etag           string
+	jpeg           []byte
+	lastMinute     string
+	needRegister   bool
+	dataSubscribed bool // 当前连接是否已订阅 usage/frame（配对后才订）
 
 	frameReady chan struct{}
 	stream     *streamServer
@@ -556,6 +557,7 @@ func (d *Device) mqttSession(ctx context.Context) error {
 		SetCleanSession(true)
 
 	lost := make(chan struct{}, 1)
+	kick := make(chan struct{}, 1)
 	opts.SetConnectionLostHandler(func(_ paho.Client, err error) {
 		d.logf("MQTT 连接丢失：%v", err)
 		select {
@@ -563,32 +565,37 @@ func (d *Device) mqttSession(ctx context.Context) error {
 		default:
 		}
 	})
-	opts.SetDefaultPublishHandler(func(_ paho.Client, m paho.Message) {
-		d.onMessage(ctx, m.Topic(), m.Payload())
+	opts.SetDefaultPublishHandler(func(c paho.Client, m paho.Message) {
+		d.onMessage(ctx, c, kick, m.Topic(), m.Payload())
 	})
 
 	c := paho.NewClient(opts)
+	d.logf("MQTT 连接中：%s（client id %s）", d.cfg.MQTTAddr, st.Dev)
 	tok := c.Connect()
 	if !tok.WaitTimeout(10 * time.Second) {
 		return errors.New("sim: MQTT 连接超时")
 	}
 	if err := tok.Error(); err != nil {
+		d.logf("MQTT 连接失败：%v", err)
 		return err
 	}
+	d.logf("MQTT 已连接")
 	defer c.Disconnect(100)
 
-	for _, leaf := range []string{"usage", "pair", "frame"} {
-		topic := fmt.Sprintf("printer/%s/%s", st.Dev, leaf)
-		st := c.Subscribe(topic, 1, nil)
-		if !st.WaitTimeout(5*time.Second) || st.Error() != nil {
-			return fmt.Errorf("sim: 订阅 %s 失败：%v", topic, st.Error())
-		}
-		sub, ok := st.(*paho.SubscribeToken)
-		if ok {
-			for f, code := range sub.Result() {
-				if code >= 0x80 {
-					return fmt.Errorf("sim: 订阅 %s 被拒 0x%02x", f, code)
-				}
+	// 新连接：只订 pair。usage/frame 属于配对后才订阅的主题；
+	// 已配对时 retained 的 paired=true 会触发 subscribeData。
+	d.mu.Lock()
+	d.dataSubscribed = false
+	d.mu.Unlock()
+	pairTopic := "printer/" + st.Dev + "/pair"
+	pt := c.Subscribe(pairTopic, 1, nil)
+	if !pt.WaitTimeout(5*time.Second) || pt.Error() != nil {
+		return fmt.Errorf("sim: 订阅 %s 失败：%v", pairTopic, pt.Error())
+	}
+	if sub, ok := pt.(*paho.SubscribeToken); ok {
+		for f, code := range sub.Result() {
+			if code >= 0x80 {
+				return fmt.Errorf("sim: 订阅 %s 被拒 0x%02x", f, code)
 			}
 		}
 	}
@@ -597,13 +604,68 @@ func (d *Device) mqttSession(ctx context.Context) error {
 	case <-ctx.Done():
 		return nil
 	case <-lost:
+		d.logf("MQTT 会话结束：连接丢失")
 		return errors.New("sim: MQTT 连接断开")
+	case <-kick:
+		// 配对刚转正，旧连接的身份还是 pending；主动重连拿 active 身份。
+		return errors.New("sim: 数据订阅被拒，主动重连")
 	case <-time.After(24 * time.Hour):
 		return errors.New("sim: MQTT 会话到期")
 	}
 }
 
-func (d *Device) onMessage(ctx context.Context, topic string, payload []byte) {
+// subscribeData 在配对成功后订阅 usage/frame。服务端配对时会踢一次连接：
+// 如果这次订阅还拿着旧的 pending 身份，会被 SUBACK 0x80 拒绝；重连后
+// retained 的 paired=true 会再来一次，届时身份已是 active。
+func (d *Device) subscribeData(c paho.Client, kick chan<- struct{}) {
+	defer func() {
+		// 订阅失败时让会话重连；即使服务端没踢，也能自己恢复。
+		d.mu.RLock()
+		failed := !d.dataSubscribed
+		d.mu.RUnlock()
+		if failed {
+			select {
+			case kick <- struct{}{}:
+			default:
+			}
+		}
+	}()
+
+	d.mu.Lock()
+	if d.dataSubscribed {
+		d.mu.Unlock()
+		return
+	}
+	d.dataSubscribed = true
+	dev := d.st.Dev
+	d.mu.Unlock()
+
+	for _, leaf := range []string{"usage", "frame"} {
+		topic := fmt.Sprintf("printer/%s/%s", dev, leaf)
+		tok := c.Subscribe(topic, 1, nil)
+		if !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
+			d.logf("订阅 %s 失败：%v", topic, tok.Error())
+			d.resetDataSubscriptions()
+			continue
+		}
+		if sub, ok := tok.(*paho.SubscribeToken); ok {
+			for f, code := range sub.Result() {
+				if code >= 0x80 {
+					d.logf("订阅 %s 被拒 0x%02x（等重连后再订）", f, code)
+					d.resetDataSubscriptions()
+				}
+			}
+		}
+	}
+}
+
+func (d *Device) resetDataSubscriptions() {
+	d.mu.Lock()
+	d.dataSubscribed = false
+	d.mu.Unlock()
+}
+
+func (d *Device) onMessage(ctx context.Context, c paho.Client, kick chan<- struct{}, topic string, payload []byte) {
 	parts := strings.Split(topic, "/")
 	if len(parts) != 3 {
 		return
@@ -624,6 +686,9 @@ func (d *Device) onMessage(ctx context.Context, topic string, payload []byte) {
 			d.mu.Unlock()
 			_ = d.save()
 			d.setWaiting()
+			// 不在 paho 的消息回调里同步等 SUBACK：服务端可能同时踢连接，
+			// 阻塞会拖住连接丢失的处理。
+			go d.subscribeData(c, kick)
 			go d.fetchAsync(ctx)
 			return
 		}
@@ -635,6 +700,7 @@ func (d *Device) onMessage(ctx context.Context, topic string, payload []byte) {
 		d.bundle = nil
 		d.etag = ""
 		d.needRegister = true
+		d.dataSubscribed = false
 		d.mu.Unlock()
 		d.setWaiting()
 		d.signalFrame()
