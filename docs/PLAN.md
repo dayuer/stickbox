@@ -47,6 +47,9 @@
 | T13a | 服务端渲染器 + 数据源插件（纯 Go） | esp | T13 | 完成 |
 | T13c | 服务端帧分发：按用户渲染帧包、GET /api/device/frame、MQTT 通知 | esp1 | T13a | 完成 |
 | T13b | 固件取帧：flash 帧缓存环 + 离线兜底帧 | 项目改名 StickBox | T9、T11、T13a | 进行中 |
+| T13b-1 | 固件开机取真实画面：读 flash 最新槽先起播，联网后 GET /api/device/frame 写槽 | StickBox | T13c | 进行中 |
+| T13b-2 | 固件文字页：正在连接 / 配对码 / 网络离线 / 正在获取数据（板上生成，无 demo 图） | esp1 | T13b-1 接口 | 待办 |
+| T13b-3 | 固件无缝换帧：新帧包校验后在帧边界切换，推流不断、不重推 | StickBox | T13b-1 | 进行中 |
 | T15a | 浏览器烧录页（ESP Web Tools 自托管） | esp1 | — | 完成 |
 | T15b | 发布流水线：签名固件、镜像、agent 多平台 Release | esp1 | T15a | 暂停（让位 T13c） |
 | T17 | 电视首次出画慢（实测约 15 秒）：查三星播放器起播流程，定推流参数 | esp | T13a | 进行中 |
