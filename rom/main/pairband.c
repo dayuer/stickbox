@@ -20,7 +20,9 @@ static const char *TAG = "pairband";
 #define T      7
 #define GAP   12
 #define NDIG   6
-#define BG   0x1E3A8A     /* 与预置页第 1 页背景一致 */
+/* 必须和底图背景一致。原来是 0x1E3A8A（旧 page1 的蓝色背景），换成纯色
+ * 底图之后忘了改，电视上就多了一道蓝带——这个现象实际报上来过。 */
+#define BG   0x1D2D3D
 #define FG   0xFFFFFF
 
 const jb_box_t PAIRBAND_BOX = {
