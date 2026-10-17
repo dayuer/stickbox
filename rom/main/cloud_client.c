@@ -267,7 +267,14 @@ static bool get_cid(const cJSON *root, char *out, size_t cap)
 }
 
 /* 失败也要回 ACK（ok=0）：让服务端立刻知道这条没生效，而不是干等超时
- * 再重投一遍同样会失败的东西。 */
+ * 再重投一遍同样会失败的东西。
+ *
+ * **发完就算，不重试、不看结果。** 待配对期间这条 ACK 会被服务端的 ACL
+ * 丢掉（pending 密钥不许写 ack），那是正常的，不是错误：配对转正后服务端
+ * 会踢掉这条连接，设备以正式身份重连，retained 的 pair 消息会带着同一个
+ * cid 再来一次，那时 cid 环命中、补发一次 ACK 就接上了。
+ *
+ * 所以这里千万别加重试——待配对期间重试多少次都是被丢掉，纯属浪费。 */
 static void send_ack(const char *cid, bool ok, const char *err)
 {
     if (!cid || !cid[0] || !s_mqtt) return;
