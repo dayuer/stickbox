@@ -185,3 +185,6 @@ func (b *Broker) SetUsageResender(r UsageResender) { b.hook.usage = r }
 
 // SetFrameResender 接上「设备订阅 frame 时补发版本」的回调。
 func (b *Broker) SetFrameResender(r FrameResender) { b.hook.frame = r }
+
+// SetPairResender 接上「设备订阅 pair 时按密钥状态补发」的回调。
+func (b *Broker) SetPairResender(r PairResender) { b.hook.pair = r }

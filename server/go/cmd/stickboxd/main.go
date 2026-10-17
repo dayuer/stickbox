@@ -83,6 +83,8 @@ func serve(cfg *config.Config) error {
 	// 设备订阅 usage 时补发最新一份；usage.Service 要用 broker 发消息，
 	// 所以只能在两边都构造完之后接上。
 	br.SetUsageResender(api.Usage())
+	// 设备订阅 pair 时按密钥当前状态补发：retained 只存在 broker 内存里。
+	br.SetPairResender(api)
 
 	// 帧服务：渲染器加载内嵌字体；帧包落盘到 root/frames，重启直接加载。
 	rr, err := render.New()

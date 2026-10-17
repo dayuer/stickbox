@@ -291,6 +291,18 @@ ACL 只有两条：
 
 固件在 token 的第一个 `.` 之前取出自己的 key_id，与通知比对。
 
+服务端在设备**订阅** `printer/{dev}/pair` 时（`OnSubscribed`）还会按这条
+连接自己的 KeyID 查库补发一条当前状态，不只依赖 retained——broker 的
+retained 只在内存里，服务端一重启就没了：
+
+- 密钥已转正：补发 `paired=true`（带自己的 `key_id`）
+- 仍是 pending：不发，设备继续等 agent 输码
+- 已吊销：补发 `paired=false`（`key_ids` 含自己的 `key_id`）
+
+所以服务端重启后，已配对设备重连也能立刻拿到 `paired=true`，不会卡在
+配对页。`paired=true` 可能收到两次（retained + 订阅补发），设备处理必须
+幂等。
+
 ---
 
 ## 3. agent

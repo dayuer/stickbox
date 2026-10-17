@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -44,7 +45,14 @@ type env struct {
 // startServer 起一套真的：内嵌 broker + HTTPS，自签证书，端口交给内核分配。
 func startServer(t *testing.T) *env {
 	t.Helper()
-	dir := t.TempDir()
+	e, _ := startServerAt(t, t.TempDir())
+	return e
+}
+
+// startServerAt 在指定目录起一套服务（同一个库可以关掉再起，模拟重启）。
+// 返回的 stop 可提前调用且可重复调用；测试结束也会自动 stop。
+func startServerAt(t *testing.T, dir string) (*env, func()) {
+	t.Helper()
 	certDir := filepath.Join(dir, "certs")
 	if err := os.MkdirAll(certDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -56,7 +64,6 @@ func startServer(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { st.Close() })
 
 	v := auth.NewVerifier(st)
 	reloader, err := tlsx.New(cfg.CertPath(), cfg.KeyPath())
@@ -65,7 +72,6 @@ func startServer(t *testing.T) *env {
 	}
 
 	reg := registry.New(registry.Options{IdleTimeout: time.Hour})
-	t.Cleanup(reg.Shutdown)
 
 	mqttAddr := freeAddr(t)
 	br, err := broker.New(mqttAddr, reloader.Config(), v, reg)
@@ -75,10 +81,10 @@ func startServer(t *testing.T) *env {
 	if err := br.Serve(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { br.Close() })
 
 	api := httpapi.New(cfg, st, v, reg, br)
 	br.SetUsageResender(api.Usage())
+	br.SetPairResender(api)
 	rr, err := render.New()
 	if err != nil {
 		t.Fatalf("初始化渲染器：%v", err)
@@ -92,7 +98,6 @@ func startServer(t *testing.T) *env {
 	if err != nil {
 		t.Fatalf("初始化帧服务：%v", err)
 	}
-	t.Cleanup(fs.Close)
 	api.SetFrames(fs)
 	br.SetFrameResender(fs)
 
@@ -102,7 +107,18 @@ func startServer(t *testing.T) *env {
 	}
 	srv := &http.Server{Handler: api.Handler()}
 	go srv.Serve(ln)
-	t.Cleanup(func() { srv.Close() })
+
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			srv.Close()
+			br.Close()
+			fs.Close()
+			reg.Shutdown()
+			st.Close()
+		})
+	}
+	t.Cleanup(stop)
 
 	return &env{
 		t: t, httpBase: "https://" + ln.Addr().String(), mqttAddr: mqttAddr,
@@ -110,7 +126,7 @@ func startServer(t *testing.T) *env {
 		client: &http.Client{Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // 仅测试
 		}},
-	}
+	}, stop
 }
 
 func freeAddr(t *testing.T) string {

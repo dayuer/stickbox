@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -59,6 +60,7 @@ type Device struct {
 
 	regMu   sync.Mutex
 	fetchMu sync.Mutex
+	subMu   sync.Mutex
 
 	mu             sync.RWMutex
 	st             state
@@ -581,8 +583,9 @@ func (d *Device) mqttSession(ctx context.Context) error {
 	d.logf("MQTT 已连接")
 	defer c.Disconnect(100)
 
-	// 新连接：只订 pair。usage/frame 属于配对后才订阅的主题；
-	// 已配对时 retained 的 paired=true 会触发 subscribeData。
+	// 新连接：先订 pair。usage/frame 属于配对后才订阅的主题；
+	// 本地已经是配对状态时直接订，不等 paired=true——服务端重启后
+	// retained 可能丢了，但服务端现在也会按密钥状态补发。
 	d.mu.Lock()
 	d.dataSubscribed = false
 	d.mu.Unlock()
@@ -595,6 +598,35 @@ func (d *Device) mqttSession(ctx context.Context) error {
 		for f, code := range sub.Result() {
 			if code >= 0x80 {
 				return fmt.Errorf("sim: 订阅 %s 被拒 0x%02x", f, code)
+			}
+		}
+	}
+
+	d.mu.RLock()
+	wasPaired := d.st.Paired
+	d.mu.RUnlock()
+	if wasPaired {
+		switch d.subscribeData(c) {
+		case subOK:
+			go d.fetchAsync(ctx)
+		case subDenied:
+			// 本地以为配对了，实际还是 pending：退回等待配对。
+			d.logf("直接订阅 usage/frame 被拒，实际仍是待配对，回退等待配对")
+			d.mu.Lock()
+			d.st.Paired = false
+			d.st.Code = ""
+			d.mu.Unlock()
+			_ = d.save()
+			d.setWaiting()
+			go func() {
+				if _, err := d.Register(ctx); err != nil {
+					d.logf("重新获取配对码失败：%v", err)
+				}
+			}()
+		case subFailed:
+			select {
+			case kick <- struct{}{}:
+			default:
 			}
 		}
 	}
@@ -613,55 +645,56 @@ func (d *Device) mqttSession(ctx context.Context) error {
 	}
 }
 
-// subscribeData 在配对成功后订阅 usage/frame。服务端配对时会踢一次连接：
-// 如果这次订阅还拿着旧的 pending 身份，会被 SUBACK 0x80 拒绝；重连后
-// retained 的 paired=true 会再来一次，届时身份已是 active。
-func (d *Device) subscribeData(c paho.Client, kick chan<- struct{}) {
-	defer func() {
-		// 订阅失败时让会话重连；即使服务端没踢，也能自己恢复。
-		d.mu.RLock()
-		failed := !d.dataSubscribed
-		d.mu.RUnlock()
-		if failed {
-			select {
-			case kick <- struct{}{}:
-			default:
-			}
-		}
-	}()
+type subResult int
 
-	d.mu.Lock()
-	if d.dataSubscribed {
-		d.mu.Unlock()
-		return
+const (
+	subOK     subResult = iota
+	subDenied           // SUBACK 0x80：这把密钥其实还是 pending
+	subFailed           // 超时/连接问题，重连后重试
+)
+
+// subscribeData 订阅 usage/frame。全部成功后才置 dataSubscribed，
+// 之后同一连接上的重复调用直接返回成功。
+func (d *Device) subscribeData(c paho.Client) subResult {
+	d.subMu.Lock()
+	defer d.subMu.Unlock()
+
+	d.mu.RLock()
+	done, dev := d.dataSubscribed, d.st.Dev
+	d.mu.RUnlock()
+	if done {
+		return subOK
 	}
-	d.dataSubscribed = true
-	dev := d.st.Dev
-	d.mu.Unlock()
 
 	for _, leaf := range []string{"usage", "frame"} {
 		topic := fmt.Sprintf("printer/%s/%s", dev, leaf)
 		tok := c.Subscribe(topic, 1, nil)
 		if !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
 			d.logf("订阅 %s 失败：%v", topic, tok.Error())
-			d.resetDataSubscriptions()
-			continue
+			return subFailed
 		}
 		if sub, ok := tok.(*paho.SubscribeToken); ok {
 			for f, code := range sub.Result() {
 				if code >= 0x80 {
-					d.logf("订阅 %s 被拒 0x%02x（等重连后再订）", f, code)
-					d.resetDataSubscriptions()
+					d.logf("订阅 %s 被拒 0x%02x", f, code)
+					return subDenied
 				}
 			}
 		}
 	}
+	d.mu.Lock()
+	d.dataSubscribed = true
+	d.mu.Unlock()
+	return subOK
 }
 
-func (d *Device) resetDataSubscriptions() {
-	d.mu.Lock()
-	d.dataSubscribed = false
-	d.mu.Unlock()
+// keyID 是本地设备令牌的 key_id 部分。
+func (d *Device) keyID() string {
+	d.mu.RLock()
+	tok := d.st.Token
+	d.mu.RUnlock()
+	id, _, _ := strings.Cut(tok, ".")
+	return id
 }
 
 func (d *Device) onMessage(ctx context.Context, c paho.Client, kick chan<- struct{}, topic string, payload []byte) {
@@ -672,12 +705,20 @@ func (d *Device) onMessage(ctx context.Context, c paho.Client, kick chan<- struc
 	switch parts[2] {
 	case "pair":
 		var p struct {
-			Paired bool `json:"paired"`
+			Paired bool     `json:"paired"`
+			KeyID  string   `json:"key_id"`
+			KeyIDs []string `json:"key_ids"`
 		}
 		if json.Unmarshal(payload, &p) != nil {
 			return
 		}
+		// 只认发给「自己这把密钥」的通知：同一台设备可能换过密钥，
+		// 旧的 retained / 别人的通知不能把状态带偏。
 		if p.Paired {
+			if p.KeyID != "" && p.KeyID != d.keyID() {
+				d.logf("忽略发给其他密钥的配对通知（key_id %s）", p.KeyID)
+				return
+			}
 			d.logf("配对成功")
 			d.mu.Lock()
 			d.st.Paired = true
@@ -687,8 +728,23 @@ func (d *Device) onMessage(ctx context.Context, c paho.Client, kick chan<- struc
 			d.setWaiting()
 			// 不在 paho 的消息回调里同步等 SUBACK：服务端可能同时踢连接，
 			// 阻塞会拖住连接丢失的处理。
-			go d.subscribeData(c, kick)
-			go d.fetchAsync(ctx)
+			go func() {
+				switch d.subscribeData(c) {
+				case subOK:
+					d.fetchAsync(ctx)
+				case subDenied, subFailed:
+					// 连接还是 pending 身份（服务端马上会踢），或网络问题：
+					// 重连后本地 Paired=true，会直接订阅。
+					select {
+					case kick <- struct{}{}:
+					default:
+					}
+				}
+			}()
+			return
+		}
+		if len(p.KeyIDs) > 0 && !slices.Contains(p.KeyIDs, d.keyID()) {
+			d.logf("忽略其他密钥的解绑通知")
 			return
 		}
 		d.logf("收到解绑通知，准备重新注册")
