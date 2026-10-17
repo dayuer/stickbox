@@ -111,6 +111,11 @@ const char *framepack_version(void);
  * flash 里上一个主人的帧起播。 */
 void framepack_invalidate(void);
 
+/* 重启前的作废：不等推流 idle、不 munmap，只切预置页并擦槽头。
+ * 专供 cleanup 任务调用；擦除与在途读取撞击最多 panic，重启后由开机
+ * 守卫再次擦除。 */
+void framepack_invalidate_reboot(void);
+
 /* 把槽头的 12 字节版本字段解码成 C 字符串（遇到 NUL/不可打印字节截断）。
  * 旧固件写入的字段用 0xFF 填充，不能直接 memcpy 后当 %s 用。 */
 void fp_slot_ver(char *out, size_t cap, const uint8_t *field);

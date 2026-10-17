@@ -428,7 +428,9 @@ static void handle_pair(const char *json, int len)
     } else {
         const cJSON *kids = cJSON_GetObjectItemCaseSensitive(root, "key_ids");
         if (!cJSON_IsArray(kids)) {
-            mine = true;   /* 兼容不带 key_ids 的旧服务端 */
+            /* 解绑必须明确点名当前密钥才执行。没有 key_ids 的旧格式无法
+             * 确认是发给谁的，按 stale 处理——清错密钥的代价太大。 */
+            mine = false;
         } else {
             const cJSON *it = NULL;
             cJSON_ArrayForEach(it, kids) {
@@ -443,8 +445,10 @@ static void handle_pair(const char *json, int len)
 
     if (!mine) {
         /* 是针对本设备的 topic，但 key_id 对不上（重新注册后残留的 retain）。
-         * 回 ok=0 让服务端知道这是「刻意不应用」，别一直重投。 */
-        ESP_LOGI(TAG, "忽略不属于当前密钥 %s 的配对通知", s_key_id);
+         * **只记日志并回 ok=0**，绝对不能动 NVS 或重启：服务端可能把旧密钥
+         * 的指令重投给新密钥，一旦在这里清密钥就会“注册→旧指令→清密钥→
+         * 注册”无限循环，配对码永远配不上，还会反复擦 flash。 */
+        ESP_LOGW(TAG, "配对通知不属于当前密钥 %s，忽略（stale_key）", s_key_id);
         send_ack(cid, false, "stale_key");
         return;
     }
@@ -587,8 +591,17 @@ static void subscribe_paired_topics(void)
 static void cleanup_restart_task(void *arg)
 {
     (void)arg;
-    framepack_invalidate();
+    s_auth_failed = true;   /* 清理期间不要再发起重连 */
+    /* 先让 mqtt 任务把解绑 ACK 冲刷出去，再动 flash。 */
     vTaskDelay(pdMS_TO_TICKS(1500));
+
+    ESP_LOGW(TAG, "cleanup: 作废帧槽");
+    framepack_invalidate_reboot();
+
+    ESP_LOGW(TAG, "cleanup: 停止 MQTT client");
+    if (s_mqtt) esp_mqtt_client_stop(s_mqtt);
+
+    ESP_LOGW(TAG, "cleanup: 重启");
     esp_restart();
 }
 
@@ -773,7 +786,20 @@ void cloud_client_start(const uint8_t mac[6])
     if (!prov_load_devkey(keybuf, sizeof keybuf)) {
         need_pair_code = true;
         lcd_ui_cloud("正在注册");
-        while (!device_register()) {
+        while (1) {
+            if (!prov_rereg_allowed()) {
+                /* 防呆：不管哪条路径出 bug 造成“注册→解绑→注册”循环，
+                 * 一小时内最多写 3 次 NVS/擦 3 次帧槽。超限就停在配对页
+                 * 退避，等窗口过去再自动继续。 */
+                lcd_ui_cloud("注册过于频繁，稍后重试");
+                ESP_LOGE(TAG, "注册频率超限，%d 秒后重试", PAIR_RETRY_S);
+                vTaskDelay(pdMS_TO_TICKS(PAIR_RETRY_S * 1000));
+                continue;
+            }
+            if (device_register()) {
+                prov_rereg_note();   /* 只有成功才消耗配额 */
+                break;
+            }
             lcd_ui_cloud("注册失败，重试中");
             vTaskDelay(pdMS_TO_TICKS(PAIR_RETRY_S * 1000));
         }

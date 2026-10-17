@@ -31,6 +31,7 @@
 #include "cloud_client.h"
 #include "cloud_creds.h"
 #include "framepack.h"
+#include "provision.h"
 #include "statusband.h"
 #include "stream.h"
 
@@ -471,9 +472,15 @@ static void tick_task(void *arg)
 
 void framefetch_boot(void)
 {
-    /* 扫 frames 分区，挑 seq 最大的有效槽。没有就返回 false——
-     * 那说明这是第一次开机，或者上次的帧写坏了。 */
-    if (framepack_init()) {
+    /* 没有设备密钥（首次开机、解绑后、复位前没来得及擦槽）：flash 里的帧
+     * 属于上一个主人，绝不能起播。先擦掉再走配对页。 */
+    char key[80];
+    if (!prov_load_devkey(key, sizeof key)) {
+        ESP_LOGW(TAG, "无设备密钥：作废 flash 帧，不从旧帧起播");
+        framepack_invalidate();
+    } else if (framepack_init()) {
+        /* 扫 frames 分区，挑 seq 最大的有效槽。没有就返回 false——
+         * 那说明这是第一次开机，或者上次的帧写坏了。 */
         attach_active();
         ESP_LOGI(TAG, "用 flash 里的帧起播，版本 %s", framepack_version());
     } else {
