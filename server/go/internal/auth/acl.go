@@ -27,7 +27,7 @@ func ACLAllowed(id Identity, topic string, write bool, m Membership) bool {
 		if write {
 			return leaf == "status" || leaf == "ident"
 		}
-		return leaf == "job" || leaf == "cmd" || leaf == "profile"
+		return leaf == "job" || leaf == "cmd" || leaf == "profile" || leaf == "usage"
 
 	case RoleApp:
 		// App 只旁听自己名下设备的状态。

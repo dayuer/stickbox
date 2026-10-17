@@ -12,12 +12,14 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/config"
 	"github.com/dayuer/stickbox/server/go/internal/device"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
 	"github.com/dayuer/stickbox/server/go/internal/store"
+	"github.com/dayuer/stickbox/server/go/internal/usage"
 )
 
 // Invalidator 是 ACL 缓存的失效入口（由 broker.Membership 实现）。
@@ -25,9 +27,10 @@ type Invalidator interface {
 	Invalidate(userID string)
 }
 
-// Publisher 是 httpapi 对 MQTT 的窄依赖：只用来下发怪癖档案。
+// Publisher 是 httpapi 对 MQTT 的窄依赖：下发怪癖档案、推 Claude 用量。
 type Publisher interface {
 	PublishProfile(dev string, profile []byte) error
+	PublishUsage(dev string, payload []byte) error
 }
 
 type API struct {
@@ -39,13 +42,17 @@ type API struct {
 	reg   *registry.Registry
 	mem   Invalidator
 	pub   Publisher
+	usage *usage.Service
 }
 
 func New(cfg *config.Config, st *store.Store, v *auth.Verifier, pb *auth.PhoneBox,
 	sms *auth.SMS, reg *registry.Registry, mem Invalidator, pub Publisher) *API {
 	return &API{cfg: cfg, store: st, v: v, phone: pb, sms: sms,
-		reg: reg, mem: mem, pub: pub}
+		reg: reg, mem: mem, pub: pub, usage: usage.NewService(st, pub, time.Now)}
 }
+
+// Usage 暴露用量服务，main 拿它接到 broker 上（设备订阅时补发）。
+func (a *API) Usage() *usage.Service { return a.usage }
 
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -53,6 +60,7 @@ func (a *API) Handler() http.Handler {
 	// 不需要身份
 	mux.HandleFunc("POST /api/auth/sms", a.handleSMS)
 	mux.HandleFunc("POST /api/auth/verify", a.handleVerify)
+	mux.HandleFunc("POST /api/agent/login", a.handleAgentLogin)
 
 	// app 角色
 	mux.Handle("POST /api/auth/logout", a.requireApp(a.handleLogout))
@@ -67,6 +75,14 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/device/{dev}/tests", a.requireApp(a.handleTests))
 	mux.Handle("POST /api/device/{dev}/tests/{test}/start", a.requireApp(a.handleTestStart))
 	mux.Handle("POST /api/tests/{run_id}/answer", a.requireApp(a.handleTestAnswer))
+
+	mux.Handle("GET /api/usage", a.requireApp(a.handleUsageGet))
+	mux.Handle("GET /api/agents", a.requireApp(a.handleAgents))
+	mux.Handle("POST /api/agent/{key_id}/revoke", a.requireApp(a.handleAgentRevoke))
+
+	// agent 角色（用户电脑上的 stickbox-agent）
+	mux.Handle("POST /api/usage", a.requireAgent(a.handleUsagePost))
+	mux.Handle("POST /api/agent/logout", a.requireAgent(a.handleAgentLogout))
 
 	// device 角色
 	mux.Handle("GET /api/job/{id}/data", a.requireDevice(a.handleJobData))
@@ -108,7 +124,11 @@ type handlerFn func(http.ResponseWriter, *http.Request, auth.Identity)
 
 func (a *API) requireApp(fn handlerFn) http.Handler    { return a.guard(fn, auth.RoleApp) }
 func (a *API) requireDevice(fn handlerFn) http.Handler { return a.guard(fn, auth.RoleDevice) }
-func (a *API) requireAny(fn handlerFn) http.Handler    { return a.guard(fn, "") }
+func (a *API) requireAgent(fn handlerFn) http.Handler  { return a.guard(fn, auth.RoleAgent) }
+
+// requireAny 是「app 或 device」，不含 agent：那些端点按 Dev / X-Device 查数据，
+// agent 的 Dev 是空串，放进去会拿空串去查。
+func (a *API) requireAny(fn handlerFn) http.Handler { return a.guard(fn, "") }
 
 func (a *API) guard(fn handlerFn, want auth.Role) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -124,6 +144,10 @@ func (a *API) guard(fn handlerFn, want auth.Role) http.Handler {
 			return
 		}
 		if want != "" && id.Role != want {
+			unauthorized(w)
+			return
+		}
+		if want == "" && id.Role != auth.RoleApp && id.Role != auth.RoleDevice {
 			unauthorized(w)
 			return
 		}

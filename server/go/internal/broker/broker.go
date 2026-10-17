@@ -54,8 +54,9 @@ func (t *idTable) drop(cl *mqtt.Client) {
 }
 
 type Broker struct {
-	srv *mqtt.Server
-	mem *Membership
+	srv  *mqtt.Server
+	mem  *Membership
+	hook *Hook
 }
 
 func New(addr string, tlsCfg *tls.Config, v *auth.Verifier, mem *Membership, r Router, claim Claimer) (*Broker, error) {
@@ -79,7 +80,7 @@ func New(addr string, tlsCfg *tls.Config, v *auth.Verifier, mem *Membership, r R
 	if err := srv.AddListener(l); err != nil {
 		return nil, err
 	}
-	return &Broker{srv: srv, mem: mem}, nil
+	return &Broker{srv: srv, mem: mem, hook: h}, nil
 }
 
 func (b *Broker) Serve() error { return b.srv.Serve() }
@@ -101,6 +102,16 @@ func (b *Broker) PublishJob(dev, jobID string, size int64, hooks []byte) error {
 	}
 	return b.srv.Publish(fmt.Sprintf("printer/%s/job", dev), payload, false, 1)
 }
+
+// PublishUsage 推 Claude 用量。retain=0：payload 里的 now 是现场盖的，
+// 留着会过期；设备重连时由 OnSubscribed 触发补发一份新的（见 usage 包）。
+func (b *Broker) PublishUsage(dev string, payload []byte) error {
+	return b.srv.Publish(fmt.Sprintf("printer/%s/usage", dev), payload, false, 1)
+}
+
+// SetUsageResender 接上「设备订阅 usage 时补发」的回调。
+// 用 setter 而不是构造参数：usage.Service 要用 broker 发消息，构造时还没有 broker。
+func (b *Broker) SetUsageResender(r UsageResender) { b.hook.usage = r }
 
 // PublishProfile 下发 USB 层怪癖档案。retain=1，设备重连就能拿到。
 func (b *Broker) PublishProfile(dev string, profile []byte) error {

@@ -158,6 +158,7 @@ func (s *Store) DeleteUser(userID string) ([]string, error) {
 	}
 	for _, q := range []string{
 		`DELETE FROM devices WHERE user_id=?`,
+		`DELETE FROM usage WHERE user_id=?`,
 		`DELETE FROM user_phones WHERE user_id=?`,
 		`DELETE FROM users WHERE id=?`,
 	} {

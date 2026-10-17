@@ -109,6 +109,14 @@ CREATE TABLE IF NOT EXISTS profiles(
   UNIQUE(scope, match)
 );
 
+-- Claude 订阅用量，每个用户只留最新一份。body 是 usage.Report 的 JSON。
+-- 由用户电脑上的 stickbox-agent 上报（role=agent 的密钥），见 API 文档 4.11。
+CREATE TABLE IF NOT EXISTS usage(
+  user_id  TEXT PRIMARY KEY,
+  body     TEXT NOT NULL,
+  received INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS sms_codes(
   phone_hmac TEXT PRIMARY KEY,
   code_hash  TEXT NOT NULL,

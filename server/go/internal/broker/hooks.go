@@ -17,6 +17,11 @@ type Router interface {
 	Send(dev string, m device.Msg)
 }
 
+// UsageResender 在设备订阅 printer/{dev}/usage 时把最新用量补发给它。
+type UsageResender interface {
+	Resend(dev string)
+}
+
 // Claimer 是 broker 对 store 的窄依赖：把待认领的密钥绑到设备上。
 type Claimer interface {
 	ClaimKey(keyID, dev string) (bool, error)
@@ -31,13 +36,16 @@ type Hook struct {
 	claim  Claimer
 	// ids 记录每个连接校验通过的身份，ACL 判定时直接取，不重复跑 argon2。
 	ids *idTable
+	// usage 为 nil 时不补发（测试里、或还没接上的时候）。
+	usage UsageResender
 }
 
 func (h *Hook) ID() string { return "stickbox-auth" }
 
 func (h *Hook) Provides(b byte) bool {
 	switch b {
-	case mqtt.OnConnectAuthenticate, mqtt.OnACLCheck, mqtt.OnPublished, mqtt.OnDisconnect:
+	case mqtt.OnConnectAuthenticate, mqtt.OnACLCheck, mqtt.OnPublished, mqtt.OnDisconnect,
+		mqtt.OnSubscribed:
 		return true
 	}
 	return false
@@ -48,6 +56,13 @@ func (h *Hook) OnConnectAuthenticate(cl *mqtt.Client, pk packets.Packet) bool {
 	id, err := h.v.Verify(string(pk.Connect.Password))
 	if err != nil {
 		slog.Warn("MQTT 认证失败", "username", user, "remote", cl.Net.Remote)
+		return false
+	}
+
+	// agent 只走 HTTP 上报，ACL 也不给它任何 topic。连接直接拒掉，
+	// 省得它占着一条连接什么都干不了。
+	if id.Role == auth.RoleAgent {
+		slog.Warn("agent 令牌不允许连 MQTT", "username", user)
 		return false
 	}
 
@@ -115,6 +130,28 @@ func (h *Hook) OnACLCheck(cl *mqtt.Client, topic string, write bool) bool {
 		return false
 	}
 	return auth.ACLAllowed(id, topic, write, h.mem)
+}
+
+// OnSubscribed：设备订阅自己的 usage 主题时，补发一份最新用量。
+//
+// usage 不用 retain（payload 里的 now 会过期），所以设备重连后要靠这里
+// 才能立刻有数，否则得等到 agent 下一次上报（最长 10 分钟）。
+// 在 goroutine 里发：hook 回调里同步 Publish 会和 broker 内部的订阅流程抢锁。
+func (h *Hook) OnSubscribed(cl *mqtt.Client, pk packets.Packet, reasonCodes []byte) {
+	if h.usage == nil {
+		return
+	}
+	id, ok := h.ids.get(cl)
+	if !ok || id.Role != auth.RoleDevice {
+		return
+	}
+	want := "printer/" + id.Dev + "/usage"
+	for i, f := range pk.Filters {
+		if f.Filter != want || i >= len(reasonCodes) || reasonCodes[i] >= 0x80 {
+			continue
+		}
+		go h.usage.Resend(id.Dev)
+	}
 }
 
 func (h *Hook) OnDisconnect(cl *mqtt.Client, err error, expire bool) {

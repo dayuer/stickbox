@@ -27,9 +27,18 @@ func (f *fakeSender) Send(ctx context.Context, phone, code string) error {
 }
 
 // recPub 记下下发过的档案，测试据此断言。
-type recPub struct{ profiles map[string][]byte }
+type recPub struct{ profiles, usage map[string][]byte }
 
 func (p *recPub) PublishJob(dev, job string, size int64, hooks []byte) error { return nil }
+
+// PublishUsage 记下推给每台设备的最后一份用量。
+func (p *recPub) PublishUsage(dev string, payload []byte) error {
+	if p.usage == nil {
+		p.usage = map[string][]byte{}
+	}
+	p.usage[dev] = payload
+	return nil
+}
 
 func (p *recPub) PublishProfile(dev string, body []byte) error {
 	if p.profiles == nil {

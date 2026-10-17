@@ -20,6 +20,14 @@ func IssueSession(st SessionStore, userID, deviceName string) (string, error) {
 	})
 }
 
+// IssueAgentKey 为用户的一台电脑签发 agent 令牌（stickbox-agent login）。
+// 同 session 一样不设过期，靠吊销下线；name 是电脑名，方便在 App 里认。
+func IssueAgentKey(st SessionStore, userID, name string) (string, error) {
+	return issueKey(st, store.Key{
+		Role: string(RoleAgent), UserID: userID, Name: name,
+	})
+}
+
 // IssueDeviceKey 为一台桥签发 device 密钥，绑到该用户。
 // enroll 走这里，运维的 device add 也走这里。
 func IssueDeviceKey(st SessionStore, userID, dev, name string) (string, error) {
