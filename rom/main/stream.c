@@ -60,6 +60,10 @@ static uint32_t s_row_off[2][FP_BAND_ROWS];
 static uint32_t s_row_len[2][FP_BAND_ROWS];
 static int s_front = -1;
 static int s_busy[2];
+/* 正在发送某一帧、且手里的段指针指向 s_fp_base 的连接数。
+ * 换帧包时要等它归零再换，否则会把旧的 flash 映射从正在发送的段底下
+ * 抽走。详见 fp_wait_idle 的注释。 */
+static int s_fp_hold;
 static volatile int s_cur;
 static volatile int s_clients;
 static volatile uint32_t s_sent;
@@ -84,13 +88,45 @@ uint8_t *stream_band_begin(void)
 
 size_t stream_band_cap(void) { return BAND_CAP; }
 
+/* 等到没有任何连接的段指针还指着 s_fp_base。
+ *
+ * 为什么非等不可：发送循环在每帧开头把 s_fp_base 快照进 segs[]，之后的
+ * send_all 不再回头看共享状态——这正是「换帧包不打断发送」的实现方式。
+ * 代价是这段时间里 base 指向的 flash 映射必须一直有效，而帧包换代时要
+ * 去释放旧槽的映射，抽走的正是这块地址。
+ *
+ * 等待有上界：连接的 SO_SNDTIMEO 是 15 秒，一帧要么发完要么超时退出，
+ * 两种情况都会把 hold 放掉。等待发生在加载帧包的任务里，不在发送路径
+ * 上，所以等的这几百毫秒不会让任何一条流停顿。 */
+static void fp_wait_idle(void)
+{
+    int64_t t0 = esp_timer_get_time();
+    while (1) {
+        xSemaphoreTake(s_mx, portMAX_DELAY);
+        bool idle = s_fp_hold == 0;
+        xSemaphoreGive(s_mx);
+        if (idle) break;
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    int64_t ms = (esp_timer_get_time() - t0) / 1000;
+    if (ms > 1000) ESP_LOGW(TAG, "换底帧前等在途的帧发完，等了 %lld 毫秒", ms);
+}
+
+/* 切模式只改「下一帧要发哪些字节」，绝不碰正在进行的 HTTP 响应：不关
+ * socket、不改已经发出去的 AVI 头、不重发响应头，调用方也不需要重新
+ * SetAVTransportURI。电视看到的只是 movi 里下一个 00dc 块的内容变了——
+ * AVI 每块自带长度，内容换了不需要它重新握手，所以不进断流检查。 */
 void stream_use_framepack(const struct fp_index *ix, const uint8_t *base, size_t base_len)
 {
+    fp_wait_idle();
     xSemaphoreTake(s_mx, portMAX_DELAY);
     s_fp_ix = ix; s_fp_base = base; s_fp_base_len = base_len;
     s_fp_mode = true;
     /* 旧的带是给预置页拼的，在帧包模式下毫无意义。不作废的话，第一帧
-     * 会拿预置页的带去配底帧，发出去是花屏。 */
+     * 会拿预置页的带去配底帧，发出去是花屏。
+     *
+     * 作废只是把 s_front 置 -1，不动两块缓冲里的字节——正在发送其中一块
+     * 的连接已经靠 s_busy 占住了它，这里置位不会让它读到被改写的内容。 */
     s_front = -1;
     s_band_page[0] = s_band_page[1] = -1;
     xSemaphoreGive(s_mx);
@@ -99,6 +135,7 @@ void stream_use_framepack(const struct fp_index *ix, const uint8_t *base, size_t
 
 void stream_use_presets(void)
 {
+    fp_wait_idle();
     xSemaphoreTake(s_mx, portMAX_DELAY);
     bool was = s_fp_mode;
     s_fp_mode = false;
@@ -244,17 +281,29 @@ static void client_task(void *arg)
     uint32_t pace_n0 = 0;
     bool ok = send_all(fd, s_hdr, s_hdr_len);
     while (ok) {
-        /* 取一块当前有效的带（帧包模式下只有一页，编号 0）。s_busy 保证
-         * 正在发的这块不会被 publish 覆盖掉。 */
+        /* 每帧只在这一个临界区里看一次共享状态，拿到的东西（模式、底帧
+         * 地址、哪块带）全部快照进局部变量和 segs[]；往下的 send_all 再
+         * 也不回头看。
+         *
+         * 这是「全程不断流」的全部机制：换帧包、换时钟带、从配对页切到
+         * 真实看板，都只改共享状态，而共享状态只在帧与帧的边界被读到。
+         * 所以这些切换最多影响**下一帧**的字节，不可能在一帧发到一半时
+         * 改变段表、长度或 00dc 块头——那才会让电视读到错位的流并断开。
+         *
+         * 两个占用必须在本帧发完前一直有效：
+         *   s_busy[bi]  占住带缓冲，publish 只会写另一块（stream_band_begin 等）
+         *   s_fp_hold   占住底帧的 flash 映射，换帧包会等它归零（fp_wait_idle） */
         const int cur = s_fp_mode ? 0 : s_cur;
         int bi = -1;
         bool fp;
+        bool held = false;
         const fp_index_t *ix;
         const uint8_t *fpbase;
         size_t fpbase_len;
         xSemaphoreTake(s_mx, portMAX_DELAY);
         if (s_front >= 0 && s_band_page[s_front] == cur) { bi = s_front; s_busy[bi]++; }
         fp = s_fp_mode; ix = s_fp_ix; fpbase = s_fp_base; fpbase_len = s_fp_base_len;
+        if (fp && fpbase) { s_fp_hold++; held = true; }
         xSemaphoreGive(s_mx);
 
         size_t len = 0;
@@ -297,6 +346,22 @@ static void client_task(void *arg)
             }
         }
 
+        /* 这一帧凑不出任何字节（页面没解析成功、底帧还没就绪）。发一个
+         * 长度 0 的 00dc 块等于告诉电视「这是一帧空画面」，它八成会判成
+         * 坏流然后断开；而 break 是我们自己把流掐了。两个都比「跳过这一
+         * 拍、下一拍再试」差——TCP 上什么都不发，电视只是少等半秒。 */
+        if (!nseg || !len) {
+            if (bi >= 0 || held) {
+                xSemaphoreTake(s_mx, portMAX_DELAY);
+                if (bi >= 0) s_busy[bi]--;
+                if (held) s_fp_hold--;
+                xSemaphoreGive(s_mx);
+            }
+            ESP_LOGE(TAG, "这一帧没有可发的字节，跳过本拍（不断流）");
+            vTaskDelay(pdMS_TO_TICKS(1000 / s_fps));
+            continue;
+        }
+
         uint8_t ch[8];
         pcc(ch, "00dc"); p32(ch + 4, len);
         static const uint8_t pad = 0;
@@ -305,9 +370,10 @@ static void client_task(void *arg)
             ok = send_all(fd, segs[i].p, segs[i].n);
         ok = ok && (!(len & 1) || send_all(fd, &pad, 1));
 
-        if (bi >= 0) {
+        if (bi >= 0 || held) {
             xSemaphoreTake(s_mx, portMAX_DELAY);
-            s_busy[bi]--;
+            if (bi >= 0) s_busy[bi]--;
+            if (held) s_fp_hold--;
             xSemaphoreGive(s_mx);
         }
         if (!ok) break;
