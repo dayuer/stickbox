@@ -52,7 +52,7 @@ static esp_mqtt_client_handle_t s_mqtt;
 static char s_devid[24];
 /* 设备密钥 {key_id}.{secret}。按不透明字符串处理，不打进日志。 */
 static char s_devkey[80];
-static char s_topic_status[64], s_topic_usage[64], s_topic_pair[64];
+static char s_topic_status[64], s_topic_usage[64], s_topic_pair[64], s_topic_ack[64];
 
 static bool     s_paired;
 static char     s_key_id[24];       /* 设备令牌里第一个 '.' 之前的部分 */
@@ -201,6 +201,58 @@ static void pair_code_refresh(void)
     cJSON_Delete(root);
 }
 
+/* ── 指令 ACK ── */
+
+/* 云端下行的每条指令都带 cid，设备**应用完**才回 ACK，服务端收不到就重投。
+ *
+ * 为什么 QoS1 不够：QoS1 的 PUBACK 只说明消息投到了设备的 MQTT 栈，不说明
+ * 设备真的应用了。解析失败、状态机拒绝、应用到一半掉电——这些情况服务端
+ * 都以为成功，两端状态就此分叉。帧包通知尤其要命：丢一条的表现是电视永远
+ * 停在旧画面，设备和服务端都不报错，没人会发现。 */
+#define ACK_RING 8
+#define CID_MAX  28
+
+/* 最近已应用并 ACK 过的 cid。服务端重投时补一次 ACK 即可，不重复应用。 */
+static char s_acked[ACK_RING][CID_MAX];
+static int  s_acked_at;
+
+static bool cid_seen(const char *cid)
+{
+    for (int i = 0; i < ACK_RING; i++)
+        if (s_acked[i][0] && strcmp(s_acked[i], cid) == 0) return true;
+    return false;
+}
+
+static void cid_remember(const char *cid)
+{
+    strlcpy(s_acked[s_acked_at], cid, CID_MAX);
+    s_acked_at = (s_acked_at + 1) % ACK_RING;
+}
+
+/* 取 cid。没带 cid 的是旧服务端发的：照常处理，但不回 ACK。 */
+static bool get_cid(const cJSON *root, char *out, size_t cap)
+{
+    out[0] = 0;
+    const cJSON *c = cJSON_GetObjectItemCaseSensitive(root, "cid");
+    if (!cJSON_IsString(c) || !c->valuestring[0]) return false;
+    strlcpy(out, c->valuestring, cap);
+    return true;
+}
+
+/* 失败也要回 ACK（ok=0）：让服务端立刻知道这条没生效，而不是干等超时
+ * 再重投一遍同样会失败的东西。 */
+static void send_ack(const char *cid, bool ok, const char *err)
+{
+    if (!cid || !cid[0] || !s_mqtt) return;
+    char p[128];
+    int n = (err && err[0])
+        ? snprintf(p, sizeof p, "{\"cid\":\"%s\",\"ok\":%d,\"e\":\"%s\"}", cid, ok ? 1 : 0, err)
+        : snprintf(p, sizeof p, "{\"cid\":\"%s\",\"ok\":%d}", cid, ok ? 1 : 0);
+    esp_mqtt_client_publish(s_mqtt, s_topic_ack, p, n, 1, 0);
+    ESP_LOGI(TAG, "ACK cid=%s ok=%d%s%s", cid, ok ? 1 : 0,
+             (err && err[0]) ? " e=" : "", (err && err[0]) ? err : "");
+}
+
 /* ── 用量 / 配对通知 ── */
 
 static void read_window(const cJSON *root, const char *name, usage_window_t *w)
@@ -219,9 +271,20 @@ static void handle_usage(const char *json, int len)
 {
     cJSON *root = cJSON_ParseWithLength(json, len);
     if (!root) {
+        /* 连 cid 都取不出来，无从 ACK。服务端会超时重投。 */
         ESP_LOGW(TAG, "用量 payload 不是合法 JSON（%d 字节）", len);
         return;
     }
+    char cid[CID_MAX];
+    get_cid(root, cid, sizeof cid);
+
+    /* 重投：这条之前已经应用并 ACK 过，补一次 ACK 就行，不重复应用。 */
+    if (cid[0] && cid_seen(cid)) {
+        cJSON_Delete(root);
+        send_ack(cid, true, NULL);
+        return;
+    }
+
     usage_report_t u = { 0 };
     u.now = json_i64(root, "now", 0);
     u.ts = json_i64(root, "ts", 0);
@@ -231,9 +294,12 @@ static void handle_usage(const char *json, int len)
 
     if (!u.now) {
         ESP_LOGW(TAG, "用量 payload 缺 now，丢弃");
+        send_ack(cid, false, "no_now");
         return;
     }
     lcd_ui_usage(&u);
+    /* 先应用再记、再 ACK：顺序反了就会出现「服务端以为成功、设备其实没应用」。 */
+    if (cid[0]) { cid_remember(cid); send_ack(cid, true, NULL); }
     ESP_LOGI(TAG, "收到用量：5h=%.1f%% 7d=%.1f%% ts=%lld 堆=%u",
              u.five_hour.used_pct, u.seven_day.used_pct,
              (long long)u.ts, (unsigned)esp_get_free_heap_size());
@@ -243,6 +309,13 @@ static void handle_pair(const char *json, int len)
 {
     cJSON *root = cJSON_ParseWithLength(json, len);
     if (!root) return;
+    char cid[CID_MAX];
+    get_cid(root, cid, sizeof cid);
+    if (cid[0] && cid_seen(cid)) {
+        cJSON_Delete(root);
+        send_ack(cid, true, NULL);
+        return;
+    }
     const cJSON *p = cJSON_GetObjectItemCaseSensitive(root, "paired");
     bool paired = cJSON_IsBool(p) && cJSON_IsTrue(p);
 
@@ -271,7 +344,10 @@ static void handle_pair(const char *json, int len)
     cJSON_Delete(root);
 
     if (!mine) {
+        /* 是针对本设备的 topic，但 key_id 对不上（重新注册后残留的 retain）。
+         * 回 ok=0 让服务端知道这是「刻意不应用」，别一直重投。 */
         ESP_LOGI(TAG, "忽略不属于当前密钥 %s 的配对通知", s_key_id);
+        send_ack(cid, false, "stale_key");
         return;
     }
 
@@ -282,12 +358,17 @@ static void handle_pair(const char *json, int len)
         lcd_ui_cloud("已配对");
         pairband_clear();
         ESP_LOGI(TAG, "配对成功，切到看板");
+        if (cid[0]) { cid_remember(cid); send_ack(cid, true, NULL); }
     } else {
         ESP_LOGW(TAG, "设备已解绑，清密钥重新注册");
         prov_erase_devkey();
         s_devkey[0] = 0;
         lcd_ui_pair("", false);
         lcd_ui_cloud("已解绑");
+        /* ACK 必须赶在重启之前发出去。下面那 1500ms 既是给用户看屏的时间，
+         * 也是留给 MQTT 把这条 ACK 冲刷出去的时间——顺序反了服务端就永远
+         * 等不到回执，会一直重投一条设备其实已经执行过的解绑。 */
+        if (cid[0]) { cid_remember(cid); send_ack(cid, true, NULL); }
         vTaskDelay(pdMS_TO_TICKS(1500));
         esp_restart();
     }
@@ -431,6 +512,7 @@ void cloud_client_start(const uint8_t mac[6])
     snprintf(s_topic_status, sizeof s_topic_status, "printer/%s/status", s_devid);
     snprintf(s_topic_usage, sizeof s_topic_usage, "printer/%s/usage", s_devid);
     snprintf(s_topic_pair, sizeof s_topic_pair, "printer/%s/pair", s_devid);
+    snprintf(s_topic_ack, sizeof s_topic_ack, "printer/%s/ack", s_devid);
     ESP_LOGI(TAG, "设备 ID: %s", s_devid);
 
     char keybuf[80];
