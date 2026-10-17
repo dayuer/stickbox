@@ -2,7 +2,7 @@ package auth
 
 import "testing"
 
-// T7 没有 App 角色：设备只能写自己的 status、读自己的 usage 与 pair，
+// T7 没有 App 角色。T18 起设备还要写自己的 ack（下行指令回执），
 // agent 不连 MQTT。
 func TestACLMatrix(t *testing.T) {
 	dev := Identity{Dev: "aaa", Role: RoleDevice}
@@ -34,6 +34,22 @@ func TestACLMatrix(t *testing.T) {
 		{"pending 不能读帧版本", pending, "printer/aaa/frame", false, false},
 		{"pending 不能伪造配对", pending, "printer/aaa/pair", true, false},
 		{"pending 不能读别人的配对", pending, "printer/bbb/pair", false, false},
+		// 用受害者 MAC 注册出来的 pending 密钥 dev 完全相同，而 tracker 只
+		// 比对 dev——放它写 ack 就能替受害设备伪造回执。
+		{"pending 不能回 ACK", pending, "printer/aaa/ack", true, false},
+
+		// T18：下行指令回执。设备写自己的 ack，不能写别人的、也不能订阅
+		// 任何人的——ack 是单向上行，能订阅就能看到别人设备的执行情况。
+		{"设备回 ACK", dev, "printer/aaa/ack", true, true},
+		{"设备不能替别人回 ACK", dev, "printer/bbb/ack", true, false},
+		{"设备不能订阅 ACK", dev, "printer/aaa/ack", false, false},
+		{"agent 不能回 ACK", agent, "printer/aaa/ack", true, false},
+
+		// T13：帧版本通知。和 usage 一样是「已配对才能读」。
+		{"设备收帧版本通知", dev, "printer/aaa/frame", false, true},
+		{"设备不能伪造帧版本通知", dev, "printer/aaa/frame", true, false},
+		{"设备不能收别人的帧版本通知", dev, "printer/bbb/frame", false, false},
+		{"agent 不能订阅帧版本通知", agent, "printer/aaa/frame", false, false},
 
 		{"agent 不能推用量", agent, "printer/aaa/usage", true, false},
 		{"agent 不能订阅状态", agent, "printer/aaa/status", false, false},

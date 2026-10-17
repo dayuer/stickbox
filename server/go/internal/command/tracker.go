@@ -28,7 +28,7 @@ type Publisher interface {
 // Presence 告诉 tracker 设备在不在线。离线时不重投——消息发出去也没人收，
 // 白白烧掉重试预算，等上线再补发。为 nil 时视为一直在线。
 type Presence interface {
-	Online(dev string) bool
+	IsOnline(dev string) bool
 }
 
 const (
@@ -36,8 +36,10 @@ const (
 	retryBase = 15 * time.Second
 	// 重投间隔上限。
 	retryMax = 5 * time.Minute
-	// 投这么多次还没 ACK 就放弃，把设备标成「状态未确认」。
-	maxTries = 6
+	// 总共投这么多次（初次 + 3 次重投）还没 ACK 就放弃，把这条记成
+	// 「设备状态未确认」。注意只有设备在线时才会消耗次数——离线时不投，
+	// 所以这 4 次都是真的发出去过的。
+	maxTries = 4
 )
 
 // ErrPayloadNotObject：payload 必须是 JSON 对象，才能塞得进 cid。
@@ -177,7 +179,7 @@ func (t *Tracker) online(dev string) bool {
 	if t.presence == nil {
 		return true
 	}
-	return t.presence.Online(dev)
+	return t.presence.IsOnline(dev)
 }
 
 func (t *Tracker) nudge() {

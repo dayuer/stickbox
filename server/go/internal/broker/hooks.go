@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"encoding/json"
 	"log/slog"
 	"strings"
 
@@ -28,6 +29,8 @@ type Hook struct {
 	ids *idTable
 	// usage 为 nil 时不补发（测试里、或还没接上的时候）。
 	usage UsageResender
+	// cmd 为 nil 时不处理 ACK（同上）。
+	cmd CommandTracker
 }
 
 func (h *Hook) ID() string { return "stickbox-auth" }
@@ -112,15 +115,34 @@ func (h *Hook) OnDisconnect(cl *mqtt.Client, err error, expire bool) {
 //
 // topic 是经过 ACL 校验的，dev 一律从 topic 取；payload 内容不参与判断。
 func (h *Hook) OnPublished(cl *mqtt.Client, pk packets.Packet) {
-	if h.router == nil {
-		return
-	}
 	parts := strings.Split(pk.TopicName, "/")
-	if len(parts) != 3 || parts[0] != "printer" || parts[2] != "status" {
+	if len(parts) != 3 || parts[0] != "printer" || !auth.ValidDev(parts[1]) {
 		return
 	}
-	if !auth.ValidDev(parts[1]) {
+	switch parts[2] {
+	case "status":
+		if h.router != nil {
+			h.router.Seen(parts[1])
+		}
+	case "ack":
+		h.onAck(parts[1], pk.Payload)
+	}
+}
+
+// onAck 处理设备回执。设备说 ok=0 表示「收到了但刻意不应用」，那是永久
+// 失败，tracker 会立即结案而不是继续重投同样会失败的东西。
+func (h *Hook) onAck(dev string, payload []byte) {
+	if h.cmd == nil {
 		return
 	}
-	h.router.Seen(parts[1])
+	var a struct {
+		CID string `json:"cid"`
+		OK  int    `json:"ok"`
+		Err string `json:"e"`
+	}
+	if err := json.Unmarshal(payload, &a); err != nil || a.CID == "" {
+		slog.Warn("ACK 不是合法 JSON 或缺 cid", "dev", dev)
+		return
+	}
+	h.cmd.Ack(dev, a.CID, a.OK == 1, a.Err)
 }
