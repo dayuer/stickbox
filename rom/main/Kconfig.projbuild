@@ -1,5 +1,17 @@
 menu "StickBox"
 
+config STICKBOX_MEMDIAG
+    bool "Memory accounting diagnostics (serial only, off by default)"
+    default n
+    select FREERTOS_USE_TRACE_FACILITY
+    help
+        打开后在几个关键节点打堆快照，并在开机 60 秒、120 秒各打一次
+        全部任务的栈余量。排查「内存去哪了」用。
+
+        诊断本身也占内存（trace facility、任务数组、定时器），所以打出来的
+        数会略低于正式构建。对账看的是各项之间的差值，不是绝对值。
+
+
 config STICKBOX_LCD_ROTATE_180
     bool "Rotate the LCD 180 degrees (board plugged in upside down)"
     default y

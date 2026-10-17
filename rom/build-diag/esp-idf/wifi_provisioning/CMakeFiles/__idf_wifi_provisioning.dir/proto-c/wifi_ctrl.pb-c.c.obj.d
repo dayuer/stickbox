@@ -1,0 +1,37 @@
+esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/proto-c/wifi_ctrl.pb-c.c.obj: \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/wifi_provisioning/proto-c/wifi_ctrl.pb-c.c \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/wifi_provisioning/proto-c/wifi_ctrl.pb-c.h \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/protobuf-c/protobuf-c/protobuf-c/protobuf-c.h \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/newlib/platform_include/assert.h \
+ /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/config/sdkconfig.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/stdlib.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/machine/ieeefp.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/_ansi.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/newlib.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/_newlib_version.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/config.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/features.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include/stddef.h \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/newlib/platform_include/sys/reent.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/reent.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/_ansi.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/_types.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/machine/_types.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/machine/_default_types.h \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/newlib/platform_include/sys/lock.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/lock.h \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/newlib/platform_include/sys/cdefs.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/cdefs.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/machine/stdlib.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/alloca.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/_locale.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include/stdint.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/stdint.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/_intsup.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/_stdint.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/assert.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include/limits.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include/syslimits.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/limits.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/syslimits.h \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/protocomm/proto-c/constants.pb-c.h

@@ -28,6 +28,7 @@
 #include "cloud_client.h"
 #include "dlna.h"
 #include "lcd_ui.h"
+#include "memdiag.h"
 #include "pairband.h"
 #include "provision.h"
 #include "stream.h"
@@ -84,8 +85,10 @@ static void services_task(void *arg)
 
     uint8_t mac[6];
     esp_wifi_get_mac(WIFI_IF_STA, mac);
+    memdiag_heap("cloud_client_start 之前");
     cloud_client_start(mac);
     ESP_LOGI(TAG, "云端服务已启动，堆=%u", (unsigned)esp_get_free_heap_size());
+    memdiag_heap("cloud_client_start 之后（含 MQTT TLS 长连接）");
     vTaskDelete(NULL);
 }
 
@@ -228,7 +231,9 @@ void app_main(void)
     static frame_t frames[1];
     frames[0] = (frame_t){ blank_start, blank_end - blank_start };
     /* 配对码条带占 MCU 行 46..51；未配对时停在第 1 页显示它。 */
+    memdiag_heap("stream_start 之前");
     stream_start(frames, 1, CONFIG_STICKBOX_DLNA_FPS, PAIR_ROW0, PAIR_ROWS);
+    memdiag_heap("stream_start 之后（含带缓冲与页面解析）");
 
     sntp_start();
     xTaskCreate(services_task, "svc", 8192, NULL, 4, NULL);
@@ -239,4 +244,7 @@ void app_main(void)
                                            pdMS_TO_TICKS(30000));
     ESP_LOGI(TAG, "Wi-Fi 阶段结果: %s", (bits & EVT_GOT_IP) ? "已联网" : "30 秒超时，继续启动");
     ESP_LOGI(TAG, "启动完成，堆=%u", (unsigned)esp_get_free_heap_size());
+    memdiag_heap("启动完成");
+    memdiag_tasks("启动完成");
+    memdiag_start();
 }

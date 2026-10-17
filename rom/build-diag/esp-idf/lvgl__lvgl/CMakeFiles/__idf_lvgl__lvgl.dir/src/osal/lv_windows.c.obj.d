@@ -1,0 +1,33 @@
+esp-idf/lvgl__lvgl/CMakeFiles/__idf_lvgl__lvgl.dir/src/osal/lv_windows.c.obj: \
+ /Users/liyuqing/sproot/esp-airprint-T13b/rom/managed_components/lvgl__lvgl/src/osal/lv_windows.c \
+ /Users/liyuqing/sproot/esp-airprint-T13b/rom/managed_components/lvgl__lvgl/src/osal/lv_os_private.h \
+ /Users/liyuqing/sproot/esp-airprint-T13b/rom/managed_components/lvgl__lvgl/src/osal/../lv_conf_internal.h \
+ /Users/liyuqing/sproot/esp-airprint-T13b/rom/managed_components/lvgl__lvgl/src/osal/../lv_conf_kconfig.h \
+ /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/config/sdkconfig.h \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/esp_common/include/esp_attr.h \
+ /Users/liyuqing/sproot/esp-airprint-T13b/rom/managed_components/lvgl__lvgl/src/osal/lv_os.h \
+ /Users/liyuqing/sproot/esp-airprint-T13b/rom/managed_components/lvgl__lvgl/src/osal/../misc/lv_types.h \
+ /Users/liyuqing/sproot/esp-airprint-T13b/rom/managed_components/lvgl__lvgl/src/osal/../misc/../lv_conf_internal.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include/stdint.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/stdint.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/machine/_default_types.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/features.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/_newlib_version.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/_intsup.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/_stdint.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include/stddef.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include/stdbool.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/inttypes.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/newlib.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/config.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/machine/ieeefp.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/_ansi.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/_locale.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include/limits.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include/syslimits.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/limits.h \
+ /Users/liyuqing/esp/esp-idf-v5.5/components/newlib/platform_include/sys/cdefs.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/cdefs.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include/sys/syslimits.h \
+ /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include/stdarg.h \
+ /Users/liyuqing/sproot/esp-airprint-T13b/rom/managed_components/lvgl__lvgl/src/osal/lv_os_none.h
