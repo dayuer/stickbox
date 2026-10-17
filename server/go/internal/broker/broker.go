@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"time"
 
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/listeners"
@@ -34,6 +35,26 @@ type idTable struct {
 
 func newIDTable() *idTable { return &idTable{m: map[*mqtt.Client]auth.Identity{}} }
 
+// admit 在持有锁时完成「检查 + 登记」，避免 pending 和 active 同时
+// 连接时都通过检查、随后互相顶号。
+//
+// pending 身份不能顶掉已在线 active 连接；active 可以接管 pending
+// （合法设备重新上线时这是正常的）。
+func (t *idTable) admit(cl *mqtt.Client, id auth.Identity) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if id.Role == auth.RoleDevice && id.Pending {
+		for _, cur := range t.m {
+			if cur.Role == auth.RoleDevice && cur.Dev == id.Dev && !cur.Pending {
+				return false
+			}
+		}
+	}
+	t.m[cl] = id
+	return true
+}
+
+// put 只给测试夹具直接登记身份用；生产路径走 admit。
 func (t *idTable) put(cl *mqtt.Client, id auth.Identity) {
 	t.mu.Lock()
 	t.m[cl] = id
@@ -68,7 +89,10 @@ func New(addr string, tlsCfg *tls.Config, v *auth.Verifier, r Router) (*Broker, 
 			Level: slog.LevelWarn,
 		})),
 	})
-	h := &Hook{v: v, router: r, ids: newIDTable()}
+	h := &Hook{
+		v: v, router: r, ids: newIDTable(),
+		pending: newPendingLimiter(6, time.Minute),
+	}
 	if err := srv.AddHook(h, nil); err != nil {
 		return nil, err
 	}

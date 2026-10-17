@@ -1,6 +1,7 @@
 package frames
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -39,6 +40,17 @@ func (f *fakeStore) OwnerOfDevice(dev string) (string, bool, error) {
 func (f *fakeStore) KeyByID(keyID string) (store.Key, bool, error) {
 	k, ok := f.keys[keyID]
 	return k, ok, f.err
+}
+
+func (f *fakeStore) ListUsers() ([]store.User, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make([]store.User, 0, len(f.devs))
+	for id := range f.devs {
+		out = append(out, store.User{ID: id})
+	}
+	return out, nil
 }
 
 type fakeUsage struct {
@@ -192,11 +204,12 @@ func newFixture(t *testing.T) *fixture {
 		t:    t,
 		root: t.TempDir(),
 		st: &fakeStore{
-			devs:   map[string][]string{"u1": {"d1", "d2"}, "u2": {"d3"}},
-			owners: map[string]string{"d1": "u1", "d2": "u1", "d3": "u2"},
+			devs:   map[string][]string{"u1": {"d1", "d2"}, "u2": {"d3"}, "u3": {"d4"}},
+			owners: map[string]string{"d1": "u1", "d2": "u1", "d3": "u2", "d4": "u3"},
 			keys: map[string]store.Key{
 				"k1": {KeyID: "k1", Dev: "d1", Role: "device", UserID: "u1"},
 				"k3": {KeyID: "k3", Dev: "d3", Role: "device", UserID: "u2"},
+				"k4": {KeyID: "k4", Dev: "d4", Role: "device", UserID: "u3"},
 				"kp": {KeyID: "kp", Dev: "d1", Role: "device", Pending: true},
 				"kx": {KeyID: "kx", Dev: "d1", Role: "device", UserID: "u1", Disabled: true},
 				"ku": {KeyID: "ku", Dev: "d9", Role: "device", UserID: "u1"},
@@ -353,6 +366,32 @@ func TestMarkDirtyDebounces(t *testing.T) {
 	}
 }
 
+// 新部署/重启：已配对、有设备但还没有帧缓存的用户要在启动巡检时自动出帧；
+// 没有用量的用户也出一张「等待上报」帧。
+func TestStartupRendersExistingUsers(t *testing.T) {
+	f := newFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go f.svc.Run(ctx)
+
+	for _, u := range []string{"u1", "u2", "u3"} {
+		f.waitVersion(u, 1, 2*time.Second)
+	}
+	// 版本写入缓存后才发通知，这里轮询等通知落地。
+	waitPub := func(dev string) {
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			if ver, ok := f.pub.last(dev); ok && ver == 1 {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Errorf("%s 没有收到 ver=1 的帧通知", dev)
+	}
+	waitPub("d1")
+	waitPub("d4")
+}
+
 // 持续每 2 秒上报时，防抖不能无限重置；maxWait 到点必须渲染。
 func TestDebounceMaxWait(t *testing.T) {
 	f := newFixture(t)
@@ -429,12 +468,11 @@ func TestCheckStaleAfter15Minutes(t *testing.T) {
 	f.svc.checkStale(f.currentTime())
 	f.waitVersion("u1", 2, 2*time.Second)
 
-	// 刚重渲过，再检查不应该继续每 tick 都重渲。
-	before := f.b.count()
+	// 刚重渲过，再检查不应该继续每 tick 都重渲 u1（其他用户首次补帧不算）。
 	f.svc.checkStale(f.currentTime())
 	time.Sleep(50 * time.Millisecond)
-	if got := f.b.count(); got != before {
-		t.Errorf("同一时刻重复重渲了 %d 次", got-before)
+	if _, ver, _ := f.svc.Current("u1"); ver != 2 {
+		t.Errorf("u1 在同一时刻被重复重渲，版本 = %d", ver)
 	}
 }
 

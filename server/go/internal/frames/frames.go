@@ -56,6 +56,8 @@ var (
 type Store interface {
 	DevicesOfUser(userID string) ([]string, error)
 	OwnerOfDevice(dev string) (string, bool, error)
+	// ListUsers 用于启动/巡检时给「已配对但还没有帧缓存」的老用户补帧。
+	ListUsers() ([]store.User, error)
 	// KeyByID 是设备端点判权的唯一依据：必须用令牌自己的 KeyID
 	// 查 pending/disabled/user_id，不能按 dev 反查主人。
 	KeyByID(keyID string) (store.Key, bool, error)
@@ -611,6 +613,31 @@ func (s *Service) checkStale(now time.Time) {
 			now.Sub(time.Unix(c.at, 0)) >= s.opt.StaleAfter {
 			s.MarkDirty(id)
 		}
+	}
+
+	// 新版本部署/进程重启时，已配对的老用户没有帧缓存，上面的循环看不到。
+	// 枚举所有用户：名下有设备但还没有缓存的直接标脏；没有用量的用户
+	// 也出一张「等待上报」帧（设计稿有该状态）。
+	users, err := s.store.ListUsers()
+	if err != nil {
+		slog.Warn("枚举用户失败，跳过补帧", "err", err)
+		return
+	}
+	for _, u := range users {
+		if u.Disabled {
+			continue
+		}
+		s.mu.RLock()
+		_, cached := s.cache[u.ID]
+		s.mu.RUnlock()
+		if cached {
+			continue
+		}
+		devs, err := s.store.DevicesOfUser(u.ID)
+		if err != nil || len(devs) == 0 {
+			continue
+		}
+		s.MarkDirty(u.ID)
 	}
 }
 
