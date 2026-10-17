@@ -1,5 +1,29 @@
-# Name,   Type, SubType,  Offset,  Size
-nvs,      data, nvs,      0x9000,  24K
-phy_init, data, phy,      0xf000,  4K
-factory,  app,  factory,  0x10000, 4M
-coredump, data, coredump, ,        64K
+# StickBox 分区表（8MB flash）
+#
+# 双 OTA 槽：设备发出去之后只能靠 OTA 升级，没有第二次接串口的机会。
+# 分区表一旦随固件出门，再改就要每台拆下来重刷——所以在第一批板子
+# 交到别人手上之前定死。见 docs/PLAN.md T9。
+#
+# app 分区必须 64K 对齐，所以 otadata 之后到 0x20000 有 56K 空隙。
+# 当前固件 2.07MB，3M 槽余量 34%。
+#
+# frames：服务端渲染的 1080p 帧缓存（T13）。板子没有 PSRAM，整帧
+# （约 120KB）放不进内存，只能落 flash 再从 mmap 地址推给电视。
+# 划 6 槽 × 256K 环形轮换做磨损均衡。
+#   - 槽给到 256K 而不是 128K：1080p JPEG 实测约 120KB，128K 槽只剩
+#     6% 余量，画面复杂一点就写不下。256K 之后这个风险消失。
+#   - 寿命取决于写入策略，不是槽数：整帧每分钟重写一次 = 1440 次/天，
+#     6 槽摊下来每槽 240 次/天，10 万次擦写只够 1.1 年。必须只在数据
+#     变化时重写底帧（约 144 次/天 → 11 年），时钟那条带子用 jband
+#     在内存里重编码。详见 PLAN T13b。
+#
+# 末尾留 320K 未分配。
+#
+# Name,   Type, SubType,  Offset,   Size
+nvs,      data, nvs,      0x9000,   0x6000
+phy_init, data, phy,      0xf000,   0x1000
+otadata,  data, ota,      0x10000,  0x2000
+ota_0,    app,  ota_0,    0x20000,  0x300000
+ota_1,    app,  ota_1,    0x320000, 0x300000
+frames,   data, 0x40,     0x620000, 0x180000
+coredump, data, coredump, 0x7a0000, 0x10000

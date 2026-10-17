@@ -24,18 +24,25 @@
 #include "cJSON.h"
 
 #include "cloud_client.h"
+#include "coredump.h"
 #include "lcd_ui.h"
+#include "ota.h"
 #include "pairband.h"
 #include "provision.h"
 
 static const char *TAG = "cloud";
 
-/* 云端地址放在 cloud_creds.h（已 gitignore），照着 .example 复制一份。
+/* cloud_creds.h（已 gitignore）里的地址是【默认值】，不是唯一来源：
+ * 运行期优先用配网页写进 NVS 的自托管地址，没配过才回落到这里。
+ * 这样一份预编译固件所有人都能用，见 docs/PRODUCT.md 4.1。
  * 本机测试可以在 cloud_creds.h 里定义 STICKBOX_INSECURE_TLS=1 跳过证书校验。 */
 #include "cloud_creds.h"
 
 #ifndef API_BASE
-#error "cloud_creds.h 需要 API_BASE（例如 https://host:9443/api）"
+#error "cloud_creds.h 需要 API_BASE（例如 https://host/api）"
+#endif
+#ifndef MQTT_URI
+#error "cloud_creds.h 需要 MQTT_URI（例如 mqtts://host:8883）"
 #endif
 
 #ifdef STICKBOX_INSECURE_TLS
@@ -48,6 +55,11 @@ static const char *TAG = "cloud";
 #define RX_MAX          1024
 #define PAIR_RETRY_S      30
 
+/* 运行期生效的服务器地址：NVS 优先，空则用编译期默认值。
+ * cloud_client_start() 里填好，之后只读。 */
+static char s_mqtt_uri[128];
+static char s_api_base[128];
+
 static esp_mqtt_client_handle_t s_mqtt;
 static char s_devid[24];
 /* 设备密钥 {key_id}.{secret}。按不透明字符串处理，不打进日志。 */
@@ -55,6 +67,7 @@ static char s_devkey[80];
 static char s_topic_status[64], s_topic_usage[64], s_topic_pair[64];
 
 static bool     s_paired;
+static volatile bool s_connected;
 static char     s_key_id[24];       /* 设备令牌里第一个 '.' 之前的部分 */
 static char     s_pair_code[8];
 static int64_t  s_pair_expire_us;   /* 本机 uptime 截止时间 */
@@ -71,6 +84,21 @@ static char s_rx_buf[RX_MAX + 1];
 static void subscribe_paired_topics(void);
 
 bool cloud_paired(void) { return s_paired; }
+
+/* MQTT 是否已连上。OTA 健康检查拿它当「这版固件能用」的判据之一——
+ * 判据必须是设备自己能决定的，不能依赖电视开没开、用户配没配对。 */
+bool cloud_connected(void) { return s_connected; }
+
+const char *cloud_api_base(void) { return s_api_base; }
+
+const char *cloud_devkey(void) { return s_devkey; }
+
+/* 把 API 路径拼到运行期的 base 上。以前是 API_BASE "/x" 的字面量拼接，
+ * 地址进 NVS 之后不能再在编译期拼。 */
+static void api_url(char *buf, size_t cap, const char *path)
+{
+    snprintf(buf, cap, "%s%s", s_api_base, path);
+}
 
 // set_devkey 记住令牌并取出 key_id：配对通知要按 key_id 过滤，
 // 否则上一轮 retain 的通知会被下一轮注册误读。
@@ -146,9 +174,10 @@ static void set_pair(const char *code, int64_t expires, int64_t now)
 
 static bool device_register(void)
 {
-    char body[64], resp[512];
+    char body[64], resp[512], url[160];
     snprintf(body, sizeof body, "{\"dev\":\"%s\"}", s_devid);
-    int st = http_post(API_BASE "/device/register", body, NULL, resp, sizeof resp);
+    api_url(url, sizeof url, "/device/register");
+    int st = http_post(url, body, NULL, resp, sizeof resp);
     if (st != 200) {
         ESP_LOGW(TAG, "注册失败 HTTP %d：%s", st, resp);
         return false;
@@ -176,9 +205,9 @@ static bool device_register(void)
 
 static void pair_code_refresh(void)
 {
-    char resp[512];
-    int st = http_post(API_BASE "/device/pair-code", "{}", s_devkey,
-                       resp, sizeof resp);
+    char resp[512], url[160];
+    api_url(url, sizeof url, "/device/pair-code");
+    int st = http_post(url, "{}", s_devkey, resp, sizeof resp);
     if (st == 401 || st == 403) {
         ESP_LOGE(TAG, "设备密钥被拒，清掉后重新注册");
         prov_erase_devkey();
@@ -299,15 +328,18 @@ static void handle_pair(const char *json, int len)
 static void heartbeat_task(void *arg)
 {
     (void)arg;
-    char p[192];
+    char p[256];
     while (1) {
         if (s_mqtt) {
+            /* fw 和 reset：服务端不解 ELF，没有版本号的 coredump 还原不了符号；
+             * reset 让「设备为什么又上线了」有答案（T10）。 */
             int n = snprintf(p, sizeof p,
                 "{\"dev\":\"%s\",\"state\":\"online\",\"heap\":%u,\"heap_min\":%u,"
-                "\"uptime\":%lld}",
+                "\"uptime\":%lld,\"fw\":\"%s\",\"reset\":\"%s\"}",
                 s_devid, (unsigned)esp_get_free_heap_size(),
                 (unsigned)esp_get_minimum_free_heap_size(),
-                (long long)(esp_timer_get_time() / 1000000));
+                (long long)(esp_timer_get_time() / 1000000),
+                ota_version(), coredump_reset_reason());
             esp_mqtt_client_publish(s_mqtt, s_topic_status, p, n, 1, 0);
             ESP_LOGI(TAG, "心跳 heap=%u min=%u",
                      (unsigned)esp_get_free_heap_size(),
@@ -355,7 +387,8 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
     esp_mqtt_event_handle_t e = data;
     switch ((esp_mqtt_event_id_t)id) {
     case MQTT_EVENT_CONNECTED:
-        ESP_LOGI(TAG, "已连接云端 %s", MQTT_URI);
+        s_connected = true;
+        ESP_LOGI(TAG, "已连接云端 %s", s_mqtt_uri);
         lcd_ui_cloud("已连接");
         s_backoff_ms = BACKOFF_MIN_MS;
         esp_mqtt_set_config(s_mqtt, &(esp_mqtt_client_config_t){
@@ -368,6 +401,7 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
         break;
 
     case MQTT_EVENT_DISCONNECTED:
+        s_connected = false;
         if (s_auth_failed) break;
         s_backoff_ms = s_backoff_ms * 2;
         if (s_backoff_ms > BACKOFF_MAX_MS) s_backoff_ms = BACKOFF_MAX_MS;
@@ -453,6 +487,14 @@ void cloud_client_start(const uint8_t mac[6])
     snprintf(s_topic_pair, sizeof s_topic_pair, "printer/%s/pair", s_devid);
     ESP_LOGI(TAG, "设备 ID: %s", s_devid);
 
+    /* 服务器地址：NVS 里的自托管值优先，哪一项为空就用编译期默认。 */
+    prov_load_server(s_mqtt_uri, sizeof s_mqtt_uri, s_api_base, sizeof s_api_base);
+    bool self_hosted = s_mqtt_uri[0] || s_api_base[0];
+    if (!s_mqtt_uri[0]) strlcpy(s_mqtt_uri, MQTT_URI, sizeof s_mqtt_uri);
+    if (!s_api_base[0]) strlcpy(s_api_base, API_BASE, sizeof s_api_base);
+    ESP_LOGI(TAG, "服务器（%s）：%s / %s",
+             self_hosted ? "NVS 自托管" : "编译期默认", s_mqtt_uri, s_api_base);
+
     char keybuf[80];
     if (!prov_load_devkey(keybuf, sizeof keybuf)) {
         lcd_ui_cloud("正在注册");
@@ -475,7 +517,7 @@ void cloud_client_start(const uint8_t mac[6])
                         "{\"dev\":\"%s\",\"state\":\"offline\"}", s_devid);
 
     const esp_mqtt_client_config_t cfg = {
-        .broker.address.uri = MQTT_URI,
+        .broker.address.uri = s_mqtt_uri,
 #ifndef STICKBOX_INSECURE_TLS
         .broker.verification.crt_bundle_attach = esp_crt_bundle_attach,
 #endif

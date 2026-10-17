@@ -20,6 +20,9 @@
 #include "provision.h"
 #include "portal_html.h"
 #include "lcd_ui.h"
+/* 要拿 MQTT_URI / API_BASE 的编译期默认值，用来判断用户填的地址算不算
+ * 「换了服务器」——清空回默认也是一种换。 */
+#include "cloud_creds.h"
 
 static const char *TAG = "prov";
 #define NVS_NS "wifi"
@@ -30,6 +33,8 @@ static volatile int  s_test_state;
 static char          s_test_err[48];
 static char          s_test_ip[16];
 static char          s_try_ssid[33], s_try_pass[65];
+#define URL_MAX 128
+static char          s_try_mqtt[URL_MAX], s_try_api[URL_MAX];  /* 自托管，留空=默认 */
 static EventGroupHandle_t s_eg;
 #define EV_OK   BIT0
 #define EV_FAIL BIT1
@@ -81,14 +86,67 @@ bool prov_save_devkey(const char *key)
     return e == ESP_OK;
 }
 
+void prov_load_server(char *mqtt_uri, size_t mcap, char *api_base, size_t acap)
+{
+    mqtt_uri[0] = api_base[0] = 0;
+    nvs_handle_t h;
+    if (nvs_open(NVS_CLOUD, NVS_READONLY, &h) != ESP_OK) return;
+    size_t n = mcap;
+    if (nvs_get_str(h, "mqtt_uri", mqtt_uri, &n) != ESP_OK) mqtt_uri[0] = 0;
+    n = acap;
+    if (nvs_get_str(h, "api_base", api_base, &n) != ESP_OK) api_base[0] = 0;
+    nvs_close(h);
+}
+
+bool prov_save_server(const char *mqtt_uri, const char *api_base)
+{
+    /* 先算出「现在生效的」和「要换成的」两组地址。空值一律折算成编译期
+     * 默认值，这样「填了自托管」和「清空回官方」走的是同一套比较。 */
+    char cur_m[URL_MAX], cur_a[URL_MAX];
+    prov_load_server(cur_m, sizeof cur_m, cur_a, sizeof cur_a);
+    if (!cur_m[0]) strlcpy(cur_m, MQTT_URI, sizeof cur_m);
+    if (!cur_a[0]) strlcpy(cur_a, API_BASE, sizeof cur_a);
+
+    const char *new_m = (mqtt_uri && mqtt_uri[0]) ? mqtt_uri : MQTT_URI;
+    const char *new_a = (api_base && api_base[0]) ? api_base : API_BASE;
+    bool moved = strcmp(cur_m, new_m) != 0 || strcmp(cur_a, new_a) != 0;
+
+    nvs_handle_t h;
+    if (nvs_open(NVS_CLOUD, NVS_READWRITE, &h) != ESP_OK) return false;
+
+    /* 空值 = 删掉该项回到默认。erase_key 在键不存在时返回 NOT_FOUND，不是错误。 */
+    esp_err_t e = (mqtt_uri && mqtt_uri[0]) ? nvs_set_str(h, "mqtt_uri", mqtt_uri)
+                                            : (nvs_erase_key(h, "mqtt_uri"), ESP_OK);
+    if (e == ESP_OK)
+        e = (api_base && api_base[0]) ? nvs_set_str(h, "api_base", api_base)
+                                      : (nvs_erase_key(h, "api_base"), ESP_OK);
+
+    /* 换服务器必须连设备密钥一起换。密钥是旧服务器签发的，拿着它去连新
+     * 服务器 = 把旧服务器的完整凭据交给新服务器的运营者，对方就能冒充这
+     * 台设备连回旧服务器。和地址写在同一个事务里，不会出现「地址换了、
+     * 密钥还在」的中间态。
+     *
+     * 地址没变（只改了 Wi-Fi）就不动密钥，配对关系要保住。 */
+    if (e == ESP_OK && moved) e = (nvs_erase_key(h, "devkey"), ESP_OK);
+
+    if (e == ESP_OK) e = nvs_commit(h);
+    nvs_close(h);
+
+    if (e == ESP_OK && moved)
+        ESP_LOGW(TAG, "服务器已换为 %s，设备密钥一并清除，将重新注册", new_m);
+    return e == ESP_OK;
+}
+
 void prov_erase_devkey(void)
 {
     nvs_handle_t h;
     if (nvs_open(NVS_CLOUD, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_erase_all(h);
+    /* 只删 devkey。整个命名空间 erase_all 会连自托管的服务器地址一起抹掉，
+     * 密钥被吊销的设备就会悄悄回落到官方服务器——那是错的。 */
+    nvs_erase_key(h, "devkey");
     nvs_commit(h);
     nvs_close(h);
-    ESP_LOGW(TAG, "已清除设备密钥");
+    ESP_LOGW(TAG, "已清除设备密钥（保留服务器地址）");
 }
 
 void prov_erase(void)
@@ -183,16 +241,19 @@ static esp_err_t h_scan(httpd_req_t *r)
     return e;
 }
 
-/* 极简 JSON 取值：{"s":"...","p":"..."} */
-static void json_str(const char *body, const char *key, char *out, size_t cap)
+/* 极简 JSON 取值：{"s":"...","p":"..."}
+ *
+ * 返回 false 表示值没放下、被截断了。对服务器地址这件事很要紧：截断后的
+ * 主机名往往仍是一个合法地址，只是指向别处，设备会安静地连错服务器。 */
+static bool json_str(const char *body, const char *key, char *out, size_t cap)
 {
     out[0] = 0;
     char pat[8];
     snprintf(pat, sizeof pat, "\"%s\"", key);
     const char *p = strstr(body, pat);
-    if (!p) return;
+    if (!p) return true;
     p = strchr(p + strlen(pat), '"');
-    if (!p) return;
+    if (!p) return true;
     p++;
     size_t i = 0;
     while (*p && *p != '"' && i < cap - 1) {
@@ -200,6 +261,9 @@ static void json_str(const char *body, const char *key, char *out, size_t cap)
         out[i++] = *p++;
     }
     out[i] = 0;
+    /* 只有停在收尾引号上才算完整。停在 cap 是值太长；停在 \0 是整个请求体
+     * 被 h_connect 的 body[] 截掉了——两种都不能当成有效地址。 */
+    return *p == '"';
 }
 
 static void try_connect_task(void *arg)
@@ -222,6 +286,7 @@ static void try_connect_task(void *arg)
                                         pdMS_TO_TICKS(25000));
     if (b & EV_OK) {
         prov_save(s_try_ssid, s_try_pass);
+        prov_save_server(s_try_mqtt, s_try_api);
         s_test_state = 1;
         ESP_LOGI(TAG, "验证通过，3 秒后重启接入网络");
         lcd_ui_wifi("配网成功，重启中");
@@ -237,9 +302,18 @@ static void try_connect_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* 只接受 mqtts:// 与 https://。明文 mqtt:// / http:// 会让设备密钥和用量裸奔，
+ * 而且配网页是唯一的入口——这里放过去，后面没有第二道关。 */
+static bool server_url_ok(const char *u, const char *scheme)
+{
+    size_t n = strlen(scheme);
+    return strncmp(u, scheme, n) == 0 && strlen(u) > n + 2;
+}
+
 static esp_err_t h_connect(httpd_req_t *r)
 {
-    char body[384];      /* ssid 32 + pass 64 + 密钥 45 + JSON 外壳 */
+    /* ssid 32 + pass 64 + 两个地址各 128 + JSON 外壳 */
+    char body[640];
     int n = r->content_len < sizeof body - 1 ? r->content_len : (int)sizeof body - 1;
     int got = httpd_req_recv(r, body, n);
     if (got <= 0) return httpd_resp_send_500(r);
@@ -247,9 +321,24 @@ static esp_err_t h_connect(httpd_req_t *r)
 
     json_str(body, "s", s_try_ssid, sizeof s_try_ssid);
     json_str(body, "p", s_try_pass, sizeof s_try_pass);
+    /* 地址超长不能静默截断——截断后的主机名通常仍然合法，只是指向别处。 */
+    bool m_fit = json_str(body, "m", s_try_mqtt, sizeof s_try_mqtt);
+    bool a_fit = json_str(body, "a", s_try_api,  sizeof s_try_api);
+
     if (!s_try_ssid[0]) {
         httpd_resp_set_type(r, "application/json");
         return httpd_resp_send(r, "{\"ok\":0}", HTTPD_RESP_USE_STRLEN);
+    }
+
+    /* 两个地址必须同填或同空。只填一个的后果是 register 走一边、MQTT 连
+     * 另一边，密钥对不上，设备会无限重注册——而且界面上看不出任何异常。 */
+    bool one_only = (s_try_mqtt[0] != 0) != (s_try_api[0] != 0);
+    if (!m_fit || !a_fit || one_only ||
+        (s_try_mqtt[0] && !server_url_ok(s_try_mqtt, "mqtts://")) ||
+        (s_try_api[0]  && !server_url_ok(s_try_api,  "https://"))) {
+        s_try_mqtt[0] = s_try_api[0] = 0;   /* 不把半套地址留在静态缓冲里 */
+        httpd_resp_set_type(r, "application/json");
+        return httpd_resp_send(r, "{\"ok\":0,\"e\":\"addr\"}", HTTPD_RESP_USE_STRLEN);
     }
     s_test_state = 0; s_test_err[0] = 0; s_test_ip[0] = 0;
     xTaskCreate(try_connect_task, "wifi_try", 4096, NULL, 5, NULL);
