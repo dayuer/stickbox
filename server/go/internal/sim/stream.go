@@ -45,20 +45,24 @@ func waitingJPEG(code string, paired bool) ([]byte, error) {
 	ink := color.RGBA{0xf5, 0xf5, 0xf8, 0xff}
 	muted := color.RGBA{0x94, 0xbc, 0xe3, 0xff}
 	drawCentered(img, "STICKBOX", 8, 150, ink)
-	drawCentered(img, "PAIR THIS DEVICE", 5, 330, muted)
-
-	if code == "" {
-		code = "------"
-	}
-	// 大字号的 6 位配对码。
-	drawCentered(img, spaced(code), 20, 470, ink)
-
 	status := "WAITING FOR FRAME"
 	if paired {
+		// 电视只是一块画面，没法在上面输码；配对完成后不要还挂着
+		// 「PAIR THIS DEVICE」和配对码。
+		drawCentered(img, "PAIRED", 5, 330, muted)
 		status = "PAIRED · WAITING FOR FRAME"
+	} else {
+		drawCentered(img, "PAIR THIS DEVICE", 5, 330, muted)
+		if code == "" {
+			code = "------"
+		}
+		// 大字号的 6 位配对码。
+		drawCentered(img, spaced(code), 20, 470, ink)
 	}
 	drawCentered(img, status, 5, 850, muted)
-	drawCentered(img, "stickbox-agent pair "+code, 4, 940, muted)
+	if !paired {
+		drawCentered(img, "stickbox-agent pair "+code, 4, 940, muted)
+	}
 
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 85}); err != nil {
