@@ -18,6 +18,7 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/config"
 	"github.com/dayuer/stickbox/server/go/internal/frames"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
+	"github.com/dayuer/stickbox/server/go/internal/sales"
 	"github.com/dayuer/stickbox/server/go/internal/store"
 	"github.com/dayuer/stickbox/server/go/internal/usage"
 )
@@ -36,6 +37,7 @@ type API struct {
 	reg   *registry.Registry
 	pub   Publisher
 	usage *usage.Service
+	sales *sales.Service
 	// frames 在 main 里构造后注入；测试里可以为 nil。
 	frames *frames.Service
 
@@ -64,6 +66,7 @@ func New(cfg *config.Config, st *store.Store, v *auth.Verifier,
 	return &API{
 		cfg: cfg, store: st, v: v, reg: reg, pub: pub,
 		usage: usage.NewService(st, pub, time.Now),
+		sales: sales.NewService(st, time.Now),
 
 		regDev:        newRateLimiter("reg_dev", 5, 10*time.Minute),
 		regIP:         newRateLimiter("reg_ip", 20, 10*time.Minute),
@@ -76,6 +79,9 @@ func New(cfg *config.Config, st *store.Store, v *auth.Verifier,
 
 // Usage 暴露用量服务，main 拿它接到 broker 上（设备订阅时补发）。
 func (a *API) Usage() *usage.Service { return a.usage }
+
+// Sales 暴露经营数据服务，main 拿它接成第二路数据源。
+func (a *API) Sales() *sales.Service { return a.sales }
 
 // SetFrames 注入帧服务。构造 API 时还没有渲染器，所以用 setter。
 func (a *API) SetFrames(f *frames.Service) { a.frames = f }
@@ -106,6 +112,8 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/agent/devices", a.requireAgent(a.handleAgentDevices))
 	mux.Handle("GET /api/agent/usage", a.requireAgent(a.handleUsageGet))
 	mux.Handle("POST /api/usage", a.requireAgent(a.handleUsagePost))
+	mux.Handle("GET /api/agent/data", a.requireAgent(a.handleDataGet))
+	mux.Handle("POST /api/data", a.requireAgent(a.handleDataPost))
 	mux.Handle("GET /api/agent/coredumps", a.requireAgent(a.handleAgentCoredumps))
 	mux.Handle("POST /api/agent/logout", a.requireAgent(a.handleAgentLogout))
 

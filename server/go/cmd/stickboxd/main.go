@@ -98,8 +98,13 @@ func serve(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("初始化渲染器：%w", err)
 	}
-	// Claude 用量是其中一路数据源：时区由这路数据自带（agent 机器的时区）。
-	src := source.NewClaude(api.Usage(), cfg.DefaultTZ)
+	// 两路数据源：Claude 额度（消耗型）与当日经营数据（达成型）。
+	// 时区都由各自那路数据自带（agent 机器 / 上报方的时区）。
+	// 哪一路上屏不配置，跟着最近一次上报走——版面只有两个环，只能显示一路。
+	src := source.NewMostRecent(
+		source.NewClaude(api.Usage(), cfg.DefaultTZ),
+		source.NewSales(api.Sales(), cfg.DefaultTZ),
+	)
 	fs, err := frames.New(cfg.Root, st, src, br, frames.RenderBuilder{R: rr}, frames.Options{
 		CacheMaxBytes:  cfg.FrameCacheMaxBytes,
 		MemoryMaxBytes: cfg.FrameMemoryMaxBytes,

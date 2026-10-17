@@ -95,7 +95,10 @@ func startServerAt(t *testing.T, dir string) (*env, func()) {
 	if err != nil {
 		t.Fatalf("初始化渲染器：%v", err)
 	}
-	fs, err := frames.New(cfg.Root, st, source.NewClaude(api.Usage(), "UTC"), br, frames.RenderBuilder{R: rr}, frames.Options{
+	fs, err := frames.New(cfg.Root, st, source.NewMostRecent(
+		source.NewClaude(api.Usage(), "UTC"),
+		source.NewSales(api.Sales(), "UTC"),
+	), br, frames.RenderBuilder{R: rr}, frames.Options{
 		Debounce:          100 * time.Millisecond, // 测试里缩短防抖
 		RenderConcurrency: 1,
 		BackfillPerSec:    100,
@@ -253,6 +256,16 @@ func (e *env) reportUsage(agentToken string, body []byte) {
 			"Authorization": "Bearer " + agentToken})
 	if st != 200 {
 		e.t.Fatalf("上报用量 = %d %s", st, b)
+	}
+}
+
+func (e *env) reportData(agentToken, body string) {
+	e.t.Helper()
+	st, b := e.req("POST", "/api/data", body,
+		map[string]string{"Content-Type": "application/json",
+			"Authorization": "Bearer " + agentToken})
+	if st != 200 {
+		e.t.Fatalf("上报经营数据 = %d %s", st, b)
 	}
 }
 
