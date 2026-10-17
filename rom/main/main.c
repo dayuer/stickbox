@@ -28,6 +28,7 @@
 #include "cloud_client.h"
 #include "dlna.h"
 #include "lcd_ui.h"
+#include "ota.h"
 #include "pairband.h"
 #include "provision.h"
 #include "stream.h"
@@ -90,6 +91,34 @@ static void services_task(void *arg)
     esp_wifi_get_mac(WIFI_IF_STA, mac);
     cloud_client_start(mac);
     ESP_LOGI(TAG, "云端服务已启动，堆=%u", (unsigned)esp_get_free_heap_size());
+
+    char devid[24];
+    snprintf(devid, sizeof devid, "%02x%02x%02x%02x%02x%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    ota_start(devid);
+    vTaskDelete(NULL);
+}
+
+/* OTA 试运行的健康检查：联网 + 已配对 + 电视在拉流，三项都成立才算这版
+ * 固件能用，才调 ota_mark_healthy()。任一项没达成就不标记——下次重启
+ * bootloader 自动回滚上一槽。
+ *
+ * 判据要比「没崩」严格：一版能启动但连不上云端的固件，表现是电视停在
+ * 旧画面，用户看不出异常，而设备已经永远收不到新用量了。 */
+static void health_task(void *arg)
+{
+    (void)arg;
+    const int deadline_s = 180;
+    for (int t = 1; t <= deadline_s; t++) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        bool online = (xEventGroupGetBits(s_evt) & EVT_GOT_IP) != 0;
+        if (online && cloud_paired() && stream_clients() > 0) {
+            ESP_LOGI(TAG, "健康检查通过（%d 秒）：联网 + 已配对 + 电视在拉流", t);
+            ota_mark_healthy();
+            vTaskDelete(NULL);
+        }
+    }
+    ESP_LOGE(TAG, "健康检查 %d 秒未通过，这版固件不落定——重启将回滚", deadline_s);
     vTaskDelete(NULL);
 }
 
@@ -186,7 +215,14 @@ static void sntp_start(void)
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "=== StickBox 电视看板（T3）===");
+    ESP_LOGI(TAG, "=== StickBox 电视看板 ===");
+    ota_boot_check();     /* 尽早：要先知道本次是不是 OTA 后的试运行 */
+#if CONFIG_STICKBOX_OTA_SUICIDE
+    /* 只为验证 OTA 回滚而存在的测试版本。放在 ota_boot_check() 之后，
+     * 日志里能看到它跑在哪个槽位上。 */
+    ESP_LOGE(TAG, "OTA 回滚测试固件：立即 abort()");
+    abort();
+#endif
     ESP_LOGI(TAG, "堆@启动=%u", (unsigned)esp_get_free_heap_size());
     lcd_ui_init();
     ESP_LOGI(TAG, "堆@LCD后=%u", (unsigned)esp_get_free_heap_size());
@@ -261,6 +297,9 @@ void app_main(void)
         /* 4096：cycle_task 每 10 秒打一条 ESP_LOGI，而 netlog 装上的
          * vprintf 钩子会在调用任务栈上再拼一次日志——2048 实测会爆栈。 */
         xTaskCreate(cycle_task, "cycle", 4096, NULL, 3, NULL);
+    /* 只有 OTA 后的试运行才需要盯健康状态；平时这个任务根本不建，不占堆。 */
+    if (ota_pending_verify())
+        xTaskCreate(health_task, "ota_health", 3072, NULL, 2, NULL);
 
     EventBits_t bits = xEventGroupWaitBits(s_evt, EVT_GOT_IP, pdFALSE, pdFALSE,
                                            pdMS_TO_TICKS(30000));

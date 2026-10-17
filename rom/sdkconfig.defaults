@@ -11,6 +11,13 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
+# OTA 回滚：新固件先以 PENDING_VERIFY 启动，跑完健康检查才标记可用。
+# 没通过就重启回上一槽——否则一版坏固件 = 一批砖。
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# OTA 固件签名放在 sdkconfig.release（需要签名私钥），不进默认配置：
+# 开源硬件要保证 `idf.py build` 开箱即用。见 docs/PRODUCT.md 第 3 节。
+
 # 崩溃取证：coredump 写 flash，事后 idf.py coredump-info 读回溯
 CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
 CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y

@@ -5,6 +5,8 @@ sdkconfig
 sdkconfig.old
 rom/main/wifi_creds.h
 rom/main/cloud_creds.h
+# OTA 固件签名私钥：丢了就再也无法给已售设备发 OTA，务必离线备份
+rom/*.pem
 nvs.bin
 nvs.csv
 .DS_Store

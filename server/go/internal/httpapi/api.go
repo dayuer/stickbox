@@ -64,6 +64,9 @@ func (a *API) Handler() http.Handler {
 	// 设备注册不鉴权：设备还没有密钥，这正是它来领密钥的入口。
 	mux.HandleFunc("POST /api/device/register", a.handleDeviceRegister)
 	mux.Handle("POST /api/device/pair-code", a.requireDevice(a.handleDevicePairCode))
+	mux.Handle("GET /api/device/firmware", a.requireDevice(a.handleDeviceFirmware))
+	// 固件二进制不鉴权：开源硬件，bin 本身不是秘密，防篡改靠签名不靠访问控制。
+	mux.HandleFunc("GET /fw/{name}", a.handleFirmwareFile)
 
 	// agent：pair 可选令牌（新用户不带，已有用户带着把新屏并入）。
 	mux.HandleFunc("POST /api/agent/pair", a.handleAgentPair)

@@ -1,5 +1,15 @@
 menu "StickBox"
 
+config STICKBOX_OTA_SUICIDE
+    bool "Test build: abort() right after boot (OTA rollback test only)"
+    default n
+    help
+        开了之后固件一启动就 abort()。用来验证回滚确实生效：把这版推给设备，
+        设备升级 → 重启 → 崩溃 → 下次启动 bootloader 应当自动回滚上一槽并
+        恢复服务。
+
+        **绝不要用它出正式固件。**
+
 config STICKBOX_LCD_ROTATE_180
     bool "Rotate the LCD 180 degrees (board plugged in upside down)"
     default y
