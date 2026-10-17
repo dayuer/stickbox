@@ -62,8 +62,12 @@ type Verifier struct {
 	keys KeyStore
 	mu   sync.RWMutex
 	c    map[string]cacheEntry
-	sem  chan struct{}
-	now  func() time.Time
+	// epoch 在每次 Invalidate/InvalidateAll 时加一。Verify 在跑完 argon2
+	// 准备写缓存前检查它：如果期间有失效操作，说明刚查到的身份可能已经
+	// 过时（例如设备连接与配对同时发生），必须重新查库而不是写回缓存。
+	epoch uint64
+	sem   chan struct{}
+	now   func() time.Time
 }
 
 func NewVerifier(keys KeyStore) *Verifier {
@@ -86,45 +90,59 @@ func (v *Verifier) Verify(token string) (Identity, error) {
 	}
 	sum := sha256.Sum256([]byte(secret))
 
-	v.mu.RLock()
-	e, ok := v.c[keyID]
-	v.mu.RUnlock()
-	if ok && v.now().Before(e.exp) {
-		if subtle.ConstantTimeCompare(sum[:], e.sum[:]) == 1 {
-			return e.id, nil
+	// 最多重试 3 次：Invalidate 一般不会连续发生，这里只是防止异常情况下
+	// 无限循环。最后一次按刚读到的库返回，但不写缓存。
+	for attempt := 0; ; attempt++ {
+		v.mu.RLock()
+		e, ok := v.c[keyID]
+		epoch := v.epoch
+		v.mu.RUnlock()
+		if ok && v.now().Before(e.exp) {
+			if subtle.ConstantTimeCompare(sum[:], e.sum[:]) == 1 {
+				return e.id, nil
+			}
+			return Identity{}, ErrDenied
 		}
-		return Identity{}, ErrDenied
-	}
 
-	k, found, err := v.keys.KeyByID(keyID)
-	if err != nil {
-		return Identity{}, err
-	}
-	if !found || k.Disabled {
-		return Identity{}, ErrDenied
-	}
+		k, found, err := v.keys.KeyByID(keyID)
+		if err != nil {
+			return Identity{}, err
+		}
+		if !found || k.Disabled {
+			return Identity{}, ErrDenied
+		}
 
-	v.sem <- struct{}{} // 限制并发 argon2，防重连风暴打爆内存
-	okPass := VerifySecret(secret, k.Hash)
-	<-v.sem
-	if !okPass {
-		return Identity{}, ErrDenied
-	}
+		v.sem <- struct{}{} // 限制并发 argon2，防重连风暴打爆内存
+		okPass := VerifySecret(secret, k.Hash)
+		<-v.sem
+		if !okPass {
+			return Identity{}, ErrDenied
+		}
 
-	id := Identity{
-		Dev: k.Dev, UserID: k.UserID, Role: Role(k.Role), KeyID: k.KeyID,
-		Pending: k.Pending,
+		id := Identity{
+			Dev: k.Dev, UserID: k.UserID, Role: Role(k.Role), KeyID: k.KeyID,
+			Pending: k.Pending,
+		}
+		v.mu.Lock()
+		if v.epoch == epoch {
+			v.c[keyID] = cacheEntry{sum: sum, id: id, exp: v.now().Add(cacheTTL)}
+			v.mu.Unlock()
+			return id, nil
+		}
+		v.mu.Unlock()
+		if attempt >= 2 {
+			return id, nil
+		}
+		// 校验期间缓存被失效（配对转正 / 解绑吊销）：刚读到的身份可能
+		// 已经过时，重新查库，绝不能把旧状态写回缓存。
 	}
-	v.mu.Lock()
-	v.c[keyID] = cacheEntry{sum: sum, id: id, exp: v.now().Add(cacheTTL)}
-	v.mu.Unlock()
-	return id, nil
 }
 
 // Invalidate 在吊销密钥后立即调用，否则缓存会让它再活最多一小时。
 func (v *Verifier) Invalidate(keyID string) {
 	v.mu.Lock()
 	delete(v.c, keyID)
+	v.epoch++
 	v.mu.Unlock()
 }
 
@@ -134,5 +152,6 @@ func (v *Verifier) Invalidate(keyID string) {
 func (v *Verifier) InvalidateAll() {
 	v.mu.Lock()
 	v.c = map[string]cacheEntry{}
+	v.epoch++
 	v.mu.Unlock()
 }
