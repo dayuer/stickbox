@@ -30,6 +30,7 @@ static volatile int  s_test_state;
 static char          s_test_err[48];
 static char          s_test_ip[16];
 static char          s_try_ssid[33], s_try_pass[65];
+static char          s_try_mqtt[128], s_try_api[128];   /* 自托管，留空=用默认 */
 static EventGroupHandle_t s_eg;
 #define EV_OK   BIT0
 #define EV_FAIL BIT1
@@ -81,14 +82,45 @@ bool prov_save_devkey(const char *key)
     return e == ESP_OK;
 }
 
+void prov_load_server(char *mqtt_uri, size_t mcap, char *api_base, size_t acap)
+{
+    mqtt_uri[0] = api_base[0] = 0;
+    nvs_handle_t h;
+    if (nvs_open(NVS_CLOUD, NVS_READONLY, &h) != ESP_OK) return;
+    size_t n = mcap;
+    if (nvs_get_str(h, "mqtt_uri", mqtt_uri, &n) != ESP_OK) mqtt_uri[0] = 0;
+    n = acap;
+    if (nvs_get_str(h, "api_base", api_base, &n) != ESP_OK) api_base[0] = 0;
+    nvs_close(h);
+}
+
+bool prov_save_server(const char *mqtt_uri, const char *api_base)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_CLOUD, NVS_READWRITE, &h) != ESP_OK) return false;
+    /* 空值 = 删掉该项回到默认。erase_key 在键不存在时返回 NOT_FOUND，不是错误。 */
+    esp_err_t e = (mqtt_uri && mqtt_uri[0]) ? nvs_set_str(h, "mqtt_uri", mqtt_uri)
+                                            : (nvs_erase_key(h, "mqtt_uri"), ESP_OK);
+    if (e == ESP_OK)
+        e = (api_base && api_base[0]) ? nvs_set_str(h, "api_base", api_base)
+                                      : (nvs_erase_key(h, "api_base"), ESP_OK);
+    if (e == ESP_OK) e = nvs_commit(h);
+    nvs_close(h);
+    if (e == ESP_OK && mqtt_uri && mqtt_uri[0])
+        ESP_LOGI(TAG, "自托管服务器已写入 NVS：%s", mqtt_uri);
+    return e == ESP_OK;
+}
+
 void prov_erase_devkey(void)
 {
     nvs_handle_t h;
     if (nvs_open(NVS_CLOUD, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_erase_all(h);
+    /* 只删 devkey。整个命名空间 erase_all 会连自托管的服务器地址一起抹掉，
+     * 密钥被吊销的设备就会悄悄回落到官方服务器——那是错的。 */
+    nvs_erase_key(h, "devkey");
     nvs_commit(h);
     nvs_close(h);
-    ESP_LOGW(TAG, "已清除设备密钥");
+    ESP_LOGW(TAG, "已清除设备密钥（保留服务器地址）");
 }
 
 void prov_erase(void)
@@ -222,6 +254,7 @@ static void try_connect_task(void *arg)
                                         pdMS_TO_TICKS(25000));
     if (b & EV_OK) {
         prov_save(s_try_ssid, s_try_pass);
+        prov_save_server(s_try_mqtt, s_try_api);
         s_test_state = 1;
         ESP_LOGI(TAG, "验证通过，3 秒后重启接入网络");
         lcd_ui_wifi("配网成功，重启中");
@@ -237,9 +270,18 @@ static void try_connect_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* 只接受 mqtts:// 与 https://。明文 mqtt:// / http:// 会让设备密钥和用量裸奔，
+ * 而且配网页是唯一的入口——这里放过去，后面没有第二道关。 */
+static bool server_url_ok(const char *u, const char *scheme)
+{
+    size_t n = strlen(scheme);
+    return strncmp(u, scheme, n) == 0 && strlen(u) > n + 2;
+}
+
 static esp_err_t h_connect(httpd_req_t *r)
 {
-    char body[384];      /* ssid 32 + pass 64 + 密钥 45 + JSON 外壳 */
+    /* ssid 32 + pass 64 + 两个地址各 128 + JSON 外壳 */
+    char body[640];
     int n = r->content_len < sizeof body - 1 ? r->content_len : (int)sizeof body - 1;
     int got = httpd_req_recv(r, body, n);
     if (got <= 0) return httpd_resp_send_500(r);
@@ -247,9 +289,16 @@ static esp_err_t h_connect(httpd_req_t *r)
 
     json_str(body, "s", s_try_ssid, sizeof s_try_ssid);
     json_str(body, "p", s_try_pass, sizeof s_try_pass);
+    json_str(body, "m", s_try_mqtt, sizeof s_try_mqtt);
+    json_str(body, "a", s_try_api,  sizeof s_try_api);
     if (!s_try_ssid[0]) {
         httpd_resp_set_type(r, "application/json");
         return httpd_resp_send(r, "{\"ok\":0}", HTTPD_RESP_USE_STRLEN);
+    }
+    if ((s_try_mqtt[0] && !server_url_ok(s_try_mqtt, "mqtts://")) ||
+        (s_try_api[0]  && !server_url_ok(s_try_api,  "https://"))) {
+        httpd_resp_set_type(r, "application/json");
+        return httpd_resp_send(r, "{\"ok\":0,\"e\":\"addr\"}", HTTPD_RESP_USE_STRLEN);
     }
     s_test_state = 0; s_test_err[0] = 0; s_test_ip[0] = 0;
     xTaskCreate(try_connect_task, "wifi_try", 4096, NULL, 5, NULL);

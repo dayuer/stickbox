@@ -7,3 +7,11 @@ void cloud_client_start(const uint8_t mac[6]);
 
 /* 配对是否已完成。未配对时电视停在第 1 页显示配对码。 */
 bool cloud_paired(void);
+
+/* 运行期生效的 API 根地址（不带尾斜杠），例如 https://host/api。
+ * 值来自 NVS 的自托管设置，没配过则是 cloud_creds.h 的默认值。
+ * cloud_client_start() 之后才有效。OTA 与 coredump 上传复用它。 */
+const char *cloud_api_base(void);
+
+/* 设备密钥，作 Bearer 用。未注册时是空串。 */
+const char *cloud_devkey(void);
