@@ -2,12 +2,54 @@ package broker
 
 import (
 	"testing"
+	"time"
 
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/packets"
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 )
+
+// pending 不能顶掉在线 active；active 可以接管 pending。
+func TestIDTableRejectsPendingTakeover(t *testing.T) {
+	tab := newIDTable()
+	activeCl, pendingCl := &mqtt.Client{}, &mqtt.Client{}
+	active := auth.Identity{Dev: "d1", Role: auth.RoleDevice}
+	pending := auth.Identity{Dev: "d1", Role: auth.RoleDevice, Pending: true}
+
+	if !tab.admit(activeCl, active) {
+		t.Fatal("active 应能连接")
+	}
+	if tab.admit(pendingCl, pending) {
+		t.Fatal("active 在线时 pending 竟然被放行")
+	}
+	tab.drop(activeCl)
+	if !tab.admit(pendingCl, pending) {
+		t.Fatal("active 下线后 pending 应放行")
+	}
+	if !tab.admit(&mqtt.Client{}, active) {
+		t.Fatal("active 应能接管 pending")
+	}
+}
+
+func TestPendingLimiter(t *testing.T) {
+	l := newPendingLimiter(6, time.Minute)
+	now := time.Unix(1000, 0)
+	for i := 0; i < 6; i++ {
+		if !l.allow("d1", now) {
+			t.Fatalf("第 %d 次 pending 连接被限流", i+1)
+		}
+	}
+	if l.allow("d1", now) {
+		t.Fatal("第 7 次 pending 连接应被限流")
+	}
+	if !l.allow("d1", now.Add(time.Minute+time.Second)) {
+		t.Fatal("窗口过后应重新放行")
+	}
+	if !l.allow("d2", now) {
+		t.Fatal("不同 dev 不应互相影响")
+	}
+}
 
 type fakeRouter struct{ seen []string }
 

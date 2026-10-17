@@ -3,6 +3,7 @@ package broker
 import (
 	"log/slog"
 	"strings"
+	"time"
 
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/packets"
@@ -34,6 +35,8 @@ type Hook struct {
 	// usage / frame 为 nil 时不补发（测试里、或还没接上的时候）。
 	usage UsageResender
 	frame FrameResender
+	// pending 限制同一 dev 的 pending 连接频率。
+	pending *pendingLimiter
 }
 
 func (h *Hook) ID() string { return "stickbox-auth" }
@@ -72,7 +75,22 @@ func (h *Hook) OnConnectAuthenticate(cl *mqtt.Client, pk packets.Packet) bool {
 		slog.Warn("MQTT username 与密钥不符", "username", user, "key_dev", id.Dev)
 		return false
 	}
-	h.ids.put(cl, id)
+	// pending 密钥只能读 pair；它不能把已在线 active 设备顶下线。
+	// 同一个 dev 的 pending 连接还要限频，防止趁合法设备重连空档抢先。
+	if id.Role == auth.RoleDevice && id.Pending {
+		if h.pending != nil && !h.pending.allow(id.Dev, time.Now()) {
+			slog.Warn("pending 连接过频，拒绝", "dev", id.Dev, "remote", cl.Net.Remote)
+			return false
+		}
+		if !h.ids.admit(cl, id) {
+			slog.Warn("pending 连接试图顶掉在线设备", "dev", id.Dev, "remote", cl.Net.Remote)
+			return false
+		}
+		return true
+	}
+	if !h.ids.admit(cl, id) {
+		return false
+	}
 	return true
 }
 

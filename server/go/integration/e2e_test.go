@@ -392,3 +392,79 @@ func TestEndToEndFrameDistribution(t *testing.T) {
 		t.Errorf("重连补发版本 = %d，期望 %d", got, ver2)
 	}
 }
+
+// 合法设备在线时，拿到 MAC 的 pending 密钥不能顶号（会话接管 DoS）。
+func TestEndToEndPendingCannotTakeOverActive(t *testing.T) {
+	e := startServer(t)
+	activeKey, code := e.register("f412fa87c9e0")
+	agentTok, _, _ := e.pair(code, "")
+	active := e.connectDevice("f412fa87c9e0", activeKey)
+	if err := active.subscribeUsage(); err != nil {
+		t.Fatalf("合法设备订阅 usage：%v", err)
+	}
+
+	pendingKey, _ := e.register("f412fa87c9e0")
+	if _, err := e.tryConnectDevice("f412fa87c9e0", pendingKey); err == nil {
+		t.Fatal("pending 密钥用同一个 client id 顶掉了在线设备")
+	}
+
+	// 合法设备仍在，能正常收到用量。
+	e.reportUsage(agentTok, usageReport(time.Now(), 11))
+	got := parseUsage(t, active.waitUsage(5*time.Second))
+	if got.FiveHour == nil || got.FiveHour.UsedPercentage != 11 {
+		t.Errorf("合法设备收到 = %+v", got.FiveHour)
+	}
+}
+
+// 合法设备不在线时，pending 可以连上，但只能读 pair。
+func TestEndToEndPendingAllowedWithoutActive(t *testing.T) {
+	e := startServer(t)
+	key, _ := e.register("f412fa87c9e0")
+	p := e.connectDevice("f412fa87c9e0", key)
+	if err := p.subscribePair(); err != nil {
+		t.Fatalf("pending 应能读 pair：%v", err)
+	}
+	if err := p.subscribeUsage(); err == nil {
+		t.Error("pending 订阅了 usage——ACL 没生效")
+	}
+}
+
+// 合法设备重新上线时，可以接管在线的 pending 连接。
+func TestEndToEndActiveTakesOverPending(t *testing.T) {
+	e := startServer(t)
+	activeKey, code := e.register("f412fa87c9e0")
+	agentTok, _, _ := e.pair(code, "")
+	pendingKey, _ := e.register("f412fa87c9e0")
+
+	p := e.connectDevice("f412fa87c9e0", pendingKey)
+	if err := p.subscribePair(); err != nil {
+		t.Fatalf("pending 应能读 pair：%v", err)
+	}
+
+	// 同一个 client id，active 身份：允许接管。
+	active := e.connectDevice("f412fa87c9e0", activeKey)
+	if err := active.subscribeUsage(); err != nil {
+		t.Fatalf("active 接管后订阅 usage：%v", err)
+	}
+	e.reportUsage(agentTok, usageReport(time.Now(), 13))
+	got := parseUsage(t, active.waitUsage(5*time.Second))
+	if got.FiveHour == nil || got.FiveHour.UsedPercentage != 13 {
+		t.Errorf("接管后收到 = %+v", got.FiveHour)
+	}
+}
+
+// 同一 dev 的 pending 连接每分钟最多 6 次。
+func TestEndToEndPendingConnectRateLimited(t *testing.T) {
+	e := startServer(t)
+	key, _ := e.register("f412fa87c9e0")
+	for i := 0; i < 6; i++ {
+		d, err := e.tryConnectDevice("f412fa87c9e0", key)
+		if err != nil {
+			t.Fatalf("第 %d 次 pending 连接被拒：%v", i+1, err)
+		}
+		d.disconnect()
+	}
+	if _, err := e.tryConnectDevice("f412fa87c9e0", key); err == nil {
+		t.Fatal("第 7 次 pending 连接没有被限流")
+	}
+}
