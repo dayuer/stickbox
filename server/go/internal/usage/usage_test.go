@@ -32,6 +32,8 @@ func TestValidate(t *testing.T) {
 			Limits: json.RawMessage(bytes.Repeat([]byte("x"), maxLimitsBytes+1))}, false},
 		{"limits 刚好 8KB", Report{FiveHour: pct(1),
 			Limits: json.RawMessage(bytes.Repeat([]byte("x"), maxLimitsBytes))}, true},
+		{"时区非法不影响校验", Report{FiveHour: pct(1), TZ: "posix/Asia/Shanghai"}, true},
+		{"时区超长", Report{FiveHour: pct(1), TZ: string(bytes.Repeat([]byte("x"), 65))}, false},
 	}
 	for _, c := range cases {
 		err := c.r.Validate(now)
@@ -127,6 +129,41 @@ func TestIngestPublishesToAllDevices(t *testing.T) {
 		if p.FiveHour == nil || p.FiveHour.UsedPercentage != 42 {
 			t.Errorf("%s: five_hour = %+v", dev, p.FiveHour)
 		}
+	}
+}
+
+// 时区不合法只丢时区，用量照常收下。
+func TestIngestDropsUnknownTZ(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	st := &fakeStore{devices: []string{"d1"}}
+	pub := &fakePub{}
+	s := NewService(st, pub, func() time.Time { return now })
+
+	mk := func(tz string) Report {
+		return Report{
+			FiveHour: &Window{UsedPercentage: 1, ResetsAt: now.Add(time.Hour).Unix()},
+			TZ:       tz,
+		}
+	}
+
+	// posix/ 前缀去掉后是合法时区。
+	if _, err := s.Ingest("u1", mk("posix/Asia/Shanghai")); err != nil {
+		t.Fatalf("posix 前缀不该让上报失败：%v", err)
+	}
+	var stored Report
+	json.Unmarshal(st.putBody, &stored)
+	if stored.TZ != "Asia/Shanghai" {
+		t.Errorf("存下的 tz = %q，期望 Asia/Shanghai", stored.TZ)
+	}
+
+	// 完全不认识的时区清空，用量仍然收下。
+	if _, err := s.Ingest("u1", mk("Not/AZone")); err != nil {
+		t.Fatalf("未知时区不该让上报失败：%v", err)
+	}
+	var stored2 Report
+	json.Unmarshal(st.putBody, &stored2)
+	if stored2.TZ != "" {
+		t.Errorf("未知时区没被清空：%q", stored2.TZ)
 	}
 }
 

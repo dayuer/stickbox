@@ -353,6 +353,25 @@ func TestMarkDirtyDebounces(t *testing.T) {
 	}
 }
 
+// 持续每 2 秒上报时，防抖不能无限重置；maxWait 到点必须渲染。
+func TestDebounceMaxWait(t *testing.T) {
+	f := newFixture(t)
+	f.svc.opt.Debounce = 200 * time.Millisecond
+	f.svc.opt.MaxWait = 30 * time.Millisecond
+
+	start := time.Now()
+	go func() {
+		for i := 0; i < 20; i++ {
+			f.svc.MarkDirty("u1")
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	f.waitVersion("u1", 1, 1*time.Second)
+	if elapsed := time.Since(start); elapsed > 150*time.Millisecond {
+		t.Errorf("maxWait 没生效，渲染等了 %v", elapsed)
+	}
+}
+
 func TestOlderSnapshotDiscarded(t *testing.T) {
 	f := newFixture(t)
 	f.rebuild("u1")

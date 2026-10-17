@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -60,13 +61,8 @@ func (r Report) Validate(now time.Time) error {
 	if len(r.Limits) > maxLimitsBytes {
 		return fmt.Errorf("%w: limits 过大", ErrInvalid)
 	}
-	if r.TZ != "" {
-		if len(r.TZ) > 64 {
-			return fmt.Errorf("%w: tz 过长", ErrInvalid)
-		}
-		if _, err := time.LoadLocation(r.TZ); err != nil {
-			return fmt.Errorf("%w: tz 非法", ErrInvalid)
-		}
+	if len(r.TZ) > 64 {
+		return fmt.Errorf("%w: tz 过长", ErrInvalid)
 	}
 	return nil
 }
@@ -113,6 +109,17 @@ func NewService(st Store, pub Publisher, now func() time.Time) *Service {
 // 推送失败不算上报失败：数据已经落库，设备下次重连会由 Resend 补上。
 func (s *Service) Ingest(userID string, r Report) (int, error) {
 	now := s.now()
+	// tz 只影响渲染排版，不合法不能让整条用量被拒（例如 agent 的
+	// tzdata 比服务端新，或从 /etc/localtime 截出 "posix/Asia/Shanghai"）。
+	// 清掉后由帧服务回退到 config.default_tz。
+	if r.TZ != "" {
+		tz := strings.TrimPrefix(strings.TrimPrefix(r.TZ, "posix/"), "right/")
+		if _, err := time.LoadLocation(tz); err != nil {
+			slog.Warn("忽略无法识别的时区，回退默认", "user", userID, "tz", r.TZ)
+			tz = ""
+		}
+		r.TZ = tz
+	}
 	if err := r.Validate(now); err != nil {
 		return 0, err
 	}

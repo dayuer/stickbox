@@ -605,12 +605,12 @@ func runRound(c *agentConfig, logf func(string, ...any)) error {
 // localTZ 返回本机的 IANA 时区名。TZ 环境变量优先；time.Local 在
 // macOS/Linux 上常常只叫 "Local"，拿不到名字时省略，服务端用 default_tz。
 func localTZ() string {
-	if tz := strings.TrimSpace(os.Getenv("TZ")); tz != "" {
+	if tz := cleanTZ(os.Getenv("TZ")); tz != "" {
 		if _, err := time.LoadLocation(tz); err == nil {
 			return tz
 		}
 	}
-	name := time.Now().Location().String()
+	name := cleanTZ(time.Now().Location().String())
 	if name != "" && name != "Local" {
 		if _, err := time.LoadLocation(name); err == nil {
 			return name
@@ -620,13 +620,21 @@ func localTZ() string {
 	// 软链接里带着真正的 IANA 名（.../zoneinfo/Asia/Bangkok）。
 	if link, err := os.Readlink("/etc/localtime"); err == nil {
 		if i := strings.Index(link, "zoneinfo/"); i >= 0 {
-			tz := link[i+len("zoneinfo/"):]
+			tz := cleanTZ(link[i+len("zoneinfo/"):])
 			if _, err := time.LoadLocation(tz); err == nil {
 				return tz
 			}
 		}
 	}
 	return ""
+}
+
+// 有些发行版的 zoneinfo 路径带 posix/ 或 right/ 前缀，IANA 名要去掉。
+func cleanTZ(tz string) string {
+	tz = strings.TrimSpace(tz)
+	tz = strings.TrimPrefix(tz, "posix/")
+	tz = strings.TrimPrefix(tz, "right/")
+	return tz
 }
 
 func fmtWindow(w *usageWindow) string {

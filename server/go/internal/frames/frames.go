@@ -86,6 +86,7 @@ func (b RenderBuilder) Build(s source.Snapshot) (*frame.Bundle, error) {
 type Options struct {
 	DefaultTZ         string        // agent 没上报时区时的兜底
 	Debounce          time.Duration // 同一用户多次标脏的合并窗口
+	MaxWait           time.Duration // 防抖硬上限，避免持续上报把渲染饿死
 	RenderConcurrency int           // 全局同时渲染数
 	StaleAfter        time.Duration // 超过这么久没上报就重渲一次（更新「X 分前」）
 	StaleCheck        time.Duration // 检查跨天/过期的频率
@@ -139,6 +140,9 @@ func New(root string, st Store, us Usage, pub Publisher, b Builder, opt Options)
 	}
 	if opt.Debounce <= 0 {
 		opt.Debounce = 2 * time.Second
+	}
+	if opt.MaxWait <= 0 {
+		opt.MaxWait = 10 * time.Second
 	}
 	if opt.RenderConcurrency <= 0 {
 		opt.RenderConcurrency = 2
@@ -227,6 +231,11 @@ func (s *Service) MarkDirty(userID string) {
 	if !safeUserID(userID) {
 		return
 	}
+	select {
+	case <-s.ctx.Done():
+		return // 服务已关闭
+	default:
+	}
 	s.workersMu.Lock()
 	w, ok := s.workers[userID]
 	if !ok {
@@ -253,21 +262,28 @@ func (s *Service) workerLoop(ctx context.Context, userID string, w *worker) {
 		}
 
 		// 防抖：窗口内再来标脏就重置计时，合并成一次渲染。
-		timer := time.NewTimer(s.opt.Debounce)
+		// maxWait 是硬上限：持续每 2 秒上报时不能无限重置、永远不出帧。
+		start := time.Now()
+		wait := s.opt.Debounce
+		if wait > s.opt.MaxWait {
+			wait = s.opt.MaxWait
+		}
 	debounce:
 		for {
+			timer := time.NewTimer(wait)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
 				return
 			case <-w.ch:
-				if !timer.Stop() {
-					select {
-					case <-timer.C:
-					default:
-					}
+				timer.Stop()
+				if time.Since(start) >= s.opt.MaxWait {
+					break debounce
 				}
-				timer.Reset(s.opt.Debounce)
+				wait = s.opt.Debounce
+				if remaining := s.opt.MaxWait - time.Since(start); remaining < wait {
+					wait = remaining
+				}
 			case <-timer.C:
 				break debounce
 			}
@@ -519,6 +535,9 @@ func (s *Service) DeviceRemoved(userID string) {
 }
 
 func (s *Service) drop(userID string) {
+	s.commitMu.Lock()
+	defer s.commitMu.Unlock()
+
 	s.mu.Lock()
 	delete(s.cache, userID)
 	s.mu.Unlock()

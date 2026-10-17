@@ -143,6 +143,14 @@ func TestLocalTZPrefersEnv(t *testing.T) {
 	if got := localTZ(); got != "Asia/Bangkok" {
 		t.Errorf("localTZ = %q，期望 Asia/Bangkok", got)
 	}
+	t.Setenv("TZ", "posix/Asia/Shanghai")
+	if got := localTZ(); got != "Asia/Shanghai" {
+		t.Errorf("posix 前缀没去掉：%q", got)
+	}
+	t.Setenv("TZ", "right/Asia/Shanghai")
+	if got := localTZ(); got != "Asia/Shanghai" {
+		t.Errorf("right 前缀没去掉：%q", got)
+	}
 	t.Setenv("TZ", "Not/AZone")
 	if got := localTZ(); got == "Not/AZone" {
 		t.Errorf("非法 TZ 被原样上报：%q", got)
