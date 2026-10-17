@@ -81,4 +81,18 @@ func TestAVIStreamT17Parameters(t *testing.T) {
 	if !bytes.Equal(body[j+8:j+8+len(jpg)], jpg) {
 		t.Error("00dc 里的 JPEG 与当前帧不一致")
 	}
+
+	// 推送成功判定依赖这里：电视连上后 ActiveFor > 0、Active=true；
+	// 断开后要从活跃表里移除。
+	if s.ActiveFor() <= 0 || !s.Active() {
+		t.Errorf("拉流中应算活跃：age=%s active=%v", s.ActiveFor(), s.Active())
+	}
+	conn.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for s.Active() || s.ActiveFor() > 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("断开后连接仍在活跃表：age=%s", s.ActiveFor())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

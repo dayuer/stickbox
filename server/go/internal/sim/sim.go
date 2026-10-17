@@ -730,46 +730,62 @@ func (d *Device) pushToTV(ctx context.Context) {
 	if d.stream == nil || d.cfg.TV == "" {
 		return
 	}
-	u, err := pushWithRetry(ctx, d.cfg.TV, d.stream.Addr(), localIPToward,
-		pushDLNA, pushRetryDelays, d.logf)
+	u, pushed, err := pushWithRetry(ctx, d.cfg.TV, d.stream.Addr(), localIPToward,
+		pushDLNA, d.stream, pushRetryDelays, d.logf)
 	if err != nil {
 		if ctx.Err() == nil {
 			d.logf("DLNA 推送失败：%v（已重试 %d 次）", err, len(pushRetryDelays))
 		}
 		return
 	}
+	if !pushed {
+		d.logf("电视已在拉流，跳过重推：%s", u)
+		return
+	}
 	d.logf("已推送到电视 %s：%s", d.cfg.TV, u)
 }
 
 // pushWithRetry 初次失败后按 delays 退避重试，每次重试都重新解析局域网地址，
-// 网络恢复/变化后不需要重启模拟器。成功时返回推送用的 URL。
+// 网络恢复/变化后不需要重启模拟器。电视已经有活跃拉流连接时直接跳过，
+// 避免把正在播放的流掐断。成功时返回推送用的 URL 和是否真的推过。
 func pushWithRetry(
 	ctx context.Context,
 	tv, listenAddr string,
 	ipFor func(string) (string, error),
-	push func(context.Context, string, string) error,
+	push func(context.Context, string, string, streamProbe) error,
+	probe streamProbe,
 	delays []time.Duration,
 	logf func(string, ...any),
-) (string, error) {
+) (string, bool, error) {
 	var last error
 	for attempt := 0; ; attempt++ {
 		u, err := buildStreamURL(listenAddr, tv, ipFor)
-		if err == nil {
-			if err = push(ctx, tv, u); err == nil {
-				return u, nil
+		if err != nil {
+			last = err
+		} else {
+			if probe != nil && probe.Active() {
+				return u, false, nil
+			}
+			if err := push(ctx, tv, u, probe); err == nil {
+				return u, true, nil
+			} else {
+				last = err
+			}
+			// 推完才发现电视其实已经连上来拉流了：别再 Stop 重推。
+			if probe != nil && probe.Active() {
+				return u, false, nil
 			}
 		}
-		last = err
 		if ctx.Err() != nil {
-			return "", ctx.Err()
+			return "", false, ctx.Err()
 		}
 		if attempt >= len(delays) {
-			return "", last
+			return "", false, last
 		}
-		logf("DLNA 推送失败：%v；%s 后重试", err, delays[attempt])
+		logf("DLNA 推送失败：%v；%s 后重试", last, delays[attempt])
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return "", false, ctx.Err()
 		case <-time.After(delays[attempt]):
 		}
 	}

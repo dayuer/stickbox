@@ -10,6 +10,7 @@ import (
 	"image/jpeg"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	xdraw "golang.org/x/image/draw"
@@ -226,7 +227,19 @@ type streamServer struct {
 	ln      net.Listener
 	srv     *http.Server
 	actual  string
+
+	mu    sync.Mutex
+	conns map[net.Conn]*streamConn
 }
+
+type streamConn struct {
+	started   time.Time
+	lastWrite time.Time
+}
+
+// 最近一次成功写帧超过这个时间，就不能再算「正在拉流」。
+// 帧率 2fps，正常电视每 500ms 收一帧。
+const streamActiveWindow = 3 * time.Second
 
 func newStreamServer(addr string, fps, burst int, current func() []byte) *streamServer {
 	return &streamServer{addr: addr, fps: fps, burst: burst, current: current}
@@ -260,6 +273,63 @@ func (s *streamServer) Close() error {
 	return s.srv.Close()
 }
 
+func (s *streamServer) track(c net.Conn) {
+	now := time.Now()
+	s.mu.Lock()
+	if s.conns == nil {
+		s.conns = map[net.Conn]*streamConn{}
+	}
+	s.conns[c] = &streamConn{started: now, lastWrite: now}
+	s.mu.Unlock()
+}
+
+func (s *streamServer) untrack(c net.Conn) {
+	s.mu.Lock()
+	delete(s.conns, c)
+	s.mu.Unlock()
+}
+
+func (s *streamServer) markWrite(c net.Conn) {
+	s.mu.Lock()
+	if st := s.conns[c]; st != nil {
+		st.lastWrite = time.Now()
+	}
+	s.mu.Unlock()
+}
+
+// ActiveFor 返回最久的拉流连接已经持续了多久；没有连接返回 0。
+func (s *streamServer) ActiveFor() time.Duration {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	var best time.Duration
+	for _, st := range s.conns {
+		if d := now.Sub(st.started); d > best {
+			best = d
+		}
+	}
+	return best
+}
+
+// Active 表示有连接在最近 streamActiveWindow 内成功收到过帧。
+func (s *streamServer) Active() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	for _, st := range s.conns {
+		if now.Sub(st.lastWrite) <= streamActiveWindow {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *streamServer) headers() string {
 	return "HTTP/1.0 200 OK\r\n" +
 		"Content-Type: video/avi\r\n" +
@@ -283,7 +353,11 @@ func (s *streamServer) handle(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	s.track(conn)
+	defer func() {
+		s.untrack(conn)
+		conn.Close()
+	}()
 
 	if _, err := buf.WriteString(s.headers()); err != nil {
 		return
@@ -314,6 +388,7 @@ func (s *streamServer) handle(w http.ResponseWriter, r *http.Request) {
 		if _, err := conn.Write(aviChunk("00dc", frame)); err != nil {
 			return
 		}
+		s.markWrite(conn)
 		n++
 		if n > s.burst {
 			due := t0.Add(time.Duration(n-s.burst) * time.Second / time.Duration(s.fps))

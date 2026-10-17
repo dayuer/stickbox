@@ -19,6 +19,37 @@ const avtService = "urn:schemas-upnp-org:service:AVTransport:1"
 // 三星从 PLAYING 切到 STOPPED 要 200–500ms，不等就 SetAVTransportURI 会 701。
 const stopSettle = 500 * time.Millisecond
 
+// 三星 Play 之后一般要 1–2.5s 才进 PLAYING，这期间是 TRANSITIONING。
+// 只读一次会把刚起播的流当成失败，Stop 重推等于每次自己掐断。
+const (
+	playPollInterval = 500 * time.Millisecond
+	playTimeout      = 15 * time.Second
+	minStreamAge     = 5 * time.Second
+)
+
+// streamProbe 提供电视拉 /live.avi 的连接状态。
+// 比 SOAP 状态码更可靠：真的连上来拉流了才算成功。
+type streamProbe interface {
+	// ActiveFor 返回最久的拉流连接已经持续了多久。
+	ActiveFor() time.Duration
+	// Active 表示当前有连接仍在正常收帧（不是半开的僵尸连接）。
+	Active() bool
+}
+
+type pushParams struct {
+	stopSettle   time.Duration
+	poll         time.Duration
+	playTimeout  time.Duration
+	minStreamAge time.Duration
+}
+
+var defaultPushParams = pushParams{
+	stopSettle:   stopSettle,
+	poll:         playPollInterval,
+	playTimeout:  playTimeout,
+	minStreamAge: minStreamAge,
+}
+
 // discoverAVTransport 用 SSDP 找 MediaRenderer，再读设备描述里的
 // AVTransport controlURL。targetIP 非空时只接受该地址的响应。
 func discoverAVTransport(ctx context.Context, targetIP, name string) (string, error) {
@@ -216,20 +247,20 @@ func didl(url, title, mime string) string {
 }
 
 // pushDLNA 把直播流地址推给电视（Stop → SetAVTransportURI → Play），
-// 并读 GetTransportInfo 确认真的进了 PLAYING。
+// 再等电视真的进 PLAYING 并开始拉流。
 // SSDP 找不到时回落到 T17 实测的三星控制地址。
-func pushDLNA(ctx context.Context, tvIP, streamURL string) error {
+func pushDLNA(ctx context.Context, tvIP, streamURL string, probe streamProbe) error {
 	control, err := discoverAVTransport(ctx, tvIP, "")
 	if err != nil {
 		control = "http://" + net.JoinHostPort(tvIP, "9197") + "/upnp/control/AVTransport1"
 	}
-	return pushToControl(ctx, control, streamURL)
+	return pushToControl(ctx, control, streamURL, probe, defaultPushParams)
 }
 
-func pushToControl(ctx context.Context, controlURL, streamURL string) error {
+func pushToControl(ctx context.Context, controlURL, streamURL string, probe streamProbe, p pushParams) error {
 	_ = soapCall(ctx, controlURL, "Stop", [][2]string{{"InstanceID", "0"}})
 	select {
-	case <-time.After(stopSettle):
+	case <-time.After(p.stopSettle):
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -245,12 +276,42 @@ func pushToControl(ctx context.Context, controlURL, streamURL string) error {
 	}); err != nil {
 		return err
 	}
-	state, err := transportState(ctx, controlURL)
-	if err != nil {
-		return err
+	return waitForPlaying(ctx, controlURL, probe, p)
+}
+
+// waitForPlaying 轮询 GetTransportInfo：TRANSITIONING 继续等，PLAYING 后
+// 还要有一条持续 minStreamAge 的拉流连接才算成功；STOPPED /
+// NO_MEDIA_PRESENT 或超时算失败。
+func waitForPlaying(ctx context.Context, controlURL string, probe streamProbe, p pushParams) error {
+	deadline := time.Now().Add(p.playTimeout)
+	var last string
+	var lastErr error
+	for {
+		state, err := transportState(ctx, controlURL)
+		if err == nil {
+			last, lastErr = state, nil
+			switch state {
+			case "PLAYING":
+				if probe == nil || probe.ActiveFor() >= p.minStreamAge {
+					return nil
+				}
+			case "STOPPED", "NO_MEDIA_PRESENT":
+				return fmt.Errorf("sim: 推送后电视状态是 %s，播放未生效", state)
+			}
+		} else {
+			lastErr = err
+		}
+		if !time.Now().Before(deadline) {
+			if last == "" && lastErr != nil {
+				return lastErr
+			}
+			return fmt.Errorf("sim: %s 内没等到 PLAYING + 持续 %s 的拉流连接（最后状态 %q）",
+				p.playTimeout, p.minStreamAge, last)
+		}
+		select {
+		case <-time.After(p.poll):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
-	if state != "PLAYING" {
-		return fmt.Errorf("sim: 推送后电视状态是 %s，不是 PLAYING", state)
-	}
-	return nil
 }
