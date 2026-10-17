@@ -82,6 +82,11 @@ func views(s source.Snapshot) (main, secondary windowView) {
 		}
 		return w7, w5
 	}
+	// 两路数据各占一环时方向会混合，这时配速不可比：一个是「花得多快」，
+	// 一个是「赚得多快」。同级就让时间尺度短的上主位，它的窗口更紧。
+	if w5.dir != w7.dir {
+		return w5, w7
+	}
 	// 同级时看配速，但方向相反：消耗型挑跑得最快的（最快见底），
 	// 达成型挑跑得最慢的（最需要被催）。
 	ahead := w5.pace >= w7.pace

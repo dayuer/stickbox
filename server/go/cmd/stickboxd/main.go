@@ -100,8 +100,9 @@ func serve(cfg *config.Config) error {
 	}
 	// 两路数据源：Claude 额度（消耗型）与当日经营数据（达成型）。
 	// 时区都由各自那路数据自带（agent 机器 / 上报方的时区）。
-	// 哪一路上屏不配置，跟着最近一次上报走——版面只有两个环，只能显示一路。
-	src := source.NewMostRecent(
+	// 看板形态不配置，按有数据的源的数量来：报一路就独占两个环，
+	// 报两路就各占一个环。
+	src := source.NewComposite(
 		source.NewClaude(api.Usage(), cfg.DefaultTZ),
 		source.NewSales(api.Sales(), cfg.DefaultTZ),
 	)

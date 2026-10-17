@@ -95,7 +95,7 @@ func startServerAt(t *testing.T, dir string) (*env, func()) {
 	if err != nil {
 		t.Fatalf("初始化渲染器：%v", err)
 	}
-	fs, err := frames.New(cfg.Root, st, source.NewMostRecent(
+	fs, err := frames.New(cfg.Root, st, source.NewComposite(
 		source.NewClaude(api.Usage(), "UTC"),
 		source.NewSales(api.Sales(), "UTC"),
 	), br, frames.RenderBuilder{R: rr}, frames.Options{

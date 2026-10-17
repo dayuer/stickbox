@@ -30,6 +30,7 @@ func usageAt(received time.Time) fakeUsageStore {
 		rep: usage.Report{
 			TZ:       "UTC",
 			FiveHour: &usage.Window{UsedPercentage: 40, ResetsAt: multiNow.Add(time.Hour).Unix()},
+			SevenDay: &usage.Window{UsedPercentage: 20, ResetsAt: multiNow.Add(96 * time.Hour).Unix()},
 		},
 	}
 }
@@ -46,62 +47,163 @@ func salesAt(received time.Time) fakeSalesStore {
 	}
 }
 
-// 哪一路上屏跟着最近一次上报走，不需要配置项。
-func TestMostRecentPicksFreshest(t *testing.T) {
+func labels(s Snapshot) []string {
+	out := make([]string, 0, len(s.Windows))
+	for _, w := range s.Windows {
+		out = append(out, w.Label)
+	}
+	return out
+}
+
+func eq(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// 看板形态按有数据的源的数量切：一路独占两个环，两路各占一个环。
+func TestCompositeSwitchesBySourceCount(t *testing.T) {
+	ago := func(d time.Duration) time.Time { return multiNow.Add(-d) }
 	cases := []struct {
-		name               string
-		usageAgo, salesAgo time.Duration
-		wantDir            Direction
-		wantFirstLabel     string
+		name  string
+		usage fakeUsageStore
+		sales fakeSalesStore
+		want  []string
 	}{
-		{"经营数据更新", 30 * time.Minute, 2 * time.Minute, Target, "今日成交额"},
-		{"额度更新", 2 * time.Minute, 30 * time.Minute, Budget, "5 小时"},
+		{"只有额度：独占两环", usageAt(ago(time.Minute)), fakeSalesStore{},
+			[]string{"5 小时", "7 天"}},
+		{"只有经营数据：独占两环", fakeUsageStore{}, salesAt(ago(time.Minute)),
+			[]string{"今日成交额", "今日订单"}},
+		// 两路都有：各让一个环，每路只出 Windows[0]。
+		// 排序按上报新鲜度，所以经营数据在前。
+		{"两路：各占一环", usageAt(ago(30 * time.Minute)), salesAt(ago(time.Minute)),
+			[]string{"今日成交额", "5 小时"}},
+		{"两路：额度更新", usageAt(ago(time.Minute)), salesAt(ago(30 * time.Minute)),
+			[]string{"5 小时", "今日成交额"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m := NewMostRecent(
-				NewClaude(usageAt(multiNow.Add(-tc.usageAgo)), "UTC"),
-				NewSales(salesAt(multiNow.Add(-tc.salesAgo)), "UTC"),
+			c := NewComposite(
+				NewClaude(tc.usage, "UTC"),
+				NewSales(tc.sales, "UTC"),
 			)
-			s, err := m.Snapshot(context.Background(), "u1", multiNow)
+			s, err := c.Snapshot(context.Background(), "u1", multiNow)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(s.Windows) == 0 {
-				t.Fatal("没有窗口")
-			}
-			if s.Windows[0].Label != tc.wantFirstLabel {
-				t.Errorf("首个窗口 = %q，要 %q", s.Windows[0].Label, tc.wantFirstLabel)
-			}
-			if s.Windows[0].Dir != tc.wantDir {
-				t.Errorf("方向 = %v，要 %v", s.Windows[0].Dir, tc.wantDir)
+			if got := labels(s); !eq(got, tc.want) {
+				t.Errorf("窗口 = %v，要 %v", got, tc.want)
 			}
 		})
 	}
 }
 
-// 只报了一路时就显示那一路，另一路没数据不该把它盖掉。
-func TestMostRecentIgnoresEmptySource(t *testing.T) {
-	m := NewMostRecent(
-		NewClaude(fakeUsageStore{}, "UTC"), // 从没上报过
-		NewSales(salesAt(multiNow.Add(-time.Minute)), "UTC"),
+// 两路混合时底栏只有一个「更新 X 前」，要取更旧的那个：
+// 不能用新鲜的那路把旧的盖掉。
+func TestCompositeMergedLastUpdateIsOldest(t *testing.T) {
+	old := multiNow.Add(-3 * time.Hour)
+	fresh := multiNow.Add(-time.Minute)
+	c := NewComposite(
+		NewClaude(usageAt(old), "UTC"),
+		NewSales(salesAt(fresh), "UTC"),
 	)
-	s, err := m.Snapshot(context.Background(), "u1", multiNow)
+	s, err := c.Snapshot(context.Background(), "u1", multiNow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(s.Windows) != 2 || s.Windows[0].Label != "今日成交额" {
-		t.Fatalf("应当显示经营看板: %+v", s.Windows)
+	if !s.LastUpdate.Equal(old) {
+		t.Errorf("LastUpdate = %v，要更旧的 %v", s.LastUpdate, old)
 	}
 }
 
-// 一路都没数据时要出占位快照，并且带着第一路的方向，让文案口径对得上。
-func TestMostRecentNoDataAtAll(t *testing.T) {
-	m := NewMostRecent(
+// 两路混合时方向也混合：一个消耗型一个达成型，各自保留自己的方向，
+// 否则经营数据会按额度口径配色（超前变成告警）。
+func TestCompositeKeepsPerWindowDirection(t *testing.T) {
+	c := NewComposite(
+		NewClaude(usageAt(multiNow.Add(-time.Minute)), "UTC"),
+		NewSales(salesAt(multiNow.Add(-2*time.Minute)), "UTC"),
+	)
+	s, err := c.Snapshot(context.Background(), "u1", multiNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Windows) != 2 {
+		t.Fatalf("窗口数 = %d", len(s.Windows))
+	}
+	dirs := map[string]Direction{}
+	for _, w := range s.Windows {
+		dirs[w.Label] = w.Dir
+	}
+	if dirs["5 小时"] != Budget {
+		t.Errorf("额度窗口方向 = %v，要 Budget", dirs["5 小时"])
+	}
+	if dirs["今日成交额"] != Target {
+		t.Errorf("经营窗口方向 = %v，要 Target", dirs["今日成交额"])
+	}
+}
+
+// 收到过数据但一个环都画不出来（经营数据的目标全是 0）不算一路：
+// 另一路照样独占两个环。
+func TestCompositeIgnoresSourceWithNoWindows(t *testing.T) {
+	noGoal := fakeSalesStore{
+		ok: true, received: multiNow.Add(-time.Minute),
+		rep: sales.Report{
+			Date: "2026-10-17", TZ: "UTC",
+			GMV:    &sales.Metric{Value: 146_000, Goal: 0},
+			Orders: &sales.Metric{Value: 420, Goal: 0},
+		},
+	}
+	c := NewComposite(
+		NewClaude(usageAt(multiNow.Add(-30*time.Minute)), "UTC"),
+		NewSales(noGoal, "UTC"),
+	)
+	s, err := c.Snapshot(context.Background(), "u1", multiNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := labels(s); !eq(got, []string{"5 小时", "7 天"}) {
+		t.Errorf("窗口 = %v，要额度独占两环", got)
+	}
+}
+
+// 一个环都画不出来时，优先用「收到过数据」的那一路的快照，
+// 让底栏的「更新 X 前」说得出话。
+func TestCompositeNoWindowsPrefersSourceWithData(t *testing.T) {
+	received := multiNow.Add(-time.Minute)
+	noGoal := fakeSalesStore{
+		ok: true, received: received,
+		rep: sales.Report{Date: "2026-10-17", TZ: "UTC",
+			GMV: &sales.Metric{Value: 1, Goal: 0}},
+	}
+	c := NewComposite(
+		NewClaude(fakeUsageStore{}, "UTC"), // 从没上报过
+		NewSales(noGoal, "UTC"),
+	)
+	s, err := c.Snapshot(context.Background(), "u1", multiNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Windows) != 0 {
+		t.Fatalf("不该有窗口: %+v", s.Windows)
+	}
+	if !s.LastUpdate.Equal(received) {
+		t.Errorf("LastUpdate = %v，要 %v", s.LastUpdate, received)
+	}
+}
+
+// 一路数据都没有时要出占位快照，并且带着第一路的方向，让文案口径对得上。
+func TestCompositeNoDataAtAll(t *testing.T) {
+	c := NewComposite(
 		NewClaude(fakeUsageStore{}, "UTC"),
 		NewSales(fakeSalesStore{}, "UTC"),
 	)
-	s, err := m.Snapshot(context.Background(), "u1", multiNow)
+	s, err := c.Snapshot(context.Background(), "u1", multiNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,30 +215,30 @@ func TestMostRecentNoDataAtAll(t *testing.T) {
 	}
 }
 
-// 一路挂了不该把另一路拖下水：显示还能用的那块板比显示空白好。
-func TestMostRecentSurvivesOneFailure(t *testing.T) {
+// 一路挂了不该把另一路拖下水：剩下那路独占两个环。
+func TestCompositeSurvivesOneFailure(t *testing.T) {
 	boom := errors.New("数据库炸了")
-	m := NewMostRecent(
+	c := NewComposite(
 		NewClaude(fakeUsageStore{err: boom}, "UTC"),
 		NewSales(salesAt(multiNow.Add(-time.Minute)), "UTC"),
 	)
-	s, err := m.Snapshot(context.Background(), "u1", multiNow)
+	s, err := c.Snapshot(context.Background(), "u1", multiNow)
 	if err != nil {
 		t.Fatalf("一路失败不该整体报错: %v", err)
 	}
-	if len(s.Windows) != 2 || s.Windows[0].Dir != Target {
-		t.Fatalf("应当回落到经营看板: %+v", s.Windows)
+	if got := labels(s); !eq(got, []string{"今日成交额", "今日订单"}) {
+		t.Errorf("窗口 = %v，要经营数据独占两环", got)
 	}
 }
 
 // 全挂了才往上报错——帧服务会保留上一张好帧。
-func TestMostRecentAllFail(t *testing.T) {
+func TestCompositeAllFail(t *testing.T) {
 	boom := errors.New("数据库炸了")
-	m := NewMostRecent(
+	c := NewComposite(
 		NewClaude(fakeUsageStore{err: boom}, "UTC"),
 		NewSales(fakeSalesStoreErr{boom}, "UTC"),
 	)
-	if _, err := m.Snapshot(context.Background(), "u1", multiNow); !errors.Is(err, boom) {
+	if _, err := c.Snapshot(context.Background(), "u1", multiNow); !errors.Is(err, boom) {
 		t.Fatalf("err = %v，要 %v", err, boom)
 	}
 }
@@ -147,9 +249,9 @@ func (f fakeSalesStoreErr) Latest(string) (sales.Report, time.Time, bool, error)
 	return sales.Report{}, time.Time{}, false, f.err
 }
 
-func TestMostRecentID(t *testing.T) {
-	m := NewMostRecent(NewClaude(fakeUsageStore{}, "UTC"), NewSales(fakeSalesStore{}, "UTC"))
-	if got := m.ID(); got != "claude-usage+chaodai-sales" {
+func TestCompositeID(t *testing.T) {
+	c := NewComposite(NewClaude(fakeUsageStore{}, "UTC"), NewSales(fakeSalesStore{}, "UTC"))
+	if got := c.ID(); got != "claude-usage+chaodai-sales" {
 		t.Errorf("ID = %q", got)
 	}
 }
