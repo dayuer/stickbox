@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	_ "time/tzdata" // 镜像里没有 tzdata；按用户 IANA 时区渲染需要内嵌一份
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/broker"
@@ -85,15 +86,19 @@ func serve(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("初始化渲染器：%w", err)
 	}
-	fs, err := frames.New(cfg.Root, st, api.Usage(), br, frames.RenderBuilder{R: rr}, time.Now)
+	fs, err := frames.New(cfg.Root, st, api.Usage(), br, frames.RenderBuilder{R: rr}, frames.Options{
+		DefaultTZ: cfg.DefaultTZ,
+		Now:       time.Now,
+	})
 	if err != nil {
 		return fmt.Errorf("初始化帧服务：%w", err)
 	}
+	defer fs.Close()
 	api.SetFrames(fs)
 	br.SetFrameResender(fs)
 	dailyCtx, dailyStop := context.WithCancel(context.Background())
 	defer dailyStop()
-	go fs.RunDaily(dailyCtx)
+	go fs.Run(dailyCtx)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,

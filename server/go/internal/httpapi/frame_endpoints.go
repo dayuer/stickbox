@@ -19,7 +19,8 @@ func (a *API) handleDeviceFrame(w http.ResponseWriter, r *http.Request, id auth.
 		fail(w, 503, "frame not ready", "")
 		return
 	}
-	data, ver, err := a.frames.CurrentForDevice(id.Dev)
+	// 用令牌自己的 KeyID 判权：pending/已吊销的密钥拿不到别人 MAC 的帧。
+	data, ver, err := a.frames.CurrentForKey(id.KeyID, id.Dev)
 	switch {
 	case errors.Is(err, frames.ErrNotPaired):
 		fail(w, 403, "forbidden", "设备尚未配对")
@@ -62,11 +63,11 @@ func etagMatches(header, etag string) bool {
 	return false
 }
 
-// rebuildFrames 触发一次重建。失败不影响当前请求：frames 内部会保留
-// 旧帧并记日志，设备下次仍能取到上一份好帧。
-func (a *API) rebuildFrames(userID string) {
+// markFramesDirty 只标脏：渲染由 frames 的后台 worker 防抖执行，
+// HTTP 请求不等 600ms 的渲染。
+func (a *API) markFramesDirty(userID string) {
 	if a.frames == nil {
 		return
 	}
-	_ = a.frames.Rebuild(userID)
+	a.frames.MarkDirty(userID)
 }

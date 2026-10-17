@@ -138,6 +138,17 @@ func TestParseResetsAt(t *testing.T) {
 	}
 }
 
+func TestLocalTZPrefersEnv(t *testing.T) {
+	t.Setenv("TZ", "Asia/Bangkok")
+	if got := localTZ(); got != "Asia/Bangkok" {
+		t.Errorf("localTZ = %q，期望 Asia/Bangkok", got)
+	}
+	t.Setenv("TZ", "Not/AZone")
+	if got := localTZ(); got == "Not/AZone" {
+		t.Errorf("非法 TZ 被原样上报：%q", got)
+	}
+}
+
 // 子进程环境必须走白名单：黑名单挡不住 Claude 桌面版注入的其他变量。
 func TestFilterEnvKeepsOnlyWhitelist(t *testing.T) {
 	in := []string{

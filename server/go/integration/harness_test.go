@@ -83,10 +83,16 @@ func startServer(t *testing.T) *env {
 	if err != nil {
 		t.Fatalf("初始化渲染器：%v", err)
 	}
-	fs, err := frames.New(cfg.Root, st, api.Usage(), br, frames.RenderBuilder{R: rr}, time.Now)
+	fs, err := frames.New(cfg.Root, st, api.Usage(), br, frames.RenderBuilder{R: rr}, frames.Options{
+		DefaultTZ:         "UTC",
+		Debounce:          100 * time.Millisecond, // 测试里缩短防抖
+		RenderConcurrency: 1,
+		Now:               time.Now,
+	})
 	if err != nil {
 		t.Fatalf("初始化帧服务：%v", err)
 	}
+	t.Cleanup(fs.Close)
 	api.SetFrames(fs)
 	br.SetFrameResender(fs)
 

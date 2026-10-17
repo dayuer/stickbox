@@ -15,6 +15,8 @@ type Config struct {
 	CertDir  string `json:"cert_dir"`
 	HTTPAddr string `json:"http_addr"`
 	MQTTAddr string `json:"mqtt_addr"`
+	// DefaultTZ 是 agent 没上报时区时的兜底（IANA 名，如 Asia/Bangkok）。
+	DefaultTZ string `json:"default_tz"`
 }
 
 func Load(path string) (*Config, error) {
@@ -37,6 +39,9 @@ func Load(path string) (*Config, error) {
 	}
 	if c.MQTTAddr == "" {
 		c.MQTTAddr = ":8883"
+	}
+	if c.DefaultTZ == "" {
+		c.DefaultTZ = "UTC"
 	}
 	return &c, nil
 }

@@ -71,6 +71,8 @@ type usagePayload struct {
 	FiveHour *usageWindow    `json:"five_hour,omitempty"`
 	SevenDay *usageWindow    `json:"seven_day,omitempty"`
 	Limits   json.RawMessage `json:"limits,omitempty"`
+	// TZ 是本机 IANA 时区，服务端按它渲染日期/星期和跨天重建。
+	TZ string `json:"tz,omitempty"`
 }
 
 // usageReportWire 对应 claude stream-json 里 assistant 事件的 usage_report。
@@ -590,6 +592,7 @@ func runRound(c *agentConfig, logf func(string, ...any)) error {
 		logf("%s", skip)
 		return nil
 	}
+	rep.TZ = localTZ()
 	n, err := postUsage(c, rep)
 	if err != nil {
 		return fmt.Errorf("上报失败：%w", err)
@@ -597,6 +600,33 @@ func runRound(c *agentConfig, logf func(string, ...any)) error {
 	logf("已上报：五小时 %s / 七天 %s；服务端推送到 %d 台设备",
 		fmtWindow(rep.FiveHour), fmtWindow(rep.SevenDay), n)
 	return nil
+}
+
+// localTZ 返回本机的 IANA 时区名。TZ 环境变量优先；time.Local 在
+// macOS/Linux 上常常只叫 "Local"，拿不到名字时省略，服务端用 default_tz。
+func localTZ() string {
+	if tz := strings.TrimSpace(os.Getenv("TZ")); tz != "" {
+		if _, err := time.LoadLocation(tz); err == nil {
+			return tz
+		}
+	}
+	name := time.Now().Location().String()
+	if name != "" && name != "Local" {
+		if _, err := time.LoadLocation(name); err == nil {
+			return name
+		}
+	}
+	// macOS/Linux 上 time.Local 常常只叫 "Local"；/etc/localtime 的
+	// 软链接里带着真正的 IANA 名（.../zoneinfo/Asia/Bangkok）。
+	if link, err := os.Readlink("/etc/localtime"); err == nil {
+		if i := strings.Index(link, "zoneinfo/"); i >= 0 {
+			tz := link[i+len("zoneinfo/"):]
+			if _, err := time.LoadLocation(tz); err == nil {
+				return tz
+			}
+		}
+	}
+	return ""
 }
 
 func fmtWindow(w *usageWindow) string {

@@ -415,7 +415,8 @@ agent 上报一次用量。服务端保存为该用户的最新一份，并推�
 {
   "five_hour": {"used_percentage": 37.5, "resets_at": 1762223000},
   "seven_day": {"used_percentage": 19.5, "resets_at": 1762395800},
-  "limits": [{"kind":"weekly_all","percent":19.5}]
+  "limits": [{"kind":"weekly_all","percent":19.5}],
+  "tz": "Asia/Bangkok"
 }
 ```
 
@@ -425,6 +426,8 @@ agent 上报一次用量。服务端保存为该用户的最新一份，并推�
 - `used_percentage` 在 0..1000（正常是 0..100）。
 - `resets_at` 必须大于 0，且不超过服务端当前时间 + 30 天。
 - `limits` 原样保存，最大 8KB。
+- `tz` 可选，是 agent 本机的 IANA 时区；服务端按它渲染日期/星期并判断
+  跨天。没有时用 `config.json` 的 `default_tz`。
 - 请求体上限 16KB。
 
 成功 `200`：

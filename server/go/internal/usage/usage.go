@@ -30,6 +30,9 @@ type Report struct {
 	// Limits 是 /usage 原始的 limits 行，原样存给 App 看（按模型的周用量等）。
 	// 设备用不上，不下发。
 	Limits json.RawMessage `json:"limits,omitempty"`
+	// TZ 是 agent 所在机器的 IANA 时区（如 Asia/Bangkok）。渲染帧时
+	// 日期、星期和跨天重建要按用户本地时间算，不能按服务器的 UTC。
+	TZ string `json:"tz,omitempty"`
 }
 
 var ErrInvalid = errors.New("usage: 数据非法")
@@ -56,6 +59,14 @@ func (r Report) Validate(now time.Time) error {
 	}
 	if len(r.Limits) > maxLimitsBytes {
 		return fmt.Errorf("%w: limits 过大", ErrInvalid)
+	}
+	if r.TZ != "" {
+		if len(r.TZ) > 64 {
+			return fmt.Errorf("%w: tz 过长", ErrInvalid)
+		}
+		if _, err := time.LoadLocation(r.TZ); err != nil {
+			return fmt.Errorf("%w: tz 非法", ErrInvalid)
+		}
 	}
 	return nil
 }

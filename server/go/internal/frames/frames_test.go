@@ -14,6 +14,7 @@ import (
 
 	"github.com/dayuer/stickbox/server/go/internal/frame"
 	"github.com/dayuer/stickbox/server/go/internal/source"
+	"github.com/dayuer/stickbox/server/go/internal/store"
 	"github.com/dayuer/stickbox/server/go/internal/usage"
 )
 
@@ -22,6 +23,7 @@ import (
 type fakeStore struct {
 	devs   map[string][]string
 	owners map[string]string
+	keys   map[string]store.Key
 	err    error
 }
 
@@ -34,10 +36,15 @@ func (f *fakeStore) OwnerOfDevice(dev string) (string, bool, error) {
 	return u, ok, f.err
 }
 
+func (f *fakeStore) KeyByID(keyID string) (store.Key, bool, error) {
+	k, ok := f.keys[keyID]
+	return k, ok, f.err
+}
+
 type fakeUsage struct {
 	mu      sync.Mutex
 	reports map[string]usage.Report
-	at      time.Time
+	at      map[string]time.Time
 	ok      bool
 	err     error
 }
@@ -48,10 +55,18 @@ func (f *fakeUsage) Latest(userID string) (usage.Report, time.Time, bool, error)
 	if f.err != nil || !f.ok {
 		return usage.Report{}, time.Time{}, false, f.err
 	}
-	if r, ok := f.reports[userID]; ok {
-		return r, f.at, true, nil
+	r, has := f.reports[userID]
+	if !has {
+		return usage.Report{}, time.Time{}, false, nil
 	}
-	return usage.Report{}, time.Time{}, false, nil
+	return r, f.at[userID], true, nil
+}
+
+func (f *fakeUsage) set(userID string, r usage.Report, at time.Time) {
+	f.mu.Lock()
+	f.reports[userID] = r
+	f.at[userID] = at
+	f.mu.Unlock()
 }
 
 type fakePub struct {
@@ -89,17 +104,26 @@ func (f *fakePub) last(dev string) (ver uint64, ok bool) {
 	return p.Ver, true
 }
 
+func (f *fakePub) count(dev string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.sent[dev])
+}
+
 type fakeBuilder struct {
-	mu      sync.Mutex
-	calls   int
-	failErr error
-	payload string
+	mu           sync.Mutex
+	calls        int
+	failErr      error
+	payload      string
+	extra        int
+	lastSnapshot source.Snapshot
 }
 
 func (f *fakeBuilder) Build(s source.Snapshot) (*frame.Bundle, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
+	f.lastSnapshot = s
 	if f.failErr != nil {
 		return nil, f.failErr
 	}
@@ -107,7 +131,7 @@ func (f *fakeBuilder) Build(s source.Snapshot) (*frame.Bundle, error) {
 	if p == "" && len(s.Windows) > 0 {
 		p = fmt.Sprintf("%.0f", s.Windows[0].UsedPercentage*100)
 	}
-	return testBundle(p), nil
+	return testBundleN(p, f.extra), nil
 }
 
 func (f *fakeBuilder) count() int {
@@ -116,10 +140,29 @@ func (f *fakeBuilder) count() int {
 	return f.calls
 }
 
-func testBundle(payload string) *frame.Bundle {
-	base := []byte("base:" + payload)
+func (f *fakeBuilder) snapshot() source.Snapshot {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastSnapshot
+}
+
+func (f *fakeBuilder) setFail(err error) {
+	f.mu.Lock()
+	f.failErr = err
+	f.mu.Unlock()
+}
+
+func (f *fakeBuilder) setExtra(n int) {
+	f.mu.Lock()
+	f.extra = n
+	f.mu.Unlock()
+}
+
+func testBundleN(payload string, extra int) *frame.Bundle {
+	base := append([]byte("base:"+payload), make([]byte, extra)...)
 	atlas := []byte("atlas:" + payload)
 	b := &frame.Bundle{Base: base, Atlas: atlas}
+	b.Meta.V = frame.Version
 	bs := sha256.Sum256(base)
 	as := sha256.Sum256(atlas)
 	b.Meta.Frame = hex.EncodeToString(bs[:])
@@ -127,6 +170,8 @@ func testBundle(payload string) *frame.Bundle {
 	b.Meta.Atlas.Size = len(atlas)
 	return b
 }
+
+func testBundle(payload string) *frame.Bundle { return testBundleN(payload, 0) }
 
 type fixture struct {
 	t    *testing.T
@@ -136,7 +181,9 @@ type fixture struct {
 	us   *fakeUsage
 	pub  *fakePub
 	b    *fakeBuilder
-	now  time.Time
+
+	mu  sync.Mutex
+	now time.Time
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -147,25 +194,54 @@ func newFixture(t *testing.T) *fixture {
 		st: &fakeStore{
 			devs:   map[string][]string{"u1": {"d1", "d2"}, "u2": {"d3"}},
 			owners: map[string]string{"d1": "u1", "d2": "u1", "d3": "u2"},
+			keys: map[string]store.Key{
+				"k1": {KeyID: "k1", Dev: "d1", Role: "device", UserID: "u1"},
+				"k3": {KeyID: "k3", Dev: "d3", Role: "device", UserID: "u2"},
+				"kp": {KeyID: "kp", Dev: "d1", Role: "device", Pending: true},
+				"kx": {KeyID: "kx", Dev: "d1", Role: "device", UserID: "u1", Disabled: true},
+				"ku": {KeyID: "ku", Dev: "d9", Role: "device", UserID: "u1"},
+				"kn": {KeyID: "kn", Dev: "d1", Role: "device"},
+			},
 		},
 		us: &fakeUsage{
 			ok: true,
-			at: time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC),
 			reports: map[string]usage.Report{
 				"u1": {FiveHour: &usage.Window{UsedPercentage: 42, ResetsAt: 1792228800}},
 				"u2": {FiveHour: &usage.Window{UsedPercentage: 7, ResetsAt: 1792228800}},
+			},
+			at: map[string]time.Time{
+				"u1": time.Date(2026, 10, 17, 11, 58, 0, 0, time.UTC),
+				"u2": time.Date(2026, 10, 17, 11, 58, 0, 0, time.UTC),
 			},
 		},
 		pub: &fakePub{},
 		b:   &fakeBuilder{},
 		now: time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC),
 	}
-	svc, err := New(f.root, f.st, f.us, f.pub, f.b, func() time.Time { return f.now })
+	svc, err := New(f.root, f.st, f.us, f.pub, f.b, Options{
+		DefaultTZ:         "UTC",
+		Debounce:          5 * time.Millisecond,
+		RenderConcurrency: 1,
+		Now:               f.currentTime,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.svc = svc
+	t.Cleanup(svc.Close)
 	return f
+}
+
+func (f *fixture) currentTime() time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.now
+}
+
+func (f *fixture) setNow(t time.Time) {
+	f.mu.Lock()
+	f.now = t
+	f.mu.Unlock()
 }
 
 func (f *fixture) rebuild(userID string) {
@@ -182,6 +258,18 @@ func (f *fixture) version(userID string) uint64 {
 		f.t.Fatalf("%s 没有帧", userID)
 	}
 	return ver
+}
+
+func (f *fixture) waitVersion(userID string, want uint64, timeout time.Duration) {
+	f.t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, ver, ok := f.svc.Current(userID); ok && ver >= want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	f.t.Fatalf("等待 %s 版本 %d 超时", userID, want)
 }
 
 // —— 测试 ——
@@ -225,10 +313,7 @@ func TestBuildFailureKeepsOldFrame(t *testing.T) {
 	old, oldVer, _ := f.svc.Current("u1")
 	oldCopy := append([]byte(nil), old...)
 
-	f.b.mu.Lock()
-	f.b.failErr = errors.New("band cap exceeded")
-	f.b.mu.Unlock()
-
+	f.b.setFail(errors.New("band cap exceeded"))
 	if err := f.svc.Rebuild("u1"); err == nil {
 		t.Fatal("构建失败应返回错误")
 	}
@@ -236,8 +321,101 @@ func TestBuildFailureKeepsOldFrame(t *testing.T) {
 	if !ok || ver != oldVer || string(now) != string(oldCopy) {
 		t.Errorf("构建失败后帧变了：ver %d→%d", oldVer, ver)
 	}
+}
+
+func TestPackOverLimitKeepsOldFrame(t *testing.T) {
+	f := newFixture(t)
+	f.rebuild("u1")
+	before := f.version("u1")
+
+	f.b.setExtra(MaxPackBytes) // 底帧本身就超过 256K 槽位
+	if err := f.svc.Rebuild("u1"); err == nil {
+		t.Fatal("超过 FP_MAX_PACK 应该失败")
+	}
+	if got := f.version("u1"); got != before {
+		t.Errorf("超限后版本 = %d，期望保持 %d", got, before)
+	}
+}
+
+func TestMarkDirtyDebounces(t *testing.T) {
+	f := newFixture(t)
+	f.svc.MarkDirty("u1")
+	f.svc.MarkDirty("u1")
+	f.svc.MarkDirty("u1")
+	f.waitVersion("u1", 1, 2*time.Second)
+	if got := f.b.count(); got != 1 {
+		t.Errorf("防抖后渲染了 %d 次，期望 1", got)
+	}
+	f.svc.MarkDirty("u1")
+	f.waitVersion("u1", 2, 2*time.Second)
 	if got := f.b.count(); got != 2 {
-		t.Errorf("builder 调用 = %d，期望 2", got)
+		t.Errorf("第二次标脏后渲染了 %d 次，期望 2", got)
+	}
+}
+
+func TestOlderSnapshotDiscarded(t *testing.T) {
+	f := newFixture(t)
+	f.rebuild("u1")
+	before := f.version("u1")
+
+	// 收到一份比当前帧更旧的用量（并发上报的乱序快照）。
+	f.us.set("u1", usage.Report{FiveHour: &usage.Window{UsedPercentage: 1, ResetsAt: 1792228800}},
+		time.Date(2026, 10, 17, 11, 0, 0, 0, time.UTC))
+	if err := f.svc.Rebuild("u1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.version("u1"); got != before {
+		t.Errorf("旧快照把版本推进到了 %d，期望保持 %d", got, before)
+	}
+}
+
+func TestRebuildUsesUserTimezone(t *testing.T) {
+	f := newFixture(t)
+	f.us.set("u1", usage.Report{
+		FiveHour: &usage.Window{UsedPercentage: 10, ResetsAt: 1792228800},
+		TZ:       "Asia/Bangkok",
+	}, time.Date(2026, 10, 17, 19, 0, 0, 0, time.UTC))
+	f.setNow(time.Date(2026, 10, 17, 20, 0, 0, 0, time.UTC))
+
+	f.rebuild("u1")
+	snap := f.b.snapshot()
+	if snap.Now.Location().String() != "Asia/Bangkok" {
+		t.Fatalf("快照时区 = %s，期望 Asia/Bangkok", snap.Now.Location())
+	}
+	if snap.Now.Hour() != 3 || snap.Now.Day() != 18 {
+		t.Errorf("快照本地时间 = %s，期望 10-18 03:00", snap.Now)
+	}
+}
+
+func TestCheckStaleAcrossDayBoundary(t *testing.T) {
+	f := newFixture(t)
+	f.us.set("u1", usage.Report{
+		FiveHour: &usage.Window{UsedPercentage: 10, ResetsAt: 1792228800},
+		TZ:       "Asia/Bangkok",
+	}, time.Date(2026, 10, 17, 23, 0, 0, 0, time.UTC))
+	f.setNow(time.Date(2026, 10, 17, 23, 0, 0, 0, time.UTC))
+	f.rebuild("u1")
+
+	// 曼谷时间已跨到下一天：2026-10-18 00:30 +07。
+	f.setNow(time.Date(2026, 10, 18, 17, 30, 0, 0, time.UTC))
+	f.svc.checkStale(f.currentTime())
+	f.waitVersion("u1", 2, 2*time.Second)
+}
+
+func TestCheckStaleAfter15Minutes(t *testing.T) {
+	f := newFixture(t)
+	f.rebuild("u1")
+
+	f.setNow(f.currentTime().Add(16 * time.Minute))
+	f.svc.checkStale(f.currentTime())
+	f.waitVersion("u1", 2, 2*time.Second)
+
+	// 刚重渲过，再检查不应该继续每 tick 都重渲。
+	before := f.b.count()
+	f.svc.checkStale(f.currentTime())
+	time.Sleep(50 * time.Millisecond)
+	if got := f.b.count(); got != before {
+		t.Errorf("同一时刻重复重渲了 %d 次", got-before)
 	}
 }
 
@@ -245,13 +423,17 @@ func TestPersistenceAcrossRestart(t *testing.T) {
 	f := newFixture(t)
 	f.rebuild("u1")
 	want, ver, _ := f.svc.Current("u1")
+	f.svc.Close() // 停掉 worker
 
-	// 新进程：同一个 root，builder 一旦被调用就说明没有从磁盘恢复。
 	b2 := &fakeBuilder{failErr: errors.New("不该重新渲染")}
-	svc2, err := New(f.root, f.st, f.us, f.pub, b2, func() time.Time { return f.now })
+	svc2, err := New(f.root, f.st, f.us, f.pub, b2, Options{
+		DefaultTZ: "UTC", Debounce: 5 * time.Millisecond,
+		RenderConcurrency: 1, Now: f.currentTime,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(svc2.Close)
 	got, gotVer, ok := svc2.Current("u1")
 	if !ok || gotVer != ver || string(got) != string(want) {
 		t.Fatalf("重启后帧 = ver %d ok=%v，期望 ver %d", gotVer, ok, ver)
@@ -259,22 +441,33 @@ func TestPersistenceAcrossRestart(t *testing.T) {
 	if b2.count() != 0 {
 		t.Errorf("重启后重新渲染了 %d 次", b2.count())
 	}
-	if _, _, err := svc2.CurrentForDevice("d1"); err != nil {
+	if _, _, err := svc2.CurrentForKey("k1", "d1"); err != nil {
 		t.Errorf("重启后设备取帧失败：%v", err)
 	}
 }
 
-func TestCurrentForDevice(t *testing.T) {
+func TestCurrentForKey(t *testing.T) {
 	f := newFixture(t)
-	if _, _, err := f.svc.CurrentForDevice("d1"); !errors.Is(err, ErrNoFrame) {
+	if _, _, err := f.svc.CurrentForKey("k1", "d1"); !errors.Is(err, ErrNoFrame) {
 		t.Errorf("还没帧时 = %v，期望 ErrNoFrame", err)
 	}
 	f.rebuild("u1")
-	if _, _, err := f.svc.CurrentForDevice("d1"); err != nil {
-		t.Errorf("d1 取帧失败：%v", err)
+	if _, _, err := f.svc.CurrentForKey("k1", "d1"); err != nil {
+		t.Errorf("k1 取帧失败：%v", err)
 	}
-	if _, _, err := f.svc.CurrentForDevice("unknown"); !errors.Is(err, ErrNotPaired) {
-		t.Errorf("未配对设备 = %v，期望 ErrNotPaired", err)
+	for _, c := range []struct {
+		name       string
+		keyID, dev string
+	}{
+		{"pending", "kp", "d1"},
+		{"disabled", "kx", "d1"},
+		{"dev 不符", "ku", "d1"},
+		{"没有 user_id", "kn", "d1"},
+		{"不存在", "nope", "d1"},
+	} {
+		if _, _, err := f.svc.CurrentForKey(c.keyID, c.dev); !errors.Is(err, ErrNotPaired) {
+			t.Errorf("%s = %v，期望 ErrNotPaired", c.name, err)
+		}
 	}
 }
 
@@ -296,30 +489,19 @@ func TestResend(t *testing.T) {
 	}
 }
 
-func TestRebuildStaleAfterMidnight(t *testing.T) {
+func TestDeviceRemovedDropsCache(t *testing.T) {
 	f := newFixture(t)
 	f.rebuild("u1")
-	f.rebuild("u2")
-	before := f.b.count()
-
-	f.now = f.now.Add(24 * time.Hour)
-	f.svc.rebuildStale()
-
-	if got := f.version("u1"); got != 2 {
-		t.Errorf("u1 跨天后版本 = %d，期望 2", got)
+	if _, _, ok := f.svc.Current("u1"); !ok {
+		t.Fatal("没有帧")
 	}
-	if got := f.version("u2"); got != 2 {
-		t.Errorf("u2 跨天后版本 = %d，期望 2", got)
+	f.st.devs["u1"] = nil
+	f.svc.DeviceRemoved("u1")
+	if _, _, ok := f.svc.Current("u1"); ok {
+		t.Error("名下无设备后帧缓存还在")
 	}
-	if got := f.b.count() - before; got != 2 {
-		t.Errorf("跨天重渲染 = %d 次，期望 2", got)
-	}
-
-	// 同一天再跑一次不该重渲染。
-	before = f.b.count()
-	f.svc.rebuildStale()
-	if got := f.b.count() - before; got != 0 {
-		t.Errorf("同一天重复重渲染 %d 次", got)
+	if _, err := os.Stat(filepath.Join(f.root, "frames", "u1")); !os.IsNotExist(err) {
+		t.Errorf("缓存目录没删：%v", err)
 	}
 }
 
@@ -353,6 +535,13 @@ func TestPackUnpackRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPackRejectsOverSlotLimit(t *testing.T) {
+	b := testBundleN("x", MaxPackBytes)
+	if _, err := Pack(b); err == nil {
+		t.Fatal("超过 FP_MAX_PACK 仍然打包成功")
+	}
+}
+
 func TestCorruptCacheIsIgnored(t *testing.T) {
 	f := newFixture(t)
 	dir := filepath.Join(f.root, "frames", "u1")
@@ -362,10 +551,11 @@ func TestCorruptCacheIsIgnored(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "frame.cache"), []byte("garbage"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	svc, err := New(f.root, f.st, f.us, f.pub, f.b, func() time.Time { return f.now })
+	svc, err := New(f.root, f.st, f.us, f.pub, f.b, Options{DefaultTZ: "UTC"})
 	if err != nil {
 		t.Fatalf("损坏的缓存不该让 New 失败：%v", err)
 	}
+	t.Cleanup(svc.Close)
 	if _, _, ok := svc.Current("u1"); ok {
 		t.Error("损坏的缓存不该被加载")
 	}

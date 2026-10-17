@@ -70,9 +70,16 @@ sudo touch /etc/letsencrypt/live/mqtt.stickbox.ai/fullchain.pem && sudo journalc
   "root": "/opt/stickbox",
   "cert_dir": "/etc/letsencrypt/live/mqtt.stickbox.ai",
   "http_addr": "127.0.0.1:9443",
-  "mqtt_addr": ":8883"
+  "mqtt_addr": ":8883",
+  "default_tz": "UTC"
 }
 ```
+
+`default_tz` 只在 agent 没上报 IANA 时区时兜底。看板按用户本地时间
+渲染日期与跨天重建；如果用户的 agent 拿不到时区（例如 macOS 的
+`time.Local` 只叫 `Local` 且没有 `TZ`），把它设成用户所在时区，
+例如 `Asia/Bangkok`。服务端二进制已内嵌 tzdata，distroless 镜像里
+也能解析 IANA 名。
 
 ```bash
 sudo mkdir -p /opt/stickbox/data
