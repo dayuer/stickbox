@@ -441,7 +441,8 @@ void cloud_client_start(const uint8_t mac[6])
     }
 
     xTaskCreate(heartbeat_task, "heartbeat", 3072, NULL, 3, NULL);
-    xTaskCreate(pair_code_task, "pair_code", 4096, NULL, 3, NULL);
+    /* 换配对码要跑一次 TLS 握手，4096 太紧；和注册用同一个 8192。 */
+    xTaskCreate(pair_code_task, "pair_code", 8192, NULL, 3, NULL);
 
     char lwt[96];
     int lwtn = snprintf(lwt, sizeof lwt,
