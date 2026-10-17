@@ -151,7 +151,7 @@ func Run(ctx context.Context, r Renderer, opt Options) (*Report, error) {
 
 	// 1. 电视声明支持哪些 MIME。GetProtocolInfo 属于 ConnectionManager，
 	// 不是 AVTransport；发错服务时三星会回 500。
-	rep.ProtocolInfo = queryProtocolInfo(ctx, r.ConnectionManagerURL)
+	rep.ProtocolInfo = queryProtocolInfo(ctx, r.ConnectionManagerURL, r.ConnectionManagerService)
 
 	// 2. 测试卡 + 推流服务。
 	card, err := NewCard(r.Display())
@@ -224,7 +224,7 @@ func Run(ctx context.Context, r Renderer, opt Options) (*Report, error) {
 
 	// 6. 收尾：让电视回到 STOPPED，别把测试卡留在屏幕上。
 	stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	_, _, _ = sim.SoapCallRaw(stopCtx, r.ControlURL, "Stop", [][2]string{{"InstanceID", "0"}})
+	_, _, _ = sim.SoapCallRaw(stopCtx, r.ControlURL, sim.AVTService, "Stop", [][2]string{{"InstanceID", "0"}})
 	cancel()
 
 	rep.buildWarnings()
@@ -239,13 +239,13 @@ func makeStreamURL(listenAddr, host string) (string, error) {
 	return "http://" + net.JoinHostPort(host, port) + "/live.avi", nil
 }
 
-func queryProtocolInfo(ctx context.Context, controlURL string) ProtocolInfo {
+func queryProtocolInfo(ctx context.Context, controlURL, serviceType string) ProtocolInfo {
 	out := ProtocolInfo{VideoMIME: []string{}}
-	if controlURL == "" {
+	if controlURL == "" || serviceType == "" {
 		out.Error = "电视没有声明 ConnectionManager 服务"
 		return out
 	}
-	status, raw, err := sim.SoapCallRaw(ctx, controlURL, "GetProtocolInfo", nil)
+	status, raw, err := sim.SoapCallRaw(ctx, controlURL, serviceType, "GetProtocolInfo", nil)
 	out.Status = status
 	if err != nil {
 		out.Error = err.Error()
@@ -288,7 +288,7 @@ func videoMIMEs(sink string) []string {
 
 func pushStream(ctx context.Context, controlURL, streamURL string, opt Options) PushResult {
 	var p PushResult
-	p.StopStatus, _, _ = sim.SoapCallRaw(ctx, controlURL, "Stop", [][2]string{{"InstanceID", "0"}})
+	p.StopStatus, _, _ = sim.SoapCallRaw(ctx, controlURL, sim.AVTService, "Stop", [][2]string{{"InstanceID", "0"}})
 	select {
 	case <-ctx.Done():
 		return p
@@ -296,7 +296,7 @@ func pushStream(ctx context.Context, controlURL, streamURL string, opt Options) 
 	}
 
 	var err error
-	p.SetURIStatus, _, err = sim.SoapCallRaw(ctx, controlURL, "SetAVTransportURI", [][2]string{
+	p.SetURIStatus, _, err = sim.SoapCallRaw(ctx, controlURL, sim.AVTService, "SetAVTransportURI", [][2]string{
 		{"InstanceID", "0"},
 		{"CurrentURI", sim.XMLEscape(streamURL)},
 		{"CurrentURIMetaData", sim.DIDL(streamURL, "StickBox TV Compatibility Check", "video/avi")},
@@ -304,7 +304,7 @@ func pushStream(ctx context.Context, controlURL, streamURL string, opt Options) 
 	if err != nil {
 		p.SetURIError = err.Error()
 	}
-	p.PlayStatus, _, err = sim.SoapCallRaw(ctx, controlURL, "Play", [][2]string{
+	p.PlayStatus, _, err = sim.SoapCallRaw(ctx, controlURL, sim.AVTService, "Play", [][2]string{
 		{"InstanceID", "0"}, {"Speed", "1"},
 	})
 	if err != nil {

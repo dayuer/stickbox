@@ -31,6 +31,7 @@ type fakeTV struct {
 	pullRounds   int
 	cmCalls      int
 	avtInfoCalls int
+	badSOAP      []string
 
 	done chan struct{}
 }
@@ -65,7 +66,15 @@ func newFakeTV(t *testing.T) (*fakeTV, *httptest.Server) {
 	})
 	mux.HandleFunc("/cm", func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
-		_ = raw
+		const svc = "urn:schemas-upnp-org:service:ConnectionManager:1"
+		if r.Header.Get("SOAPACTION") != `"`+svc+`#GetProtocolInfo"` ||
+			!strings.Contains(string(raw), `xmlns:u="`+svc+`"`) {
+			f.mu.Lock()
+			f.badSOAP = append(f.badSOAP, "cm")
+			f.mu.Unlock()
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		f.mu.Lock()
 		sink := f.sink
 		f.cmCalls++
@@ -79,6 +88,15 @@ func newFakeTV(t *testing.T) (*fakeTV, *httptest.Server) {
 		action := strings.Trim(r.Header.Get("SOAPACTION"), `"`)
 		if i := strings.LastIndex(action, "#"); i >= 0 {
 			action = action[i+1:]
+		}
+		const svc = "urn:schemas-upnp-org:service:AVTransport:1"
+		if !strings.HasPrefix(r.Header.Get("SOAPACTION"), `"`+svc+`#`) ||
+			!strings.Contains(string(raw), `xmlns:u="`+svc+`"`) {
+			f.mu.Lock()
+			f.badSOAP = append(f.badSOAP, "avt-"+action)
+			f.mu.Unlock()
+			w.WriteHeader(http.StatusInternalServerError)
+			return
 		}
 		f.mu.Lock()
 		switch action {
@@ -203,13 +221,14 @@ func testOptions() Options {
 func TestRunSamsungLikeTV(t *testing.T) {
 	f, srv := newFakeTV(t)
 	rep, err := Run(context.Background(), Renderer{
-		Name:                 "Fake Samsung",
-		Manufacturer:         "Samsung",
-		Model:                "Room C",
-		IP:                   "127.0.0.1",
-		ControlURL:           srv.URL + "/ctl",
-		ConnectionManagerURL: srv.URL + "/cm",
-		Location:             srv.URL + "/desc.xml",
+		Name:                     "Fake Samsung",
+		Manufacturer:             "Samsung",
+		Model:                    "Room C",
+		IP:                       "127.0.0.1",
+		ControlURL:               srv.URL + "/ctl",
+		ConnectionManagerURL:     srv.URL + "/cm",
+		ConnectionManagerService: "urn:schemas-upnp-org:service:ConnectionManager:1",
+		Location:                 srv.URL + "/desc.xml",
 	}, testOptions())
 	if err != nil {
 		t.Fatal(err)
@@ -239,10 +258,13 @@ func TestRunSamsungLikeTV(t *testing.T) {
 		t.Errorf("GetProtocolInfo 失败：%s", rep.ProtocolInfo.Error)
 	}
 	f.mu.Lock()
-	cmCalls, avtCalls := f.cmCalls, f.avtInfoCalls
+	cmCalls, avtCalls, badSOAP := f.cmCalls, f.avtInfoCalls, append([]string(nil), f.badSOAP...)
 	f.mu.Unlock()
 	if cmCalls == 0 || avtCalls != 0 {
 		t.Errorf("GetProtocolInfo 应走 ConnectionManager：cm=%d avt=%d", cmCalls, avtCalls)
+	}
+	if len(badSOAP) != 0 {
+		t.Errorf("SOAP 服务类型/命名空间不对：%v", badSOAP)
 	}
 	if rep.HasErrors() {
 		t.Errorf("不应有 error：%+v", rep.Warnings)
@@ -285,7 +307,7 @@ func TestProtocolInfoWithoutConnectionManager(t *testing.T) {
 func TestRun402WarnsNumericEntities(t *testing.T) {
 	f, srv := newFakeTV(t)
 	f.setURIStatus = http.StatusPaymentRequired
-	rep, err := Run(context.Background(), Renderer{Name: "Bad TV", IP: "127.0.0.1", ControlURL: srv.URL + "/ctl", ConnectionManagerURL: srv.URL + "/cm"}, testOptions())
+	rep, err := Run(context.Background(), Renderer{Name: "Bad TV", IP: "127.0.0.1", ControlURL: srv.URL + "/ctl", ConnectionManagerURL: srv.URL + "/cm", ConnectionManagerService: "urn:schemas-upnp-org:service:ConnectionManager:1"}, testOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +321,7 @@ func TestRunNoPlaying(t *testing.T) {
 	f.states = []string{"TRANSITIONING", "TRANSITIONING", "TRANSITIONING"}
 	opt := testOptions()
 	opt.PlayTimeout = 80 * time.Millisecond
-	rep, err := Run(context.Background(), Renderer{Name: "Slow TV", IP: "127.0.0.1", ControlURL: srv.URL + "/ctl", ConnectionManagerURL: srv.URL + "/cm"}, opt)
+	rep, err := Run(context.Background(), Renderer{Name: "Slow TV", IP: "127.0.0.1", ControlURL: srv.URL + "/ctl", ConnectionManagerURL: srv.URL + "/cm", ConnectionManagerService: "urn:schemas-upnp-org:service:ConnectionManager:1"}, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +333,7 @@ func TestRunNoPlaying(t *testing.T) {
 func TestRunMIMENotDeclared(t *testing.T) {
 	f, srv := newFakeTV(t)
 	f.sink = "http-get:*:video/mp4:*"
-	rep, err := Run(context.Background(), Renderer{Name: "MP4 TV", IP: "127.0.0.1", ControlURL: srv.URL + "/ctl", ConnectionManagerURL: srv.URL + "/cm"}, testOptions())
+	rep, err := Run(context.Background(), Renderer{Name: "MP4 TV", IP: "127.0.0.1", ControlURL: srv.URL + "/ctl", ConnectionManagerURL: srv.URL + "/cm", ConnectionManagerService: "urn:schemas-upnp-org:service:ConnectionManager:1"}, testOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +348,7 @@ func TestRunMeasuresReconnect(t *testing.T) {
 	f.pullRounds = 2
 	opt := testOptions()
 	opt.Duration = 900 * time.Millisecond
-	rep, err := Run(context.Background(), Renderer{Name: "Flaky TV", IP: "127.0.0.1", ControlURL: srv.URL + "/ctl", ConnectionManagerURL: srv.URL + "/cm"}, opt)
+	rep, err := Run(context.Background(), Renderer{Name: "Flaky TV", IP: "127.0.0.1", ControlURL: srv.URL + "/ctl", ConnectionManagerURL: srv.URL + "/cm", ConnectionManagerService: "urn:schemas-upnp-org:service:ConnectionManager:1"}, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +380,8 @@ func TestParseDescription(t *testing.T) {
 	}
 	if r.Name != "客厅电视" || r.IP != "192.168.3.18" ||
 		r.ControlURL != "http://192.168.3.18:9197/upnp/control/AVTransport1" ||
-		r.ConnectionManagerURL != "http://192.168.3.18:9197/upnp/control/ConnectionManager1" {
+		r.ConnectionManagerURL != "http://192.168.3.18:9197/upnp/control/ConnectionManager1" ||
+		r.ConnectionManagerService != "urn:schemas-upnp-org:service:ConnectionManager:1" {
 		t.Errorf("解析结果 = %+v", r)
 	}
 

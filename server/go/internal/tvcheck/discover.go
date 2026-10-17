@@ -21,10 +21,12 @@ type Renderer struct {
 	Location     string `json:"location"`
 	// ControlURL 是 AVTransport 的控制地址。
 	ControlURL string `json:"control_url,omitempty"`
-	// ConnectionManagerURL 是 ConnectionManager 的控制地址。
-	// GetProtocolInfo 属于这个服务；发到 AVTransport 会得到 500。
-	ConnectionManagerURL string `json:"connection_manager_url,omitempty"`
-	IP                   string `json:"ip"`
+	// ConnectionManagerURL / ConnectionManagerService 是 ConnectionManager
+	// 的控制地址与服务类型。GetProtocolInfo 属于这个服务；发到 AVTransport
+	// 或信封里写 AVTransport 的 xmlns 都会被三星回 500。
+	ConnectionManagerURL     string `json:"connection_manager_url,omitempty"`
+	ConnectionManagerService string `json:"connection_manager_service,omitempty"`
+	IP                       string `json:"ip"`
 }
 
 // Display 是给用户看的一行描述。
@@ -195,6 +197,7 @@ func parseDescription(location string, raw []byte) (Renderer, error) {
 			r.ControlURL = u
 		case strings.Contains(s.ServiceType, "ConnectionManager") && r.ConnectionManagerURL == "":
 			r.ConnectionManagerURL = u
+			r.ConnectionManagerService = s.ServiceType
 		}
 	}
 	return r, nil
