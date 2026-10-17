@@ -5,6 +5,7 @@
 package broker
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"log/slog"
@@ -24,6 +25,8 @@ import (
 type CommandTracker interface {
 	Send(dev, topic string, payload []byte, retain bool) (string, error)
 	Ack(dev, cid string, ok bool, errMsg string)
+	// CancelDevice 结案该设备所有未确认的指令（换密钥/吊销/解绑后不再重投）。
+	CancelDevice(dev, reason string) int
 }
 
 // idTable 记住每条连接校验通过的身份，ACL 判定直接取，不重复跑 argon2。
@@ -102,6 +105,35 @@ func (t *idTable) drop(cl *mqtt.Client) {
 	t.mu.Unlock()
 }
 
+// packetRedactHandler 把 mochi 的 "error processing packet" 日志里的 pk
+// 字段替换成占位符。ACL 拒绝时 mochi 会把整个包（含 payload）打进 WARN，
+// 每包几 KB：既泄露内容，也能被刷日志。错误类型、client、topic 仍保留。
+type packetRedactHandler struct{ slog.Handler }
+
+func (h packetRedactHandler) Handle(ctx context.Context, r slog.Record) error {
+	if r.Message != "error processing packet" {
+		return h.Handler.Handle(ctx, r)
+	}
+	nr := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == "pk" {
+			nr.AddAttrs(slog.String("pk", "<redacted>"))
+		} else {
+			nr.AddAttrs(a)
+		}
+		return true
+	})
+	return h.Handler.Handle(ctx, nr)
+}
+
+func (h packetRedactHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return packetRedactHandler{h.Handler.WithAttrs(attrs)}
+}
+
+func (h packetRedactHandler) WithGroup(name string) slog.Handler {
+	return packetRedactHandler{h.Handler.WithGroup(name)}
+}
+
 type Broker struct {
 	srv     *mqtt.Server
 	hook    *Hook
@@ -145,9 +177,9 @@ func New(addr string, tlsCfg *tls.Config, v *auth.Verifier, r Router, opt Option
 		InlineClient: true,
 		Capabilities: caps,
 		// broker 自己的日志走 slog，别另起一套格式
-		Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Logger: slog.New(packetRedactHandler{slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 			Level: slog.LevelWarn,
-		})),
+		})}),
 	})
 	h := &Hook{
 		srv: srv, v: v, router: r, ids: newIDTable(),
@@ -211,10 +243,12 @@ func (b *Broker) PublishUsage(dev string, payload []byte) error {
 // PublishPair 通知设备配对状态。retain=1：设备离线时错过配对，
 // 重连后仍能拿到「已配对 / 已解绑」的当前状态。
 //
-// retain 和 T18 的重投是两件事：retain 解决「重连能拿到最后状态」，
-// 重投解决「收到了但没应用」。两者都要。
+// pair 不做 ACK 跟踪，直接裸发布：它是可重放的状态通知，不携带会过期的
+// 数据。retained 消息 + 设备订阅时的 ResendPair 已经保证最终一致；给
+// pair 带 cid 反而会把一条发给旧密钥的解绑指令重投给重新注册的新密钥。
+// usage/frame 仍然走 tracker（数据有时效，必须确认）。
 func (b *Broker) PublishPair(dev string, payload []byte) error {
-	return b.send(dev, fmt.Sprintf("printer/%s/pair", dev), payload, true)
+	return b.PublishRaw(fmt.Sprintf("printer/%s/pair", dev), payload, true)
 }
 
 // send 有 tracker 就走带确认的路，没有就退回裸发布（测试里、或还没接上时）。
@@ -231,6 +265,15 @@ func (b *Broker) send(dev, topic string, payload []byte, retain bool) error {
 func (b *Broker) SetCommandTracker(c CommandTracker) {
 	b.cmd = c
 	b.hook.cmd = c
+}
+
+// CancelDevice 结案该设备所有未确认的指令。换密钥/吊销/解绑之后，旧
+// 连接名下的 cid 不应再投给新密钥；HTTP unpair 和吊销检测用它兜底。
+func (b *Broker) CancelDevice(dev, reason string) int {
+	if b.cmd == nil {
+		return 0
+	}
+	return b.cmd.CancelDevice(dev, reason)
 }
 
 // KickDevice 断开这台设备的全部 MQTT 连接。

@@ -47,6 +47,8 @@ type Config struct {
 	NoFetch bool
 	// OnFrameNotify 在收到 frame 版本通知时回调（压测计时用）。
 	OnFrameNotify func(dev string, ver uint64)
+	// OnConnected 在 MQTT 连接成功时回调，携带本次 CONNECT 耗时。
+	OnConnected func(dev string, d time.Duration)
 	// Heartbeat 是 status 心跳间隔；0 表示默认 30 秒（真设备行为）。
 	Heartbeat time.Duration
 }
@@ -582,6 +584,7 @@ func (d *Device) mqttSession(ctx context.Context) error {
 
 	c := paho.NewClient(opts)
 	d.logf("MQTT 连接中：%s（client id %s）", d.cfg.MQTTAddr, st.Dev)
+	connectStart := time.Now()
 	tok := c.Connect()
 	if !tok.WaitTimeout(10 * time.Second) {
 		return errors.New("sim: MQTT 连接超时")
@@ -589,6 +592,9 @@ func (d *Device) mqttSession(ctx context.Context) error {
 	if err := tok.Error(); err != nil {
 		d.logf("MQTT 连接失败：%v", err)
 		return err
+	}
+	if d.cfg.OnConnected != nil {
+		d.cfg.OnConnected(st.Dev, time.Since(connectStart))
 	}
 	d.logf("MQTT 已连接")
 	defer c.Disconnect(100)

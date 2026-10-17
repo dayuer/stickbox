@@ -39,6 +39,8 @@ func (p *recPub) PublishPair(dev string, payload []byte) error {
 
 func (p *recPub) KickDevice(dev string) {} // 测试里没有真连接可踢
 
+func (p *recPub) CancelDevice(dev, reason string) int { return 0 }
+
 type testDeps struct {
 	store *store.Store
 	reg   *registry.Registry

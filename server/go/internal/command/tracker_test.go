@@ -528,3 +528,26 @@ func TestFailedSendKeepsOldPending(t *testing.T) {
 		t.Error("发布失败却把旧记录删了，这条指令整个丢了")
 	}
 }
+
+// 换密钥/吊销/解绑之后，旧 cid 全部作废，不再重投。
+func TestCancelDeviceStopsRetries(t *testing.T) {
+	tr, pub, pres, _, clock := newTracker(t)
+	pres.set("d", true)
+	tr.Send("d", "printer/d/pair", []byte(`{"paired":false}`), true)
+	tr.Send("d", "printer/d/usage", []byte(`{"now":1}`), false)
+
+	if n := tr.CancelDevice("d", "unpaired"); n != 2 {
+		t.Fatalf("CancelDevice 结案 %d 条，期望 2", n)
+	}
+	if tr.Pending("d") != 0 {
+		t.Fatalf("CancelDevice 后仍有 %d 条待确认", tr.Pending("d"))
+	}
+	*clock = clock.Add(retryBase + time.Second)
+	tr.sweep()
+	if n := len(pub.all()); n != 2 {
+		t.Errorf("作废后仍重投了：共 %d 条消息", n)
+	}
+	if o, ok := tr.LastOutcome("d"); !ok || o.Err != "unpaired" {
+		t.Errorf("结局 = %+v ok=%v，期望 unpaired", o, ok)
+	}
+}

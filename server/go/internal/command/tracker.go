@@ -223,6 +223,28 @@ func (t *Tracker) Ack(dev, cid string, ok bool, errMsg string) {
 	}
 }
 
+// CancelDevice 结案某台设备所有未确认的指令。设备换了新密钥或被吊销后，
+// 旧连接名下的 cid 不能再投给新密钥（新密钥可能根本没收到过这条指令），
+// 也不能继续占用重试预算、刷重投日志。
+func (t *Tracker) CancelDevice(dev, reason string) int {
+	now := t.now()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	n := 0
+	for cid, p := range t.pend {
+		if p.dev != dev {
+			continue
+		}
+		delete(t.pend, cid)
+		t.last[dev] = Outcome{
+			CID: cid, Topic: p.topic, OK: false, Err: reason,
+			Tries: p.tries, Finished: now,
+		}
+		n++
+	}
+	return n
+}
+
 func (t *Tracker) finish(cid string, p *pending, ok bool, errMsg string) {
 	t.mu.Lock()
 	t.last[p.dev] = Outcome{

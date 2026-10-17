@@ -27,6 +27,8 @@ type Publisher interface {
 	PublishUsage(dev string, payload []byte) error
 	PublishPair(dev string, payload []byte) error
 	KickDevice(dev string)
+	// CancelDevice 结案该设备未确认的指令（解绑后不再重投）。
+	CancelDevice(dev, reason string) int
 }
 
 type API struct {

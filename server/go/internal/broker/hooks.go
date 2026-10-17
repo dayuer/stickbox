@@ -170,6 +170,13 @@ func (h *Hook) dropRevoked(dev string) {
 			_ = h.srv.DisconnectClient(cl, packets.ErrNotAuthorized)
 		}
 	}
+	// 吊销后设备已经不能以原身份回 ACK，pair 指令（解绑通知）再重投也没有
+	// 意义；直接结案，别把重试预算耗在一条不会有人确认的指令上。
+	if len(stale) > 0 && h.cmd != nil {
+		if n := h.cmd.CancelDevice(dev, "device_revoked"); n > 0 {
+			slog.Info("吊销后作废旧指令", "dev", dev, "count", n)
+		}
+	}
 }
 
 // evictStale 在 mochi 走会话接管之前，把**同一个 client ID** 的旧连接

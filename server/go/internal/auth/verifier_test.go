@@ -1,9 +1,9 @@
 package auth
 
 import (
+	"errors"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/dayuer/stickbox/server/go/internal/store"
 )
@@ -12,6 +12,7 @@ type fakeKeys struct {
 	mu    sync.Mutex
 	keys  map[string]store.Key
 	reads int
+	err   error
 }
 
 const testPepper = "test-pepper-0123456789abcdef"
@@ -20,6 +21,9 @@ func (f *fakeKeys) KeyByID(id string) (store.Key, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reads++
+	if f.err != nil {
+		return store.Key{}, false, f.err
+	}
 	k, ok := f.keys[id]
 	return k, ok, nil
 }
@@ -59,22 +63,44 @@ func TestVerifyReturnsIdentity(t *testing.T) {
 	}
 }
 
-// argon2 单次几十毫秒，取件路径每次都算会毁掉低延迟目标。
-func TestVerifyUsesCacheOnSecondCall(t *testing.T) {
-	v, f, token := newFixture(t)
+// 压测对照路径：命中缓存也必须查一次库，否则 CLI 在别的进程吊销后
+// 本进程会继续放行（这正是 T25 要修的线上问题）。
+func TestCachedVerifyRechecksDBOnHit(t *testing.T) {
+	_, f, token := newFixture(t)
+	v := newVerifier(f, testPepper, true)
 	if _, err := v.Verify(token); err != nil {
 		t.Fatal(err)
 	}
 	before := f.reads
-	start := time.Now()
 	if _, err := v.Verify(token); err != nil {
 		t.Fatal(err)
 	}
-	if f.reads != before {
-		t.Errorf("第二次校验又查了库（reads %d → %d），缓存没生效", before, f.reads)
+	if f.reads != before+1 {
+		t.Errorf("缓存命中后查库次数 = %d，期望 %d（命中也要核对吊销状态）", f.reads, before+1)
 	}
-	if d := time.Since(start); d > 5*time.Millisecond {
-		t.Errorf("缓存命中耗时 %v，说明仍在跑 argon2", d)
+}
+
+// 生产路径不缓存正结果：吊销后不需要 Invalidate，下一次校验立即拒绝。
+func TestRevokedKeyDeniedWithoutInvalidate(t *testing.T) {
+	v, f, token := newFixture(t)
+	if _, err := v.Verify(token); err != nil {
+		t.Fatal(err)
+	}
+	keyID, _, _ := SplitToken(token)
+	k := f.keys[keyID]
+	k.Disabled = true
+	f.keys[keyID] = k
+	if _, err := v.Verify(token); !errors.Is(err, ErrDenied) {
+		t.Fatalf("吊销后 Verify = %v，期望 ErrDenied", err)
+	}
+}
+
+// DB 错误不能伪装成“密钥无效”，broker 要靠这个区分 0x03 和 0x05。
+func TestVerifyDBErrorIsNotDenied(t *testing.T) {
+	v, f, token := newFixture(t)
+	f.err = errors.New("db unavailable")
+	if _, err := v.Verify(token); err == nil || errors.Is(err, ErrDenied) {
+		t.Fatalf("DB 错误返回 %v，不能是 ErrDenied", err)
 	}
 }
 
@@ -95,9 +121,10 @@ func TestVerifyReportsPending(t *testing.T) {
 	}
 }
 
-// 配对转正后必须让缓存失效，否则旧缓存里的 Pending=true 还会挡一小时。
-func TestPendingCacheInvalidatedAfterActivation(t *testing.T) {
-	v, f, token := newFixture(t)
+// 配对转正后即使没有 Invalidate，缓存命中重查也能看到新状态。
+func TestCachedVerifySeesActivationWithoutInvalidate(t *testing.T) {
+	_, f, token := newFixture(t)
+	v := newVerifier(f, testPepper, true)
 	keyID, _, _ := SplitToken(token)
 	k := f.keys[keyID]
 	k.Pending = true
@@ -110,7 +137,6 @@ func TestPendingCacheInvalidatedAfterActivation(t *testing.T) {
 	k.Pending = false
 	k.UserID = "u1"
 	f.keys[keyID] = k
-	v.Invalidate(keyID)
 
 	id, err := v.Verify(token)
 	if err != nil {
@@ -198,7 +224,7 @@ func TestVerifyDoesNotCacheIdentityInvalidatedMidFlight(t *testing.T) {
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	v := NewVerifier(f, testPepper)
+	v := newVerifier(f, testPepper, true)
 
 	type result struct {
 		id  Identity
@@ -225,14 +251,14 @@ func TestVerifyDoesNotCacheIdentityInvalidatedMidFlight(t *testing.T) {
 	if got.err != nil {
 		t.Fatal(got.err)
 	}
-	if got.id.Pending || got.id.UserID != "u1" {
-		t.Fatalf("正在进行的校验返回了旧身份 %+v，期望已转正", got.id)
-	}
-	if f.reads < 2 {
-		t.Errorf("转正后应重新查库，reads=%d", f.reads)
-	}
+	_ = got // 飞行中的那次可能返回校验开始时的旧状态；关键是下一次
+
+	before := f.reads
 	if id, err := v.Verify(token); err != nil || id.Pending {
-		t.Fatalf("后续校验 = %+v, %v；缓存里残留了 pending", id, err)
+		t.Fatalf("后续校验 = %+v, %v；缓存命中没有重查库", id, err)
+	}
+	if f.reads <= before {
+		t.Errorf("后续校验应重新查库，reads=%d", f.reads)
 	}
 }
 

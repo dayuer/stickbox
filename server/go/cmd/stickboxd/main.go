@@ -62,6 +62,11 @@ func serve(cfg *config.Config) error {
 	defer st.Close()
 
 	v := auth.NewVerifier(st, cfg.TokenPepper)
+	if os.Getenv("STICKBOX_VERIFIER_CACHE") == "1" {
+		// 仅供压测对照，见 task/T25 的提交说明；生产必须走无缓存路径。
+		slog.Warn("启用了压测对照的 verifier 缓存（命中仍查库）")
+		v = auth.NewVerifierCached(st, cfg.TokenPepper)
+	}
 
 	reloader, err := tlsx.New(cfg.CertPath(), cfg.KeyPath())
 	if err != nil {
@@ -98,11 +103,11 @@ func serve(cfg *config.Config) error {
 		return fmt.Errorf("初始化渲染器：%w", err)
 	}
 	fs, err := frames.New(cfg.Root, st, api.Usage(), br, frames.RenderBuilder{R: rr}, frames.Options{
-		DefaultTZ:         cfg.DefaultTZ,
-		CacheMaxBytes:     cfg.FrameCacheMaxBytes,
-		MemoryMaxBytes:    cfg.FrameMemoryMaxBytes,
-		BackfillPerSec:    cfg.BackfillPerSec,
-		Now:               time.Now,
+		DefaultTZ:      cfg.DefaultTZ,
+		CacheMaxBytes:  cfg.FrameCacheMaxBytes,
+		MemoryMaxBytes: cfg.FrameMemoryMaxBytes,
+		BackfillPerSec: cfg.BackfillPerSec,
+		Now:            time.Now,
 	})
 	if err != nil {
 		return fmt.Errorf("初始化帧服务：%w", err)
