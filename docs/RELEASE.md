@@ -62,6 +62,11 @@ espsecure.py generate_signing_key --version 2 ota_key.pem
 
 ## 3. 发一版
 
+> **打 tag 前必须先过 [`docs/BOARD-ACCEPTANCE.md`](BOARD-ACCEPTANCE.md)。**
+> 那份清单覆盖冷启动、内存、停服重连、解绑/重配、注册配额、OTA 回滚、
+> 固件内嵌地址等 9 项上板验收；任何 FAIL 都不发版。串口日志和发布记录
+> 一并归档。
+
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
