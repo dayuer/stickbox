@@ -6866,6 +6866,16 @@
             {
                 "children": [],
                 "depends_on": null,
+                "help": "\u5f00\u4e86\u4e4b\u540e\u56fa\u4ef6\u4e00\u542f\u52a8\u5c31 abort()\u3002\u7528\u6765\u9a8c\u8bc1\u56de\u6eda\u786e\u5b9e\u751f\u6548\uff1a\u628a\u8fd9\u7248\u63a8\u7ed9\u8bbe\u5907\uff0c\n\u8bbe\u5907\u5347\u7ea7 \u2192 \u91cd\u542f \u2192 \u5d29\u6e83 \u2192 \u4e0b\u6b21\u542f\u52a8 bootloader \u5e94\u5f53\u81ea\u52a8\u56de\u6eda\u4e0a\u4e00\u69fd\u5e76\n\u6062\u590d\u670d\u52a1\u3002\n\n**\u7edd\u4e0d\u8981\u7528\u5b83\u51fa\u6b63\u5f0f\u56fa\u4ef6\u3002**",
+                "id": "STICKBOX_OTA_SUICIDE",
+                "name": "STICKBOX_OTA_SUICIDE",
+                "range": null,
+                "title": "Test build: abort() right after boot (OTA rollback test only)",
+                "type": "bool"
+            },
+            {
+                "children": [],
+                "depends_on": null,
                 "help": "USB \u53e3\u53ea\u80fd\u5012\u63d2\uff0c\u677f\u5b50\u88c5\u4e0a\u540e\u5c4f\u5e55\u662f\u5012\u7684\u3002\u6253\u5f00\u540e\u7528 ST7789 \u786c\u4ef6\u955c\u50cf\u7ffb\u8f6c\uff0c\n\u4e0d\u5360\u989d\u5916\u6e32\u67d3\u65f6\u95f4\u3002",
                 "id": "STICKBOX_LCD_ROTATE_180",
                 "name": "STICKBOX_LCD_ROTATE_180",

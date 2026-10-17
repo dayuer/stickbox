@@ -217,10 +217,52 @@ esp-idf/main/CMakeFiles/__idf_main.dir/pairband.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/__idf_main.dir/pairband.c.s"
 	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/pairband.c -o CMakeFiles/__idf_main.dir/pairband.c.s
 
+esp-idf/main/CMakeFiles/__idf_main.dir/ota.c.obj: esp-idf/main/CMakeFiles/__idf_main.dir/flags.make
+esp-idf/main/CMakeFiles/__idf_main.dir/ota.c.obj: /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/ota.c
+esp-idf/main/CMakeFiles/__idf_main.dir/ota.c.obj: esp-idf/main/CMakeFiles/__idf_main.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=$(CMAKE_PROGRESS_12) "Building C object esp-idf/main/CMakeFiles/__idf_main.dir/ota.c.obj"
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT esp-idf/main/CMakeFiles/__idf_main.dir/ota.c.obj -MF CMakeFiles/__idf_main.dir/ota.c.obj.d -o CMakeFiles/__idf_main.dir/ota.c.obj -c /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/ota.c
+
+esp-idf/main/CMakeFiles/__idf_main.dir/ota.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/__idf_main.dir/ota.c.i"
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/ota.c > CMakeFiles/__idf_main.dir/ota.c.i
+
+esp-idf/main/CMakeFiles/__idf_main.dir/ota.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/__idf_main.dir/ota.c.s"
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/ota.c -o CMakeFiles/__idf_main.dir/ota.c.s
+
+esp-idf/main/CMakeFiles/__idf_main.dir/coredump.c.obj: esp-idf/main/CMakeFiles/__idf_main.dir/flags.make
+esp-idf/main/CMakeFiles/__idf_main.dir/coredump.c.obj: /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/coredump.c
+esp-idf/main/CMakeFiles/__idf_main.dir/coredump.c.obj: esp-idf/main/CMakeFiles/__idf_main.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=$(CMAKE_PROGRESS_13) "Building C object esp-idf/main/CMakeFiles/__idf_main.dir/coredump.c.obj"
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT esp-idf/main/CMakeFiles/__idf_main.dir/coredump.c.obj -MF CMakeFiles/__idf_main.dir/coredump.c.obj.d -o CMakeFiles/__idf_main.dir/coredump.c.obj -c /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/coredump.c
+
+esp-idf/main/CMakeFiles/__idf_main.dir/coredump.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/__idf_main.dir/coredump.c.i"
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/coredump.c > CMakeFiles/__idf_main.dir/coredump.c.i
+
+esp-idf/main/CMakeFiles/__idf_main.dir/coredump.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/__idf_main.dir/coredump.c.s"
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/coredump.c -o CMakeFiles/__idf_main.dir/coredump.c.s
+
+esp-idf/main/CMakeFiles/__idf_main.dir/memdiag.c.obj: esp-idf/main/CMakeFiles/__idf_main.dir/flags.make
+esp-idf/main/CMakeFiles/__idf_main.dir/memdiag.c.obj: /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/memdiag.c
+esp-idf/main/CMakeFiles/__idf_main.dir/memdiag.c.obj: esp-idf/main/CMakeFiles/__idf_main.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=$(CMAKE_PROGRESS_14) "Building C object esp-idf/main/CMakeFiles/__idf_main.dir/memdiag.c.obj"
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT esp-idf/main/CMakeFiles/__idf_main.dir/memdiag.c.obj -MF CMakeFiles/__idf_main.dir/memdiag.c.obj.d -o CMakeFiles/__idf_main.dir/memdiag.c.obj -c /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/memdiag.c
+
+esp-idf/main/CMakeFiles/__idf_main.dir/memdiag.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/__idf_main.dir/memdiag.c.i"
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/memdiag.c > CMakeFiles/__idf_main.dir/memdiag.c.i
+
+esp-idf/main/CMakeFiles/__idf_main.dir/memdiag.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/__idf_main.dir/memdiag.c.s"
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/memdiag.c -o CMakeFiles/__idf_main.dir/memdiag.c.s
+
 esp-idf/main/CMakeFiles/__idf_main.dir/framepack.c.obj: esp-idf/main/CMakeFiles/__idf_main.dir/flags.make
 esp-idf/main/CMakeFiles/__idf_main.dir/framepack.c.obj: /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/framepack.c
 esp-idf/main/CMakeFiles/__idf_main.dir/framepack.c.obj: esp-idf/main/CMakeFiles/__idf_main.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=$(CMAKE_PROGRESS_12) "Building C object esp-idf/main/CMakeFiles/__idf_main.dir/framepack.c.obj"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=$(CMAKE_PROGRESS_15) "Building C object esp-idf/main/CMakeFiles/__idf_main.dir/framepack.c.obj"
 	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT esp-idf/main/CMakeFiles/__idf_main.dir/framepack.c.obj -MF CMakeFiles/__idf_main.dir/framepack.c.obj.d -o CMakeFiles/__idf_main.dir/framepack.c.obj -c /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/framepack.c
 
 esp-idf/main/CMakeFiles/__idf_main.dir/framepack.c.i: cmake_force
@@ -234,7 +276,7 @@ esp-idf/main/CMakeFiles/__idf_main.dir/framepack.c.s: cmake_force
 esp-idf/main/CMakeFiles/__idf_main.dir/framepack_band.c.obj: esp-idf/main/CMakeFiles/__idf_main.dir/flags.make
 esp-idf/main/CMakeFiles/__idf_main.dir/framepack_band.c.obj: /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/framepack_band.c
 esp-idf/main/CMakeFiles/__idf_main.dir/framepack_band.c.obj: esp-idf/main/CMakeFiles/__idf_main.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=$(CMAKE_PROGRESS_13) "Building C object esp-idf/main/CMakeFiles/__idf_main.dir/framepack_band.c.obj"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=$(CMAKE_PROGRESS_16) "Building C object esp-idf/main/CMakeFiles/__idf_main.dir/framepack_band.c.obj"
 	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT esp-idf/main/CMakeFiles/__idf_main.dir/framepack_band.c.obj -MF CMakeFiles/__idf_main.dir/framepack_band.c.obj.d -o CMakeFiles/__idf_main.dir/framepack_band.c.obj -c /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/framepack_band.c
 
 esp-idf/main/CMakeFiles/__idf_main.dir/framepack_band.c.i: cmake_force
@@ -248,7 +290,7 @@ esp-idf/main/CMakeFiles/__idf_main.dir/framepack_band.c.s: cmake_force
 esp-idf/main/CMakeFiles/__idf_main.dir/framepack_meta.c.obj: esp-idf/main/CMakeFiles/__idf_main.dir/flags.make
 esp-idf/main/CMakeFiles/__idf_main.dir/framepack_meta.c.obj: /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/framepack_meta.c
 esp-idf/main/CMakeFiles/__idf_main.dir/framepack_meta.c.obj: esp-idf/main/CMakeFiles/__idf_main.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=$(CMAKE_PROGRESS_14) "Building C object esp-idf/main/CMakeFiles/__idf_main.dir/framepack_meta.c.obj"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=$(CMAKE_PROGRESS_17) "Building C object esp-idf/main/CMakeFiles/__idf_main.dir/framepack_meta.c.obj"
 	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT esp-idf/main/CMakeFiles/__idf_main.dir/framepack_meta.c.obj -MF CMakeFiles/__idf_main.dir/framepack_meta.c.obj.d -o CMakeFiles/__idf_main.dir/framepack_meta.c.obj -c /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/framepack_meta.c
 
 esp-idf/main/CMakeFiles/__idf_main.dir/framepack_meta.c.i: cmake_force
@@ -259,23 +301,9 @@ esp-idf/main/CMakeFiles/__idf_main.dir/framepack_meta.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/__idf_main.dir/framepack_meta.c.s"
 	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/framepack_meta.c -o CMakeFiles/__idf_main.dir/framepack_meta.c.s
 
-esp-idf/main/CMakeFiles/__idf_main.dir/memdiag.c.obj: esp-idf/main/CMakeFiles/__idf_main.dir/flags.make
-esp-idf/main/CMakeFiles/__idf_main.dir/memdiag.c.obj: /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/memdiag.c
-esp-idf/main/CMakeFiles/__idf_main.dir/memdiag.c.obj: esp-idf/main/CMakeFiles/__idf_main.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=$(CMAKE_PROGRESS_15) "Building C object esp-idf/main/CMakeFiles/__idf_main.dir/memdiag.c.obj"
-	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT esp-idf/main/CMakeFiles/__idf_main.dir/memdiag.c.obj -MF CMakeFiles/__idf_main.dir/memdiag.c.obj.d -o CMakeFiles/__idf_main.dir/memdiag.c.obj -c /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/memdiag.c
-
-esp-idf/main/CMakeFiles/__idf_main.dir/memdiag.c.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/__idf_main.dir/memdiag.c.i"
-	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/memdiag.c > CMakeFiles/__idf_main.dir/memdiag.c.i
-
-esp-idf/main/CMakeFiles/__idf_main.dir/memdiag.c.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/__idf_main.dir/memdiag.c.s"
-	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/memdiag.c -o CMakeFiles/__idf_main.dir/memdiag.c.s
-
 esp-idf/main/CMakeFiles/__idf_main.dir/__/__/blank.jpg.S.obj: esp-idf/main/CMakeFiles/__idf_main.dir/flags.make
 esp-idf/main/CMakeFiles/__idf_main.dir/__/__/blank.jpg.S.obj: blank.jpg.S
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=$(CMAKE_PROGRESS_16) "Building ASM object esp-idf/main/CMakeFiles/__idf_main.dir/__/__/blank.jpg.S.obj"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=$(CMAKE_PROGRESS_18) "Building ASM object esp-idf/main/CMakeFiles/__idf_main.dir/__/__/blank.jpg.S.obj"
 	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && /Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc $(ASM_DEFINES) $(ASM_INCLUDES) $(ASM_FLAGS) -o CMakeFiles/__idf_main.dir/__/__/blank.jpg.S.obj -c /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/blank.jpg.S
 
 esp-idf/main/CMakeFiles/__idf_main.dir/__/__/blank.jpg.S.i: cmake_force
@@ -298,10 +326,12 @@ __idf_main_OBJECTS = \
 "CMakeFiles/__idf_main.dir/stream.c.obj" \
 "CMakeFiles/__idf_main.dir/jband.c.obj" \
 "CMakeFiles/__idf_main.dir/pairband.c.obj" \
+"CMakeFiles/__idf_main.dir/ota.c.obj" \
+"CMakeFiles/__idf_main.dir/coredump.c.obj" \
+"CMakeFiles/__idf_main.dir/memdiag.c.obj" \
 "CMakeFiles/__idf_main.dir/framepack.c.obj" \
 "CMakeFiles/__idf_main.dir/framepack_band.c.obj" \
 "CMakeFiles/__idf_main.dir/framepack_meta.c.obj" \
-"CMakeFiles/__idf_main.dir/memdiag.c.obj" \
 "CMakeFiles/__idf_main.dir/__/__/blank.jpg.S.obj"
 
 # External object files for target __idf_main
@@ -317,14 +347,16 @@ esp-idf/main/libmain.a: esp-idf/main/CMakeFiles/__idf_main.dir/dlna.c.obj
 esp-idf/main/libmain.a: esp-idf/main/CMakeFiles/__idf_main.dir/stream.c.obj
 esp-idf/main/libmain.a: esp-idf/main/CMakeFiles/__idf_main.dir/jband.c.obj
 esp-idf/main/libmain.a: esp-idf/main/CMakeFiles/__idf_main.dir/pairband.c.obj
+esp-idf/main/libmain.a: esp-idf/main/CMakeFiles/__idf_main.dir/ota.c.obj
+esp-idf/main/libmain.a: esp-idf/main/CMakeFiles/__idf_main.dir/coredump.c.obj
+esp-idf/main/libmain.a: esp-idf/main/CMakeFiles/__idf_main.dir/memdiag.c.obj
 esp-idf/main/libmain.a: esp-idf/main/CMakeFiles/__idf_main.dir/framepack.c.obj
 esp-idf/main/libmain.a: esp-idf/main/CMakeFiles/__idf_main.dir/framepack_band.c.obj
 esp-idf/main/libmain.a: esp-idf/main/CMakeFiles/__idf_main.dir/framepack_meta.c.obj
-esp-idf/main/libmain.a: esp-idf/main/CMakeFiles/__idf_main.dir/memdiag.c.obj
 esp-idf/main/libmain.a: esp-idf/main/CMakeFiles/__idf_main.dir/__/__/blank.jpg.S.obj
 esp-idf/main/libmain.a: esp-idf/main/CMakeFiles/__idf_main.dir/build.make
 esp-idf/main/libmain.a: esp-idf/main/CMakeFiles/__idf_main.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=$(CMAKE_PROGRESS_17) "Linking C static library libmain.a"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=$(CMAKE_PROGRESS_19) "Linking C static library libmain.a"
 	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && $(CMAKE_COMMAND) -P CMakeFiles/__idf_main.dir/cmake_clean_target.cmake
 	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main && $(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/__idf_main.dir/link.txt --verbose=$(VERBOSE)
 

@@ -68,6 +68,7 @@ static char s_topic_status[64], s_topic_usage[64], s_topic_pair[64];
 
 static bool     s_paired;
 static volatile bool s_connected;
+static volatile bool s_got_usage;   /* 收到过用量 = 密钥已转正 */
 static char     s_key_id[24];       /* 设备令牌里第一个 '.' 之前的部分 */
 static char     s_pair_code[8];
 static int64_t  s_pair_expire_us;   /* 本机 uptime 截止时间 */
@@ -264,6 +265,7 @@ static void handle_usage(const char *json, int len)
         ESP_LOGW(TAG, "用量 payload 缺 now，丢弃");
         return;
     }
+    s_got_usage = true;
     lcd_ui_usage(&u);
     ESP_LOGI(TAG, "收到用量：5h=%.1f%% 7d=%.1f%% ts=%lld 堆=%u",
              u.five_hour.used_pct, u.seven_day.used_pct,
@@ -354,8 +356,10 @@ static void pair_code_task(void *arg)
     (void)arg;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(5000));
-        if (s_paired) {
-            /* 配对完成后不再需要换码；8KB 栈不能在看板运行期常驻。 */
+        if (s_paired || s_got_usage) {
+            /* 配对完成后不再需要换码；8KB 栈不能在看板运行期常驻。
+             * s_got_usage 是第二道保险：能收到用量就说明密钥已经转正，
+             * 不必非等那条可能被 key_id 过滤掉的 paired=true。 */
             ESP_LOGI(TAG, "已配对，换码任务退出");
             vTaskDelete(NULL);
             return;
@@ -496,7 +500,12 @@ void cloud_client_start(const uint8_t mac[6])
              self_hosted ? "NVS 自托管" : "编译期默认", s_mqtt_uri, s_api_base);
 
     char keybuf[80];
+    /* 只有真的走了注册流程、手里有一个待配对的码时，才需要换码任务。
+     * 从 NVS 读出密钥的那条路**根本不创建它**——见下面的理由。 */
+    bool need_pair_code = false;
+
     if (!prov_load_devkey(keybuf, sizeof keybuf)) {
+        need_pair_code = true;
         lcd_ui_cloud("正在注册");
         while (!device_register()) {
             lcd_ui_cloud("注册失败，重试中");
@@ -508,9 +517,23 @@ void cloud_client_start(const uint8_t mac[6])
         lcd_ui_pair("", false);   /* 配对状态以服务端 retain 的 pair 消息为准 */
     }
 
-    xTaskCreate(heartbeat_task, "heartbeat", 3072, NULL, 3, NULL);
-    /* 换配对码要跑一次 TLS 握手，4096 太紧；和注册用同一个 8192。 */
-    xTaskCreate(pair_code_task, "pair_code", 8192, NULL, 3, NULL);
+    /* 4096：T8 实测余量 556 字节，偏紧，加 1KB。 */
+    xTaskCreate(heartbeat_task, "heartbeat", 4096, NULL, 3, NULL);
+
+    /* 换配对码任务只在「这次开机真的注册了、手里有码」时才创建。
+     *
+     * 原来是无条件创建、只在收到 paired=true 时退出。而已配对设备开机时
+     * 从 NVS 读出密钥、压根不会注册，也就没有码；服务端那条 retained 的
+     * pair 消息又是针对旧 key_id 的，会被 key_id 过滤掉——于是这个任务
+     * 永远等不到 paired=true，8KB 栈就这么一直占着，还会周期性开 TLS
+     * 去换一个根本不存在的码，每次约 40KB 峰值。
+     * 上板实测这是稳态少掉几十 KB 的大头。 */
+    if (need_pair_code) {
+        /* 换配对码要跑一次 TLS 握手，4096 太紧；和注册用同一个 8192。 */
+        xTaskCreate(pair_code_task, "pair_code", 8192, NULL, 3, NULL);
+    } else {
+        ESP_LOGI(TAG, "已有设备密钥，不创建换码任务");
+    }
 
     char lwt[96];
     int lwtn = snprintf(lwt, sizeof lwt,

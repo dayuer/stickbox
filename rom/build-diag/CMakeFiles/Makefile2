@@ -594,10 +594,12 @@ esp-idf/app_trace/clean: esp-idf/app_trace/CMakeFiles/__idf_app_trace.dir/clean
 
 # Recursive "all" directory target.
 esp-idf/app_update/all: esp-idf/app_update/CMakeFiles/__idf_app_update.dir/all
+esp-idf/app_update/all: esp-idf/app_update/CMakeFiles/blank_ota_data.dir/all
 .PHONY : esp-idf/app_update/all
 
 # Recursive "codegen" directory target.
 esp-idf/app_update/codegen: esp-idf/app_update/CMakeFiles/__idf_app_update.dir/codegen
+esp-idf/app_update/codegen: esp-idf/app_update/CMakeFiles/blank_ota_data.dir/codegen
 .PHONY : esp-idf/app_update/codegen
 
 # Recursive "preinstall" directory target.
@@ -606,6 +608,13 @@ esp-idf/app_update/preinstall:
 
 # Recursive "clean" directory target.
 esp-idf/app_update/clean: esp-idf/app_update/CMakeFiles/__idf_app_update.dir/clean
+esp-idf/app_update/clean: esp-idf/app_update/CMakeFiles/blank_ota_data.dir/clean
+esp-idf/app_update/clean: esp-idf/app_update/CMakeFiles/read-otadata.dir/clean
+esp-idf/app_update/clean: esp-idf/app_update/CMakeFiles/read_otadata.dir/clean
+esp-idf/app_update/clean: esp-idf/app_update/CMakeFiles/erase-otadata.dir/clean
+esp-idf/app_update/clean: esp-idf/app_update/CMakeFiles/erase_otadata.dir/clean
+esp-idf/app_update/clean: esp-idf/app_update/CMakeFiles/otadata-flash.dir/clean
+esp-idf/app_update/clean: esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/clean
 .PHONY : esp-idf/app_update/clean
 
 #=============================================================================
@@ -3114,12 +3123,12 @@ CMakeFiles/save-defconfig.dir/clean:
 CMakeFiles/bootloader.dir/all: esp-idf/partition_table/CMakeFiles/partition_table_bin.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/bootloader.dir/build.make CMakeFiles/bootloader.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/bootloader.dir/build.make CMakeFiles/bootloader.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target bootloader"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=91 "Built target bootloader"
 .PHONY : CMakeFiles/bootloader.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/bootloader.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 1
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/bootloader.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : CMakeFiles/bootloader.dir/rule
@@ -3131,7 +3140,7 @@ bootloader: CMakeFiles/bootloader.dir/rule
 # codegen rule for target.
 CMakeFiles/bootloader.dir/codegen: esp-idf/partition_table/CMakeFiles/partition_table_bin.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/bootloader.dir/build.make CMakeFiles/bootloader.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target bootloader"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=91 "Finished codegen for target bootloader"
 .PHONY : CMakeFiles/bootloader.dir/codegen
 
 # clean rule for target.
@@ -3151,7 +3160,7 @@ CMakeFiles/gen_project_binary.dir/all: CMakeFiles/stickbox.elf.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/gen_project_binary.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 100
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 99
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/gen_project_binary.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : CMakeFiles/gen_project_binary.dir/rule
@@ -3184,7 +3193,7 @@ CMakeFiles/app.dir/all: esp-idf/esptool_py/CMakeFiles/app_check_size.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/app.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 100
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 99
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/app.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : CMakeFiles/app.dir/rule
@@ -3283,7 +3292,7 @@ CMakeFiles/monitor.dir/all: CMakeFiles/stickbox.elf.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/monitor.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 100
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 99
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/monitor.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : CMakeFiles/monitor.dir/rule
@@ -3310,6 +3319,7 @@ CMakeFiles/monitor.dir/clean:
 CMakeFiles/flash.dir/all: CMakeFiles/bootloader.dir/all
 CMakeFiles/flash.dir/all: CMakeFiles/app.dir/all
 CMakeFiles/flash.dir/all: esp-idf/partition_table/CMakeFiles/partition_table_bin.dir/all
+CMakeFiles/flash.dir/all: esp-idf/app_update/CMakeFiles/blank_ota_data.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/flash.dir/build.make CMakeFiles/flash.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/flash.dir/build.make CMakeFiles/flash.dir/build
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target flash"
@@ -3330,6 +3340,7 @@ flash: CMakeFiles/flash.dir/rule
 CMakeFiles/flash.dir/codegen: CMakeFiles/bootloader.dir/all
 CMakeFiles/flash.dir/codegen: CMakeFiles/app.dir/all
 CMakeFiles/flash.dir/codegen: esp-idf/partition_table/CMakeFiles/partition_table_bin.dir/all
+CMakeFiles/flash.dir/codegen: esp-idf/app_update/CMakeFiles/blank_ota_data.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/flash.dir/build.make CMakeFiles/flash.dir/codegen
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target flash"
 .PHONY : CMakeFiles/flash.dir/codegen
@@ -3343,7 +3354,7 @@ CMakeFiles/flash.dir/clean:
 # Target rules for target CMakeFiles/encrypted-flash.dir
 
 # All Build rule for target.
-CMakeFiles/encrypted-flash.dir/all:
+CMakeFiles/encrypted-flash.dir/all: esp-idf/app_update/CMakeFiles/blank_ota_data.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/encrypted-flash.dir/build.make CMakeFiles/encrypted-flash.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/encrypted-flash.dir/build.make CMakeFiles/encrypted-flash.dir/build
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target encrypted-flash"
@@ -3361,7 +3372,7 @@ encrypted-flash: CMakeFiles/encrypted-flash.dir/rule
 .PHONY : encrypted-flash
 
 # codegen rule for target.
-CMakeFiles/encrypted-flash.dir/codegen:
+CMakeFiles/encrypted-flash.dir/codegen: esp-idf/app_update/CMakeFiles/blank_ota_data.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/encrypted-flash.dir/build.make CMakeFiles/encrypted-flash.dir/codegen
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target encrypted-flash"
 .PHONY : CMakeFiles/encrypted-flash.dir/codegen
@@ -3378,12 +3389,12 @@ CMakeFiles/encrypted-flash.dir/clean:
 CMakeFiles/_project_elf_src.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/_project_elf_src.dir/build.make CMakeFiles/_project_elf_src.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/_project_elf_src.dir/build.make CMakeFiles/_project_elf_src.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=91 "Built target _project_elf_src"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target _project_elf_src"
 .PHONY : CMakeFiles/_project_elf_src.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/_project_elf_src.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 1
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/_project_elf_src.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : CMakeFiles/_project_elf_src.dir/rule
@@ -3395,7 +3406,7 @@ _project_elf_src: CMakeFiles/_project_elf_src.dir/rule
 # codegen rule for target.
 CMakeFiles/_project_elf_src.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/_project_elf_src.dir/build.make CMakeFiles/_project_elf_src.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=91 "Finished codegen for target _project_elf_src"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target _project_elf_src"
 .PHONY : CMakeFiles/_project_elf_src.dir/codegen
 
 # clean rule for target.
@@ -3407,12 +3418,14 @@ CMakeFiles/_project_elf_src.dir/clean:
 # Target rules for target CMakeFiles/stickbox.elf.dir
 
 # All Build rule for target.
-CMakeFiles/stickbox.elf.dir/all: esp-idf/app_trace/CMakeFiles/__idf_app_trace.dir/all
-CMakeFiles/stickbox.elf.dir/all: esp-idf/unity/CMakeFiles/__idf_unity.dir/all
-CMakeFiles/stickbox.elf.dir/all: esp-idf/cmock/CMakeFiles/__idf_cmock.dir/all
-CMakeFiles/stickbox.elf.dir/all: esp-idf/console/CMakeFiles/__idf_console.dir/all
+CMakeFiles/stickbox.elf.dir/all: esp-idf/esp_driver_cam/CMakeFiles/__idf_esp_driver_cam.dir/all
 CMakeFiles/stickbox.elf.dir/all: esp-idf/esp_driver_touch_sens/CMakeFiles/__idf_esp_driver_touch_sens.dir/all
 CMakeFiles/stickbox.elf.dir/all: esp-idf/esp_eth/CMakeFiles/__idf_esp_eth.dir/all
+CMakeFiles/stickbox.elf.dir/all: esp-idf/esp_hid/CMakeFiles/__idf_esp_hid.dir/all
+CMakeFiles/stickbox.elf.dir/all: esp-idf/esp_https_server/CMakeFiles/__idf_esp_https_server.dir/all
+CMakeFiles/stickbox.elf.dir/all: esp-idf/esp_lcd/CMakeFiles/__idf_esp_lcd.dir/all
+CMakeFiles/stickbox.elf.dir/all: esp-idf/protobuf-c/CMakeFiles/__idf_protobuf-c.dir/all
+CMakeFiles/stickbox.elf.dir/all: esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/all
 CMakeFiles/stickbox.elf.dir/all: esp-idf/esp_local_ctrl/CMakeFiles/__idf_esp_local_ctrl.dir/all
 CMakeFiles/stickbox.elf.dir/all: esp-idf/wear_levelling/CMakeFiles/__idf_wear_levelling.dir/all
 CMakeFiles/stickbox.elf.dir/all: esp-idf/fatfs/CMakeFiles/__idf_fatfs.dir/all
@@ -3420,6 +3433,7 @@ CMakeFiles/stickbox.elf.dir/all: esp-idf/json/CMakeFiles/__idf_json.dir/all
 CMakeFiles/stickbox.elf.dir/all: esp-idf/mqtt/CMakeFiles/__idf_mqtt.dir/all
 CMakeFiles/stickbox.elf.dir/all: esp-idf/nvs_sec_provider/CMakeFiles/__idf_nvs_sec_provider.dir/all
 CMakeFiles/stickbox.elf.dir/all: esp-idf/perfmon/CMakeFiles/__idf_perfmon.dir/all
+CMakeFiles/stickbox.elf.dir/all: esp-idf/rt/CMakeFiles/__idf_rt.dir/all
 CMakeFiles/stickbox.elf.dir/all: esp-idf/spiffs/CMakeFiles/__idf_spiffs.dir/all
 CMakeFiles/stickbox.elf.dir/all: esp-idf/touch_element/CMakeFiles/__idf_touch_element.dir/all
 CMakeFiles/stickbox.elf.dir/all: esp-idf/usb/CMakeFiles/__idf_usb.dir/all
@@ -3432,13 +3446,10 @@ CMakeFiles/stickbox.elf.dir/all: esp-idf/main/CMakeFiles/__idf_main.dir/all
 CMakeFiles/stickbox.elf.dir/all: CMakeFiles/_project_elf_src.dir/all
 CMakeFiles/stickbox.elf.dir/all: CMakeFiles/__ldgen_output_sections.ld.dir/all
 CMakeFiles/stickbox.elf.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xtensa.dir/all
-CMakeFiles/stickbox.elf.dir/all: esp-idf/esp_driver_cam/CMakeFiles/__idf_esp_driver_cam.dir/all
-CMakeFiles/stickbox.elf.dir/all: esp-idf/esp_hid/CMakeFiles/__idf_esp_hid.dir/all
-CMakeFiles/stickbox.elf.dir/all: esp-idf/esp_https_server/CMakeFiles/__idf_esp_https_server.dir/all
-CMakeFiles/stickbox.elf.dir/all: esp-idf/esp_lcd/CMakeFiles/__idf_esp_lcd.dir/all
-CMakeFiles/stickbox.elf.dir/all: esp-idf/protobuf-c/CMakeFiles/__idf_protobuf-c.dir/all
-CMakeFiles/stickbox.elf.dir/all: esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/all
-CMakeFiles/stickbox.elf.dir/all: esp-idf/rt/CMakeFiles/__idf_rt.dir/all
+CMakeFiles/stickbox.elf.dir/all: esp-idf/app_trace/CMakeFiles/__idf_app_trace.dir/all
+CMakeFiles/stickbox.elf.dir/all: esp-idf/unity/CMakeFiles/__idf_unity.dir/all
+CMakeFiles/stickbox.elf.dir/all: esp-idf/cmock/CMakeFiles/__idf_cmock.dir/all
+CMakeFiles/stickbox.elf.dir/all: esp-idf/console/CMakeFiles/__idf_console.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/stickbox.elf.dir/build.make CMakeFiles/stickbox.elf.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/stickbox.elf.dir/build.make CMakeFiles/stickbox.elf.dir/build
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=100 "Built target stickbox.elf"
@@ -3446,7 +3457,7 @@ CMakeFiles/stickbox.elf.dir/all: esp-idf/rt/CMakeFiles/__idf_rt.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/stickbox.elf.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 100
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 99
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/stickbox.elf.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : CMakeFiles/stickbox.elf.dir/rule
@@ -3729,12 +3740,14 @@ CMakeFiles/uf2-app.dir/clean:
 # Target rules for target CMakeFiles/__ldgen_output_sections.ld.dir
 
 # All Build rule for target.
-CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/app_trace/CMakeFiles/__idf_app_trace.dir/all
-CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/unity/CMakeFiles/__idf_unity.dir/all
-CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/cmock/CMakeFiles/__idf_cmock.dir/all
-CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/console/CMakeFiles/__idf_console.dir/all
+CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/esp_driver_cam/CMakeFiles/__idf_esp_driver_cam.dir/all
 CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/esp_driver_touch_sens/CMakeFiles/__idf_esp_driver_touch_sens.dir/all
 CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/esp_eth/CMakeFiles/__idf_esp_eth.dir/all
+CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/esp_hid/CMakeFiles/__idf_esp_hid.dir/all
+CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/esp_https_server/CMakeFiles/__idf_esp_https_server.dir/all
+CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/esp_lcd/CMakeFiles/__idf_esp_lcd.dir/all
+CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/protobuf-c/CMakeFiles/__idf_protobuf-c.dir/all
+CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/all
 CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/esp_local_ctrl/CMakeFiles/__idf_esp_local_ctrl.dir/all
 CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/wear_levelling/CMakeFiles/__idf_wear_levelling.dir/all
 CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/fatfs/CMakeFiles/__idf_fatfs.dir/all
@@ -3742,6 +3755,7 @@ CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/json/CMakeFiles/__idf_jso
 CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/mqtt/CMakeFiles/__idf_mqtt.dir/all
 CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/nvs_sec_provider/CMakeFiles/__idf_nvs_sec_provider.dir/all
 CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/perfmon/CMakeFiles/__idf_perfmon.dir/all
+CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/rt/CMakeFiles/__idf_rt.dir/all
 CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/spiffs/CMakeFiles/__idf_spiffs.dir/all
 CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/touch_element/CMakeFiles/__idf_touch_element.dir/all
 CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/usb/CMakeFiles/__idf_usb.dir/all
@@ -3752,13 +3766,10 @@ CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/espressif__esp_lvgl_port/
 CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/all
 CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/main/CMakeFiles/__idf_main.dir/all
 CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xtensa.dir/all
-CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/esp_driver_cam/CMakeFiles/__idf_esp_driver_cam.dir/all
-CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/esp_hid/CMakeFiles/__idf_esp_hid.dir/all
-CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/esp_https_server/CMakeFiles/__idf_esp_https_server.dir/all
-CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/esp_lcd/CMakeFiles/__idf_esp_lcd.dir/all
-CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/protobuf-c/CMakeFiles/__idf_protobuf-c.dir/all
-CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/all
-CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/rt/CMakeFiles/__idf_rt.dir/all
+CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/app_trace/CMakeFiles/__idf_app_trace.dir/all
+CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/unity/CMakeFiles/__idf_unity.dir/all
+CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/cmock/CMakeFiles/__idf_cmock.dir/all
+CMakeFiles/__ldgen_output_sections.ld.dir/all: esp-idf/console/CMakeFiles/__idf_console.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/__ldgen_output_sections.ld.dir/build.make CMakeFiles/__ldgen_output_sections.ld.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/__ldgen_output_sections.ld.dir/build.make CMakeFiles/__ldgen_output_sections.ld.dir/build
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target __ldgen_output_sections.ld"
@@ -3776,8 +3787,10 @@ __ldgen_output_sections.ld: CMakeFiles/__ldgen_output_sections.ld.dir/rule
 .PHONY : __ldgen_output_sections.ld
 
 # codegen rule for target.
-CMakeFiles/__ldgen_output_sections.ld.dir/codegen: esp-idf/unity/CMakeFiles/__idf_unity.dir/all
-CMakeFiles/__ldgen_output_sections.ld.dir/codegen: esp-idf/console/CMakeFiles/__idf_console.dir/all
+CMakeFiles/__ldgen_output_sections.ld.dir/codegen: esp-idf/esp_https_server/CMakeFiles/__idf_esp_https_server.dir/all
+CMakeFiles/__ldgen_output_sections.ld.dir/codegen: esp-idf/esp_lcd/CMakeFiles/__idf_esp_lcd.dir/all
+CMakeFiles/__ldgen_output_sections.ld.dir/codegen: esp-idf/protobuf-c/CMakeFiles/__idf_protobuf-c.dir/all
+CMakeFiles/__ldgen_output_sections.ld.dir/codegen: esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/all
 CMakeFiles/__ldgen_output_sections.ld.dir/codegen: esp-idf/wear_levelling/CMakeFiles/__idf_wear_levelling.dir/all
 CMakeFiles/__ldgen_output_sections.ld.dir/codegen: esp-idf/fatfs/CMakeFiles/__idf_fatfs.dir/all
 CMakeFiles/__ldgen_output_sections.ld.dir/codegen: esp-idf/json/CMakeFiles/__idf_json.dir/all
@@ -3789,10 +3802,8 @@ CMakeFiles/__ldgen_output_sections.ld.dir/codegen: esp-idf/lvgl__lvgl/CMakeFiles
 CMakeFiles/__ldgen_output_sections.ld.dir/codegen: esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/all
 CMakeFiles/__ldgen_output_sections.ld.dir/codegen: esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/all
 CMakeFiles/__ldgen_output_sections.ld.dir/codegen: esp-idf/xtensa/CMakeFiles/__idf_xtensa.dir/all
-CMakeFiles/__ldgen_output_sections.ld.dir/codegen: esp-idf/esp_https_server/CMakeFiles/__idf_esp_https_server.dir/all
-CMakeFiles/__ldgen_output_sections.ld.dir/codegen: esp-idf/esp_lcd/CMakeFiles/__idf_esp_lcd.dir/all
-CMakeFiles/__ldgen_output_sections.ld.dir/codegen: esp-idf/protobuf-c/CMakeFiles/__idf_protobuf-c.dir/all
-CMakeFiles/__ldgen_output_sections.ld.dir/codegen: esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/all
+CMakeFiles/__ldgen_output_sections.ld.dir/codegen: esp-idf/unity/CMakeFiles/__idf_unity.dir/all
+CMakeFiles/__ldgen_output_sections.ld.dir/codegen: esp-idf/console/CMakeFiles/__idf_console.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/__ldgen_output_sections.ld.dir/build.make CMakeFiles/__ldgen_output_sections.ld.dir/codegen
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target __ldgen_output_sections.ld"
 .PHONY : CMakeFiles/__ldgen_output_sections.ld.dir/codegen
@@ -3814,7 +3825,7 @@ esp-idf/xtensa/CMakeFiles/__idf_xtensa.dir/all: esp-idf/esp_driver_gpio/CMakeFil
 
 # Build rule for subdir invocation for target.
 esp-idf/xtensa/CMakeFiles/__idf_xtensa.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/xtensa/CMakeFiles/__idf_xtensa.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/xtensa/CMakeFiles/__idf_xtensa.dir/rule
@@ -3846,7 +3857,7 @@ esp-idf/esp_driver_gpio/CMakeFiles/__idf_esp_driver_gpio.dir/all: esp-idf/esp_pm
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_driver_gpio/CMakeFiles/__idf_esp_driver_gpio.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_driver_gpio/CMakeFiles/__idf_esp_driver_gpio.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_driver_gpio/CMakeFiles/__idf_esp_driver_gpio.dir/rule
@@ -3878,7 +3889,7 @@ esp-idf/esp_pm/CMakeFiles/__idf_esp_pm.dir/all: esp-idf/mbedtls/CMakeFiles/__idf
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_pm/CMakeFiles/__idf_esp_pm.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 46
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 48
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_pm/CMakeFiles/__idf_esp_pm.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_pm/CMakeFiles/__idf_esp_pm.dir/rule
@@ -3910,7 +3921,7 @@ esp-idf/mbedtls/CMakeFiles/__idf_mbedtls.dir/all: esp-idf/mbedtls/mbedtls/3rdpar
 
 # Build rule for subdir invocation for target.
 esp-idf/mbedtls/CMakeFiles/__idf_mbedtls.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 46
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 48
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/mbedtls/CMakeFiles/__idf_mbedtls.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/mbedtls/CMakeFiles/__idf_mbedtls.dir/rule
@@ -4006,7 +4017,7 @@ esp-idf/mbedtls/mbedtls/3rdparty/everest/CMakeFiles/everest.dir/all: esp-idf/mbe
 
 # Build rule for subdir invocation for target.
 esp-idf/mbedtls/mbedtls/3rdparty/everest/CMakeFiles/everest.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 46
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 48
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/mbedtls/mbedtls/3rdparty/everest/CMakeFiles/everest.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/mbedtls/mbedtls/3rdparty/everest/CMakeFiles/everest.dir/rule
@@ -4038,7 +4049,7 @@ esp-idf/mbedtls/mbedtls/3rdparty/p256-m/CMakeFiles/p256m.dir/all: esp-idf/mbedtl
 
 # Build rule for subdir invocation for target.
 esp-idf/mbedtls/mbedtls/3rdparty/p256-m/CMakeFiles/p256m.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 46
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 48
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/mbedtls/mbedtls/3rdparty/p256-m/CMakeFiles/p256m.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/mbedtls/mbedtls/3rdparty/p256-m/CMakeFiles/p256m.dir/rule
@@ -4065,12 +4076,12 @@ esp-idf/mbedtls/mbedtls/3rdparty/p256-m/CMakeFiles/p256m.dir/clean:
 esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedcrypto.dir/all: esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedx509.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedcrypto.dir/build.make esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedcrypto.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedcrypto.dir/build.make esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedcrypto.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=93,94,95,96,97 "Built target mbedcrypto"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=92,93,94,95,96,97 "Built target mbedcrypto"
 .PHONY : esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedcrypto.dir/all
 
 # Build rule for subdir invocation for target.
 esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedcrypto.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 46
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 48
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedcrypto.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedcrypto.dir/rule
@@ -4082,7 +4093,7 @@ mbedcrypto: esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedcrypto.dir/rule
 # codegen rule for target.
 esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedcrypto.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedcrypto.dir/build.make esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedcrypto.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=93,94,95,96,97 "Finished codegen for target mbedcrypto"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=92,93,94,95,96,97 "Finished codegen for target mbedcrypto"
 .PHONY : esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedcrypto.dir/codegen
 
 # clean rule for target.
@@ -4102,7 +4113,7 @@ esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedx509.dir/all: esp-idf/mbedtls/mbe
 
 # Build rule for subdir invocation for target.
 esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedx509.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 41
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 42
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedx509.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedx509.dir/rule
@@ -4134,7 +4145,7 @@ esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedtls.dir/all: esp-idf/esp_app_form
 
 # Build rule for subdir invocation for target.
 esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedtls.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 40
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 41
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedtls.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedtls.dir/rule
@@ -4166,7 +4177,7 @@ esp-idf/mbedtls/mbedtls/library/CMakeFiles/lib.dir/all: esp-idf/xtensa/CMakeFile
 
 # Build rule for subdir invocation for target.
 esp-idf/mbedtls/mbedtls/library/CMakeFiles/lib.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/mbedtls/mbedtls/library/CMakeFiles/lib.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/mbedtls/mbedtls/library/CMakeFiles/lib.dir/rule
@@ -4198,7 +4209,7 @@ esp-idf/bootloader/CMakeFiles/bootloader-flash.dir/all: CMakeFiles/bootloader.di
 
 # Build rule for subdir invocation for target.
 esp-idf/bootloader/CMakeFiles/bootloader-flash.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 1
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/bootloader/CMakeFiles/bootloader-flash.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/bootloader/CMakeFiles/bootloader-flash.dir/rule
@@ -4262,7 +4273,7 @@ esp-idf/esptool_py/CMakeFiles/app-flash.dir/all: CMakeFiles/app.dir/all
 
 # Build rule for subdir invocation for target.
 esp-idf/esptool_py/CMakeFiles/app-flash.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 100
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 99
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esptool_py/CMakeFiles/app-flash.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esptool_py/CMakeFiles/app-flash.dir/rule
@@ -4327,7 +4338,7 @@ esp-idf/esptool_py/CMakeFiles/app_check_size.dir/all: esp-idf/partition_table/CM
 
 # Build rule for subdir invocation for target.
 esp-idf/esptool_py/CMakeFiles/app_check_size.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 100
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 99
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esptool_py/CMakeFiles/app_check_size.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esptool_py/CMakeFiles/app_check_size.dir/rule
@@ -4547,12 +4558,12 @@ esp-idf/partition_table/CMakeFiles/partition_table-flash.dir/clean:
 esp-idf/esp_app_format/CMakeFiles/__idf_esp_app_format.dir/all: esp-idf/esp_bootloader_format/CMakeFiles/__idf_esp_bootloader_format.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_app_format/CMakeFiles/__idf_esp_app_format.dir/build.make esp-idf/esp_app_format/CMakeFiles/__idf_esp_app_format.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_app_format/CMakeFiles/__idf_esp_app_format.dir/build.make esp-idf/esp_app_format/CMakeFiles/__idf_esp_app_format.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target __idf_esp_app_format"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=5 "Built target __idf_esp_app_format"
 .PHONY : esp-idf/esp_app_format/CMakeFiles/__idf_esp_app_format.dir/all
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_app_format/CMakeFiles/__idf_esp_app_format.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 39
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 40
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_app_format/CMakeFiles/__idf_esp_app_format.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_app_format/CMakeFiles/__idf_esp_app_format.dir/rule
@@ -4564,7 +4575,7 @@ __idf_esp_app_format: esp-idf/esp_app_format/CMakeFiles/__idf_esp_app_format.dir
 # codegen rule for target.
 esp-idf/esp_app_format/CMakeFiles/__idf_esp_app_format.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_app_format/CMakeFiles/__idf_esp_app_format.dir/build.make esp-idf/esp_app_format/CMakeFiles/__idf_esp_app_format.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target __idf_esp_app_format"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=5 "Finished codegen for target __idf_esp_app_format"
 .PHONY : esp-idf/esp_app_format/CMakeFiles/__idf_esp_app_format.dir/codegen
 
 # clean rule for target.
@@ -4637,13 +4648,237 @@ esp-idf/app_update/CMakeFiles/__idf_app_update.dir/clean:
 .PHONY : esp-idf/app_update/CMakeFiles/__idf_app_update.dir/clean
 
 #=============================================================================
+# Target rules for target esp-idf/app_update/CMakeFiles/blank_ota_data.dir
+
+# All Build rule for target.
+esp-idf/app_update/CMakeFiles/blank_ota_data.dir/all:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/blank_ota_data.dir/build.make esp-idf/app_update/CMakeFiles/blank_ota_data.dir/depend
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/blank_ota_data.dir/build.make esp-idf/app_update/CMakeFiles/blank_ota_data.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target blank_ota_data"
+.PHONY : esp-idf/app_update/CMakeFiles/blank_ota_data.dir/all
+
+# Build rule for subdir invocation for target.
+esp-idf/app_update/CMakeFiles/blank_ota_data.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/app_update/CMakeFiles/blank_ota_data.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
+.PHONY : esp-idf/app_update/CMakeFiles/blank_ota_data.dir/rule
+
+# Convenience name for target.
+blank_ota_data: esp-idf/app_update/CMakeFiles/blank_ota_data.dir/rule
+.PHONY : blank_ota_data
+
+# codegen rule for target.
+esp-idf/app_update/CMakeFiles/blank_ota_data.dir/codegen:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/blank_ota_data.dir/build.make esp-idf/app_update/CMakeFiles/blank_ota_data.dir/codegen
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target blank_ota_data"
+.PHONY : esp-idf/app_update/CMakeFiles/blank_ota_data.dir/codegen
+
+# clean rule for target.
+esp-idf/app_update/CMakeFiles/blank_ota_data.dir/clean:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/blank_ota_data.dir/build.make esp-idf/app_update/CMakeFiles/blank_ota_data.dir/clean
+.PHONY : esp-idf/app_update/CMakeFiles/blank_ota_data.dir/clean
+
+#=============================================================================
+# Target rules for target esp-idf/app_update/CMakeFiles/read-otadata.dir
+
+# All Build rule for target.
+esp-idf/app_update/CMakeFiles/read-otadata.dir/all:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/read-otadata.dir/build.make esp-idf/app_update/CMakeFiles/read-otadata.dir/depend
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/read-otadata.dir/build.make esp-idf/app_update/CMakeFiles/read-otadata.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target read-otadata"
+.PHONY : esp-idf/app_update/CMakeFiles/read-otadata.dir/all
+
+# Build rule for subdir invocation for target.
+esp-idf/app_update/CMakeFiles/read-otadata.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/app_update/CMakeFiles/read-otadata.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
+.PHONY : esp-idf/app_update/CMakeFiles/read-otadata.dir/rule
+
+# Convenience name for target.
+read-otadata: esp-idf/app_update/CMakeFiles/read-otadata.dir/rule
+.PHONY : read-otadata
+
+# codegen rule for target.
+esp-idf/app_update/CMakeFiles/read-otadata.dir/codegen:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/read-otadata.dir/build.make esp-idf/app_update/CMakeFiles/read-otadata.dir/codegen
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target read-otadata"
+.PHONY : esp-idf/app_update/CMakeFiles/read-otadata.dir/codegen
+
+# clean rule for target.
+esp-idf/app_update/CMakeFiles/read-otadata.dir/clean:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/read-otadata.dir/build.make esp-idf/app_update/CMakeFiles/read-otadata.dir/clean
+.PHONY : esp-idf/app_update/CMakeFiles/read-otadata.dir/clean
+
+#=============================================================================
+# Target rules for target esp-idf/app_update/CMakeFiles/read_otadata.dir
+
+# All Build rule for target.
+esp-idf/app_update/CMakeFiles/read_otadata.dir/all: esp-idf/app_update/CMakeFiles/read-otadata.dir/all
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/read_otadata.dir/build.make esp-idf/app_update/CMakeFiles/read_otadata.dir/depend
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/read_otadata.dir/build.make esp-idf/app_update/CMakeFiles/read_otadata.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target read_otadata"
+.PHONY : esp-idf/app_update/CMakeFiles/read_otadata.dir/all
+
+# Build rule for subdir invocation for target.
+esp-idf/app_update/CMakeFiles/read_otadata.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/app_update/CMakeFiles/read_otadata.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
+.PHONY : esp-idf/app_update/CMakeFiles/read_otadata.dir/rule
+
+# Convenience name for target.
+read_otadata: esp-idf/app_update/CMakeFiles/read_otadata.dir/rule
+.PHONY : read_otadata
+
+# codegen rule for target.
+esp-idf/app_update/CMakeFiles/read_otadata.dir/codegen: esp-idf/app_update/CMakeFiles/read-otadata.dir/all
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/read_otadata.dir/build.make esp-idf/app_update/CMakeFiles/read_otadata.dir/codegen
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target read_otadata"
+.PHONY : esp-idf/app_update/CMakeFiles/read_otadata.dir/codegen
+
+# clean rule for target.
+esp-idf/app_update/CMakeFiles/read_otadata.dir/clean:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/read_otadata.dir/build.make esp-idf/app_update/CMakeFiles/read_otadata.dir/clean
+.PHONY : esp-idf/app_update/CMakeFiles/read_otadata.dir/clean
+
+#=============================================================================
+# Target rules for target esp-idf/app_update/CMakeFiles/erase-otadata.dir
+
+# All Build rule for target.
+esp-idf/app_update/CMakeFiles/erase-otadata.dir/all:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/erase-otadata.dir/build.make esp-idf/app_update/CMakeFiles/erase-otadata.dir/depend
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/erase-otadata.dir/build.make esp-idf/app_update/CMakeFiles/erase-otadata.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target erase-otadata"
+.PHONY : esp-idf/app_update/CMakeFiles/erase-otadata.dir/all
+
+# Build rule for subdir invocation for target.
+esp-idf/app_update/CMakeFiles/erase-otadata.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/app_update/CMakeFiles/erase-otadata.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
+.PHONY : esp-idf/app_update/CMakeFiles/erase-otadata.dir/rule
+
+# Convenience name for target.
+erase-otadata: esp-idf/app_update/CMakeFiles/erase-otadata.dir/rule
+.PHONY : erase-otadata
+
+# codegen rule for target.
+esp-idf/app_update/CMakeFiles/erase-otadata.dir/codegen:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/erase-otadata.dir/build.make esp-idf/app_update/CMakeFiles/erase-otadata.dir/codegen
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target erase-otadata"
+.PHONY : esp-idf/app_update/CMakeFiles/erase-otadata.dir/codegen
+
+# clean rule for target.
+esp-idf/app_update/CMakeFiles/erase-otadata.dir/clean:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/erase-otadata.dir/build.make esp-idf/app_update/CMakeFiles/erase-otadata.dir/clean
+.PHONY : esp-idf/app_update/CMakeFiles/erase-otadata.dir/clean
+
+#=============================================================================
+# Target rules for target esp-idf/app_update/CMakeFiles/erase_otadata.dir
+
+# All Build rule for target.
+esp-idf/app_update/CMakeFiles/erase_otadata.dir/all: esp-idf/app_update/CMakeFiles/erase-otadata.dir/all
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/erase_otadata.dir/build.make esp-idf/app_update/CMakeFiles/erase_otadata.dir/depend
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/erase_otadata.dir/build.make esp-idf/app_update/CMakeFiles/erase_otadata.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target erase_otadata"
+.PHONY : esp-idf/app_update/CMakeFiles/erase_otadata.dir/all
+
+# Build rule for subdir invocation for target.
+esp-idf/app_update/CMakeFiles/erase_otadata.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/app_update/CMakeFiles/erase_otadata.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
+.PHONY : esp-idf/app_update/CMakeFiles/erase_otadata.dir/rule
+
+# Convenience name for target.
+erase_otadata: esp-idf/app_update/CMakeFiles/erase_otadata.dir/rule
+.PHONY : erase_otadata
+
+# codegen rule for target.
+esp-idf/app_update/CMakeFiles/erase_otadata.dir/codegen: esp-idf/app_update/CMakeFiles/erase-otadata.dir/all
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/erase_otadata.dir/build.make esp-idf/app_update/CMakeFiles/erase_otadata.dir/codegen
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target erase_otadata"
+.PHONY : esp-idf/app_update/CMakeFiles/erase_otadata.dir/codegen
+
+# clean rule for target.
+esp-idf/app_update/CMakeFiles/erase_otadata.dir/clean:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/erase_otadata.dir/build.make esp-idf/app_update/CMakeFiles/erase_otadata.dir/clean
+.PHONY : esp-idf/app_update/CMakeFiles/erase_otadata.dir/clean
+
+#=============================================================================
+# Target rules for target esp-idf/app_update/CMakeFiles/otadata-flash.dir
+
+# All Build rule for target.
+esp-idf/app_update/CMakeFiles/otadata-flash.dir/all:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/otadata-flash.dir/build.make esp-idf/app_update/CMakeFiles/otadata-flash.dir/depend
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/otadata-flash.dir/build.make esp-idf/app_update/CMakeFiles/otadata-flash.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target otadata-flash"
+.PHONY : esp-idf/app_update/CMakeFiles/otadata-flash.dir/all
+
+# Build rule for subdir invocation for target.
+esp-idf/app_update/CMakeFiles/otadata-flash.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/app_update/CMakeFiles/otadata-flash.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
+.PHONY : esp-idf/app_update/CMakeFiles/otadata-flash.dir/rule
+
+# Convenience name for target.
+otadata-flash: esp-idf/app_update/CMakeFiles/otadata-flash.dir/rule
+.PHONY : otadata-flash
+
+# codegen rule for target.
+esp-idf/app_update/CMakeFiles/otadata-flash.dir/codegen:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/otadata-flash.dir/build.make esp-idf/app_update/CMakeFiles/otadata-flash.dir/codegen
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target otadata-flash"
+.PHONY : esp-idf/app_update/CMakeFiles/otadata-flash.dir/codegen
+
+# clean rule for target.
+esp-idf/app_update/CMakeFiles/otadata-flash.dir/clean:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/otadata-flash.dir/build.make esp-idf/app_update/CMakeFiles/otadata-flash.dir/clean
+.PHONY : esp-idf/app_update/CMakeFiles/otadata-flash.dir/clean
+
+#=============================================================================
+# Target rules for target esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir
+
+# All Build rule for target.
+esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/all:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/build.make esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/depend
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/build.make esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target encrypted-otadata-flash"
+.PHONY : esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/all
+
+# Build rule for subdir invocation for target.
+esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
+.PHONY : esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/rule
+
+# Convenience name for target.
+encrypted-otadata-flash: esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/rule
+.PHONY : encrypted-otadata-flash
+
+# codegen rule for target.
+esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/codegen:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/build.make esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/codegen
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target encrypted-otadata-flash"
+.PHONY : esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/codegen
+
+# clean rule for target.
+esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/clean:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/build.make esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/clean
+.PHONY : esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/clean
+
+#=============================================================================
 # Target rules for target esp-idf/esp_partition/CMakeFiles/__idf_esp_partition.dir
 
 # All Build rule for target.
 esp-idf/esp_partition/CMakeFiles/__idf_esp_partition.dir/all: esp-idf/efuse/CMakeFiles/__idf_efuse.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_partition/CMakeFiles/__idf_esp_partition.dir/build.make esp-idf/esp_partition/CMakeFiles/__idf_esp_partition.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_partition/CMakeFiles/__idf_esp_partition.dir/build.make esp-idf/esp_partition/CMakeFiles/__idf_esp_partition.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target __idf_esp_partition"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=16 "Built target __idf_esp_partition"
 .PHONY : esp-idf/esp_partition/CMakeFiles/__idf_esp_partition.dir/all
 
 # Build rule for subdir invocation for target.
@@ -4660,7 +4895,7 @@ __idf_esp_partition: esp-idf/esp_partition/CMakeFiles/__idf_esp_partition.dir/ru
 # codegen rule for target.
 esp-idf/esp_partition/CMakeFiles/__idf_esp_partition.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_partition/CMakeFiles/__idf_esp_partition.dir/build.make esp-idf/esp_partition/CMakeFiles/__idf_esp_partition.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target __idf_esp_partition"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=16 "Finished codegen for target __idf_esp_partition"
 .PHONY : esp-idf/esp_partition/CMakeFiles/__idf_esp_partition.dir/codegen
 
 # clean rule for target.
@@ -4680,7 +4915,7 @@ esp-idf/efuse/CMakeFiles/__idf_efuse.dir/all: esp-idf/bootloader_support/CMakeFi
 
 # Build rule for subdir invocation for target.
 esp-idf/efuse/CMakeFiles/__idf_efuse.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 39
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 38
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/efuse/CMakeFiles/__idf_efuse.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/efuse/CMakeFiles/__idf_efuse.dir/rule
@@ -4936,7 +5171,7 @@ esp-idf/bootloader_support/CMakeFiles/__idf_bootloader_support.dir/all: esp-idf/
 
 # Build rule for subdir invocation for target.
 esp-idf/bootloader_support/CMakeFiles/__idf_bootloader_support.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 38
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 37
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/bootloader_support/CMakeFiles/__idf_bootloader_support.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/bootloader_support/CMakeFiles/__idf_bootloader_support.dir/rule
@@ -4968,7 +5203,7 @@ esp-idf/esp_mm/CMakeFiles/__idf_esp_mm.dir/all: esp-idf/spi_flash/CMakeFiles/__i
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_mm/CMakeFiles/__idf_esp_mm.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 37
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 36
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_mm/CMakeFiles/__idf_esp_mm.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_mm/CMakeFiles/__idf_esp_mm.dir/rule
@@ -5000,7 +5235,7 @@ esp-idf/spi_flash/CMakeFiles/__idf_spi_flash.dir/all: esp-idf/esp_system/CMakeFi
 
 # Build rule for subdir invocation for target.
 esp-idf/spi_flash/CMakeFiles/__idf_spi_flash.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 37
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 36
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/spi_flash/CMakeFiles/__idf_spi_flash.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/spi_flash/CMakeFiles/__idf_spi_flash.dir/rule
@@ -5027,12 +5262,12 @@ esp-idf/spi_flash/CMakeFiles/__idf_spi_flash.dir/clean:
 esp-idf/esp_system/CMakeFiles/__idf_esp_system.dir/all: esp-idf/esp_common/CMakeFiles/__idf_esp_common.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_system/CMakeFiles/__idf_esp_system.dir/build.make esp-idf/esp_system/CMakeFiles/__idf_esp_system.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_system/CMakeFiles/__idf_esp_system.dir/build.make esp-idf/esp_system/CMakeFiles/__idf_esp_system.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=18,19,20 "Built target __idf_esp_system"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=18,19 "Built target __idf_esp_system"
 .PHONY : esp-idf/esp_system/CMakeFiles/__idf_esp_system.dir/all
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_system/CMakeFiles/__idf_esp_system.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 36
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 35
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_system/CMakeFiles/__idf_esp_system.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_system/CMakeFiles/__idf_esp_system.dir/rule
@@ -5044,7 +5279,7 @@ __idf_esp_system: esp-idf/esp_system/CMakeFiles/__idf_esp_system.dir/rule
 # codegen rule for target.
 esp-idf/esp_system/CMakeFiles/__idf_esp_system.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_system/CMakeFiles/__idf_esp_system.dir/build.make esp-idf/esp_system/CMakeFiles/__idf_esp_system.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=18,19,20 "Finished codegen for target __idf_esp_system"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=18,19 "Finished codegen for target __idf_esp_system"
 .PHONY : esp-idf/esp_system/CMakeFiles/__idf_esp_system.dir/codegen
 
 # clean rule for target.
@@ -5251,7 +5486,7 @@ esp-idf/log/CMakeFiles/__idf_log.dir/clean:
 esp-idf/heap/CMakeFiles/__idf_heap.dir/all: esp-idf/soc/CMakeFiles/__idf_soc.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/heap/CMakeFiles/__idf_heap.dir/build.make esp-idf/heap/CMakeFiles/__idf_heap.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/heap/CMakeFiles/__idf_heap.dir/build.make esp-idf/heap/CMakeFiles/__idf_heap.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=27 "Built target __idf_heap"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target __idf_heap"
 .PHONY : esp-idf/heap/CMakeFiles/__idf_heap.dir/all
 
 # Build rule for subdir invocation for target.
@@ -5268,7 +5503,7 @@ __idf_heap: esp-idf/heap/CMakeFiles/__idf_heap.dir/rule
 # codegen rule for target.
 esp-idf/heap/CMakeFiles/__idf_heap.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/heap/CMakeFiles/__idf_heap.dir/build.make esp-idf/heap/CMakeFiles/__idf_heap.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=27 "Finished codegen for target __idf_heap"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target __idf_heap"
 .PHONY : esp-idf/heap/CMakeFiles/__idf_heap.dir/codegen
 
 # clean rule for target.
@@ -5288,7 +5523,7 @@ esp-idf/soc/CMakeFiles/__idf_soc.dir/all: esp-idf/esp_security/CMakeFiles/__idf_
 
 # Build rule for subdir invocation for target.
 esp-idf/soc/CMakeFiles/__idf_soc.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 27
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 28
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/soc/CMakeFiles/__idf_soc.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/soc/CMakeFiles/__idf_soc.dir/rule
@@ -5320,7 +5555,7 @@ esp-idf/esp_security/CMakeFiles/__idf_esp_security.dir/all: esp-idf/esp_hw_suppo
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_security/CMakeFiles/__idf_esp_security.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 26
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 27
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_security/CMakeFiles/__idf_esp_security.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_security/CMakeFiles/__idf_esp_security.dir/rule
@@ -5352,7 +5587,7 @@ esp-idf/esp_hw_support/CMakeFiles/__idf_esp_hw_support.dir/all: esp-idf/freertos
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_hw_support/CMakeFiles/__idf_esp_hw_support.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 26
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 27
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_hw_support/CMakeFiles/__idf_esp_hw_support.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_hw_support/CMakeFiles/__idf_esp_hw_support.dir/rule
@@ -5384,7 +5619,7 @@ esp-idf/freertos/CMakeFiles/__idf_freertos.dir/all: esp-idf/newlib/CMakeFiles/__
 
 # Build rule for subdir invocation for target.
 esp-idf/freertos/CMakeFiles/__idf_freertos.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 23
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 24
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/freertos/CMakeFiles/__idf_freertos.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/freertos/CMakeFiles/__idf_freertos.dir/rule
@@ -5411,12 +5646,12 @@ esp-idf/freertos/CMakeFiles/__idf_freertos.dir/clean:
 esp-idf/newlib/CMakeFiles/__idf_newlib.dir/all: esp-idf/pthread/CMakeFiles/__idf_pthread.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/newlib/CMakeFiles/__idf_newlib.dir/build.make esp-idf/newlib/CMakeFiles/__idf_newlib.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/newlib/CMakeFiles/__idf_newlib.dir/build.make esp-idf/newlib/CMakeFiles/__idf_newlib.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=77 "Built target __idf_newlib"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=76,77 "Built target __idf_newlib"
 .PHONY : esp-idf/newlib/CMakeFiles/__idf_newlib.dir/all
 
 # Build rule for subdir invocation for target.
 esp-idf/newlib/CMakeFiles/__idf_newlib.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 22
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 23
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/newlib/CMakeFiles/__idf_newlib.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/newlib/CMakeFiles/__idf_newlib.dir/rule
@@ -5428,7 +5663,7 @@ __idf_newlib: esp-idf/newlib/CMakeFiles/__idf_newlib.dir/rule
 # codegen rule for target.
 esp-idf/newlib/CMakeFiles/__idf_newlib.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/newlib/CMakeFiles/__idf_newlib.dir/build.make esp-idf/newlib/CMakeFiles/__idf_newlib.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=77 "Finished codegen for target __idf_newlib"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=76,77 "Finished codegen for target __idf_newlib"
 .PHONY : esp-idf/newlib/CMakeFiles/__idf_newlib.dir/codegen
 
 # clean rule for target.
@@ -5507,7 +5742,7 @@ esp-idf/cxx/CMakeFiles/__idf_cxx.dir/clean:
 esp-idf/esp_timer/CMakeFiles/__idf_esp_timer.dir/all: esp-idf/esp_driver_gptimer/CMakeFiles/__idf_esp_driver_gptimer.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_timer/CMakeFiles/__idf_esp_timer.dir/build.make esp-idf/esp_timer/CMakeFiles/__idf_esp_timer.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_timer/CMakeFiles/__idf_esp_timer.dir/build.make esp-idf/esp_timer/CMakeFiles/__idf_esp_timer.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target __idf_esp_timer"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=20 "Built target __idf_esp_timer"
 .PHONY : esp-idf/esp_timer/CMakeFiles/__idf_esp_timer.dir/all
 
 # Build rule for subdir invocation for target.
@@ -5524,7 +5759,7 @@ __idf_esp_timer: esp-idf/esp_timer/CMakeFiles/__idf_esp_timer.dir/rule
 # codegen rule for target.
 esp-idf/esp_timer/CMakeFiles/__idf_esp_timer.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_timer/CMakeFiles/__idf_esp_timer.dir/build.make esp-idf/esp_timer/CMakeFiles/__idf_esp_timer.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target __idf_esp_timer"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=20 "Finished codegen for target __idf_esp_timer"
 .PHONY : esp-idf/esp_timer/CMakeFiles/__idf_esp_timer.dir/codegen
 
 # clean rule for target.
@@ -5544,7 +5779,7 @@ esp-idf/esp_driver_gptimer/CMakeFiles/__idf_esp_driver_gptimer.dir/all: esp-idf/
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_driver_gptimer/CMakeFiles/__idf_esp_driver_gptimer.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 21
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 20
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_driver_gptimer/CMakeFiles/__idf_esp_driver_gptimer.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_driver_gptimer/CMakeFiles/__idf_esp_driver_gptimer.dir/rule
@@ -5576,7 +5811,7 @@ esp-idf/esp_ringbuf/CMakeFiles/__idf_esp_ringbuf.dir/all: esp-idf/esp_psram/CMak
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_ringbuf/CMakeFiles/__idf_esp_ringbuf.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 21
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 20
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_ringbuf/CMakeFiles/__idf_esp_ringbuf.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_ringbuf/CMakeFiles/__idf_esp_ringbuf.dir/rule
@@ -5608,7 +5843,7 @@ esp-idf/esp_psram/CMakeFiles/__idf_esp_psram.dir/all: esp-idf/esp_driver_uart/CM
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_psram/CMakeFiles/__idf_esp_psram.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 21
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 20
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_psram/CMakeFiles/__idf_esp_psram.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_psram/CMakeFiles/__idf_esp_psram.dir/rule
@@ -5640,7 +5875,7 @@ esp-idf/esp_driver_uart/CMakeFiles/__idf_esp_driver_uart.dir/all: esp-idf/esp_ev
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_driver_uart/CMakeFiles/__idf_esp_driver_uart.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 21
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 20
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_driver_uart/CMakeFiles/__idf_esp_driver_uart.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_driver_uart/CMakeFiles/__idf_esp_driver_uart.dir/rule
@@ -5672,7 +5907,7 @@ esp-idf/app_trace/CMakeFiles/__idf_app_trace.dir/all: esp-idf/xtensa/CMakeFiles/
 
 # Build rule for subdir invocation for target.
 esp-idf/app_trace/CMakeFiles/__idf_app_trace.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/app_trace/CMakeFiles/__idf_app_trace.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/app_trace/CMakeFiles/__idf_app_trace.dir/rule
@@ -5699,12 +5934,12 @@ esp-idf/app_trace/CMakeFiles/__idf_app_trace.dir/clean:
 esp-idf/esp_event/CMakeFiles/__idf_esp_event.dir/all: esp-idf/nvs_flash/CMakeFiles/__idf_nvs_flash.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_event/CMakeFiles/__idf_esp_event.dir/build.make esp-idf/esp_event/CMakeFiles/__idf_esp_event.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_event/CMakeFiles/__idf_esp_event.dir/build.make esp-idf/esp_event/CMakeFiles/__idf_esp_event.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=10 "Built target __idf_esp_event"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target __idf_esp_event"
 .PHONY : esp-idf/esp_event/CMakeFiles/__idf_esp_event.dir/all
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_event/CMakeFiles/__idf_esp_event.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 21
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 20
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_event/CMakeFiles/__idf_esp_event.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_event/CMakeFiles/__idf_esp_event.dir/rule
@@ -5716,7 +5951,7 @@ __idf_esp_event: esp-idf/esp_event/CMakeFiles/__idf_esp_event.dir/rule
 # codegen rule for target.
 esp-idf/esp_event/CMakeFiles/__idf_esp_event.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_event/CMakeFiles/__idf_esp_event.dir/build.make esp-idf/esp_event/CMakeFiles/__idf_esp_event.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=10 "Finished codegen for target __idf_esp_event"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target __idf_esp_event"
 .PHONY : esp-idf/esp_event/CMakeFiles/__idf_esp_event.dir/codegen
 
 # clean rule for target.
@@ -5859,7 +6094,7 @@ esp-idf/esp_vfs_console/CMakeFiles/__idf_esp_vfs_console.dir/clean:
 esp-idf/vfs/CMakeFiles/__idf_vfs.dir/all: esp-idf/lwip/CMakeFiles/__idf_lwip.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/vfs/CMakeFiles/__idf_vfs.dir/build.make esp-idf/vfs/CMakeFiles/__idf_vfs.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/vfs/CMakeFiles/__idf_vfs.dir/build.make esp-idf/vfs/CMakeFiles/__idf_vfs.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=85 "Built target __idf_vfs"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target __idf_vfs"
 .PHONY : esp-idf/vfs/CMakeFiles/__idf_vfs.dir/all
 
 # Build rule for subdir invocation for target.
@@ -5876,7 +6111,7 @@ __idf_vfs: esp-idf/vfs/CMakeFiles/__idf_vfs.dir/rule
 # codegen rule for target.
 esp-idf/vfs/CMakeFiles/__idf_vfs.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/vfs/CMakeFiles/__idf_vfs.dir/build.make esp-idf/vfs/CMakeFiles/__idf_vfs.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=85 "Finished codegen for target __idf_vfs"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target __idf_vfs"
 .PHONY : esp-idf/vfs/CMakeFiles/__idf_vfs.dir/codegen
 
 # clean rule for target.
@@ -5896,7 +6131,7 @@ esp-idf/lwip/CMakeFiles/__idf_lwip.dir/all: esp-idf/esp_netif/CMakeFiles/__idf_e
 
 # Build rule for subdir invocation for target.
 esp-idf/lwip/CMakeFiles/__idf_lwip.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 18
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 19
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/lwip/CMakeFiles/__idf_lwip.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/lwip/CMakeFiles/__idf_lwip.dir/rule
@@ -5923,12 +6158,12 @@ esp-idf/lwip/CMakeFiles/__idf_lwip.dir/clean:
 esp-idf/esp_netif/CMakeFiles/__idf_esp_netif.dir/all: esp-idf/wpa_supplicant/CMakeFiles/__idf_wpa_supplicant.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_netif/CMakeFiles/__idf_esp_netif.dir/build.make esp-idf/esp_netif/CMakeFiles/__idf_esp_netif.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_netif/CMakeFiles/__idf_esp_netif.dir/build.make esp-idf/esp_netif/CMakeFiles/__idf_esp_netif.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=16 "Built target __idf_esp_netif"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target __idf_esp_netif"
 .PHONY : esp-idf/esp_netif/CMakeFiles/__idf_esp_netif.dir/all
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_netif/CMakeFiles/__idf_esp_netif.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 13
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 14
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_netif/CMakeFiles/__idf_esp_netif.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_netif/CMakeFiles/__idf_esp_netif.dir/rule
@@ -5940,7 +6175,7 @@ __idf_esp_netif: esp-idf/esp_netif/CMakeFiles/__idf_esp_netif.dir/rule
 # codegen rule for target.
 esp-idf/esp_netif/CMakeFiles/__idf_esp_netif.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_netif/CMakeFiles/__idf_esp_netif.dir/build.make esp-idf/esp_netif/CMakeFiles/__idf_esp_netif.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=16 "Finished codegen for target __idf_esp_netif"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target __idf_esp_netif"
 .PHONY : esp-idf/esp_netif/CMakeFiles/__idf_esp_netif.dir/codegen
 
 # clean rule for target.
@@ -5955,12 +6190,12 @@ esp-idf/esp_netif/CMakeFiles/__idf_esp_netif.dir/clean:
 esp-idf/wpa_supplicant/CMakeFiles/__idf_wpa_supplicant.dir/all: esp-idf/esp_coex/CMakeFiles/__idf_esp_coex.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/wpa_supplicant/CMakeFiles/__idf_wpa_supplicant.dir/build.make esp-idf/wpa_supplicant/CMakeFiles/__idf_wpa_supplicant.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/wpa_supplicant/CMakeFiles/__idf_wpa_supplicant.dir/build.make esp-idf/wpa_supplicant/CMakeFiles/__idf_wpa_supplicant.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=87,88,89,90 "Built target __idf_wpa_supplicant"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=86,87,88,89,90 "Built target __idf_wpa_supplicant"
 .PHONY : esp-idf/wpa_supplicant/CMakeFiles/__idf_wpa_supplicant.dir/all
 
 # Build rule for subdir invocation for target.
 esp-idf/wpa_supplicant/CMakeFiles/__idf_wpa_supplicant.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 12
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 14
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/wpa_supplicant/CMakeFiles/__idf_wpa_supplicant.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/wpa_supplicant/CMakeFiles/__idf_wpa_supplicant.dir/rule
@@ -5972,7 +6207,7 @@ __idf_wpa_supplicant: esp-idf/wpa_supplicant/CMakeFiles/__idf_wpa_supplicant.dir
 # codegen rule for target.
 esp-idf/wpa_supplicant/CMakeFiles/__idf_wpa_supplicant.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/wpa_supplicant/CMakeFiles/__idf_wpa_supplicant.dir/build.make esp-idf/wpa_supplicant/CMakeFiles/__idf_wpa_supplicant.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=87,88,89,90 "Finished codegen for target __idf_wpa_supplicant"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=86,87,88,89,90 "Finished codegen for target __idf_wpa_supplicant"
 .PHONY : esp-idf/wpa_supplicant/CMakeFiles/__idf_wpa_supplicant.dir/codegen
 
 # clean rule for target.
@@ -5992,7 +6227,7 @@ esp-idf/esp_coex/CMakeFiles/__idf_esp_coex.dir/all: esp-idf/esp_wifi/CMakeFiles/
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_coex/CMakeFiles/__idf_esp_coex.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 8
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 9
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_coex/CMakeFiles/__idf_esp_coex.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_coex/CMakeFiles/__idf_esp_coex.dir/rule
@@ -6019,12 +6254,12 @@ esp-idf/esp_coex/CMakeFiles/__idf_esp_coex.dir/clean:
 esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/all: esp-idf/esp_driver_spi/CMakeFiles/__idf_esp_driver_spi.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/build.make esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/build.make esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=21 "Built target __idf_esp_wifi"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target __idf_esp_wifi"
 .PHONY : esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/all
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 8
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 9
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/rule
@@ -6036,7 +6271,7 @@ __idf_esp_wifi: esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/rule
 # codegen rule for target.
 esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/build.make esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=21 "Finished codegen for target __idf_esp_wifi"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target __idf_esp_wifi"
 .PHONY : esp-idf/esp_wifi/CMakeFiles/__idf_esp_wifi.dir/codegen
 
 # clean rule for target.
@@ -6056,7 +6291,7 @@ esp-idf/esp_driver_spi/CMakeFiles/__idf_esp_driver_spi.dir/all: esp-idf/esp_gdbs
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_driver_spi/CMakeFiles/__idf_esp_driver_spi.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 7
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 9
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_driver_spi/CMakeFiles/__idf_esp_driver_spi.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_driver_spi/CMakeFiles/__idf_esp_driver_spi.dir/rule
@@ -6083,12 +6318,12 @@ esp-idf/esp_driver_spi/CMakeFiles/__idf_esp_driver_spi.dir/clean:
 esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/all: esp-idf/esp_driver_pcnt/CMakeFiles/__idf_esp_driver_pcnt.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/build.make esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/build.make esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target __idf_esp_gdbstub"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=10 "Built target __idf_esp_gdbstub"
 .PHONY : esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/all
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 7
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 9
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/rule
@@ -6100,7 +6335,7 @@ __idf_esp_gdbstub: esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/rule
 # codegen rule for target.
 esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/build.make esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target __idf_esp_gdbstub"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=10 "Finished codegen for target __idf_esp_gdbstub"
 .PHONY : esp-idf/esp_gdbstub/CMakeFiles/__idf_esp_gdbstub.dir/codegen
 
 # clean rule for target.
@@ -6120,7 +6355,7 @@ esp-idf/unity/CMakeFiles/__idf_unity.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xt
 
 # Build rule for subdir invocation for target.
 esp-idf/unity/CMakeFiles/__idf_unity.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 48
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 50
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/unity/CMakeFiles/__idf_unity.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/unity/CMakeFiles/__idf_unity.dir/rule
@@ -6144,8 +6379,8 @@ esp-idf/unity/CMakeFiles/__idf_unity.dir/clean:
 # Target rules for target esp-idf/cmock/CMakeFiles/__idf_cmock.dir
 
 # All Build rule for target.
-esp-idf/cmock/CMakeFiles/__idf_cmock.dir/all: esp-idf/unity/CMakeFiles/__idf_unity.dir/all
 esp-idf/cmock/CMakeFiles/__idf_cmock.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xtensa.dir/all
+esp-idf/cmock/CMakeFiles/__idf_cmock.dir/all: esp-idf/unity/CMakeFiles/__idf_unity.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/cmock/CMakeFiles/__idf_cmock.dir/build.make esp-idf/cmock/CMakeFiles/__idf_cmock.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/cmock/CMakeFiles/__idf_cmock.dir/build.make esp-idf/cmock/CMakeFiles/__idf_cmock.dir/build
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target __idf_cmock"
@@ -6153,7 +6388,7 @@ esp-idf/cmock/CMakeFiles/__idf_cmock.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xt
 
 # Build rule for subdir invocation for target.
 esp-idf/cmock/CMakeFiles/__idf_cmock.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 48
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 50
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/cmock/CMakeFiles/__idf_cmock.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/cmock/CMakeFiles/__idf_cmock.dir/rule
@@ -6185,7 +6420,7 @@ esp-idf/console/CMakeFiles/__idf_console.dir/all: esp-idf/xtensa/CMakeFiles/__id
 
 # Build rule for subdir invocation for target.
 esp-idf/console/CMakeFiles/__idf_console.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 48
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 50
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/console/CMakeFiles/__idf_console.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/console/CMakeFiles/__idf_console.dir/rule
@@ -6217,7 +6452,7 @@ esp-idf/esp_driver_pcnt/CMakeFiles/__idf_esp_driver_pcnt.dir/all: esp-idf/esp_dr
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_driver_pcnt/CMakeFiles/__idf_esp_driver_pcnt.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 7
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 8
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_driver_pcnt/CMakeFiles/__idf_esp_driver_pcnt.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_driver_pcnt/CMakeFiles/__idf_esp_driver_pcnt.dir/rule
@@ -6249,7 +6484,7 @@ esp-idf/esp_driver_mcpwm/CMakeFiles/__idf_esp_driver_mcpwm.dir/all: esp-idf/esp_
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_driver_mcpwm/CMakeFiles/__idf_esp_driver_mcpwm.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 7
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 8
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_driver_mcpwm/CMakeFiles/__idf_esp_driver_mcpwm.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_driver_mcpwm/CMakeFiles/__idf_esp_driver_mcpwm.dir/rule
@@ -6281,7 +6516,7 @@ esp-idf/esp_driver_i2s/CMakeFiles/__idf_esp_driver_i2s.dir/all: esp-idf/sdmmc/CM
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_driver_i2s/CMakeFiles/__idf_esp_driver_i2s.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 6
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 7
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_driver_i2s/CMakeFiles/__idf_esp_driver_i2s.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_driver_i2s/CMakeFiles/__idf_esp_driver_i2s.dir/rule
@@ -6313,7 +6548,7 @@ esp-idf/sdmmc/CMakeFiles/__idf_sdmmc.dir/all: esp-idf/esp_driver_sdmmc/CMakeFile
 
 # Build rule for subdir invocation for target.
 esp-idf/sdmmc/CMakeFiles/__idf_sdmmc.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 6
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 7
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/sdmmc/CMakeFiles/__idf_sdmmc.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/sdmmc/CMakeFiles/__idf_sdmmc.dir/rule
@@ -6340,12 +6575,12 @@ esp-idf/sdmmc/CMakeFiles/__idf_sdmmc.dir/clean:
 esp-idf/esp_driver_sdmmc/CMakeFiles/__idf_esp_driver_sdmmc.dir/all: esp-idf/esp_driver_sdspi/CMakeFiles/__idf_esp_driver_sdspi.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_driver_sdmmc/CMakeFiles/__idf_esp_driver_sdmmc.dir/build.make esp-idf/esp_driver_sdmmc/CMakeFiles/__idf_esp_driver_sdmmc.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_driver_sdmmc/CMakeFiles/__idf_esp_driver_sdmmc.dir/build.make esp-idf/esp_driver_sdmmc/CMakeFiles/__idf_esp_driver_sdmmc.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target __idf_esp_driver_sdmmc"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=8 "Built target __idf_esp_driver_sdmmc"
 .PHONY : esp-idf/esp_driver_sdmmc/CMakeFiles/__idf_esp_driver_sdmmc.dir/all
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_driver_sdmmc/CMakeFiles/__idf_esp_driver_sdmmc.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 5
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 6
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_driver_sdmmc/CMakeFiles/__idf_esp_driver_sdmmc.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_driver_sdmmc/CMakeFiles/__idf_esp_driver_sdmmc.dir/rule
@@ -6357,7 +6592,7 @@ __idf_esp_driver_sdmmc: esp-idf/esp_driver_sdmmc/CMakeFiles/__idf_esp_driver_sdm
 # codegen rule for target.
 esp-idf/esp_driver_sdmmc/CMakeFiles/__idf_esp_driver_sdmmc.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_driver_sdmmc/CMakeFiles/__idf_esp_driver_sdmmc.dir/build.make esp-idf/esp_driver_sdmmc/CMakeFiles/__idf_esp_driver_sdmmc.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target __idf_esp_driver_sdmmc"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=8 "Finished codegen for target __idf_esp_driver_sdmmc"
 .PHONY : esp-idf/esp_driver_sdmmc/CMakeFiles/__idf_esp_driver_sdmmc.dir/codegen
 
 # clean rule for target.
@@ -6468,7 +6703,7 @@ esp-idf/esp_driver_tsens/CMakeFiles/__idf_esp_driver_tsens.dir/clean:
 esp-idf/esp_driver_sdm/CMakeFiles/__idf_esp_driver_sdm.dir/all: esp-idf/esp_driver_i2c/CMakeFiles/__idf_esp_driver_i2c.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_driver_sdm/CMakeFiles/__idf_esp_driver_sdm.dir/build.make esp-idf/esp_driver_sdm/CMakeFiles/__idf_esp_driver_sdm.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_driver_sdm/CMakeFiles/__idf_esp_driver_sdm.dir/build.make esp-idf/esp_driver_sdm/CMakeFiles/__idf_esp_driver_sdm.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=8 "Built target __idf_esp_driver_sdm"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target __idf_esp_driver_sdm"
 .PHONY : esp-idf/esp_driver_sdm/CMakeFiles/__idf_esp_driver_sdm.dir/all
 
 # Build rule for subdir invocation for target.
@@ -6485,7 +6720,7 @@ __idf_esp_driver_sdm: esp-idf/esp_driver_sdm/CMakeFiles/__idf_esp_driver_sdm.dir
 # codegen rule for target.
 esp-idf/esp_driver_sdm/CMakeFiles/__idf_esp_driver_sdm.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_driver_sdm/CMakeFiles/__idf_esp_driver_sdm.dir/build.make esp-idf/esp_driver_sdm/CMakeFiles/__idf_esp_driver_sdm.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=8 "Finished codegen for target __idf_esp_driver_sdm"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target __idf_esp_driver_sdm"
 .PHONY : esp-idf/esp_driver_sdm/CMakeFiles/__idf_esp_driver_sdm.dir/codegen
 
 # clean rule for target.
@@ -6505,7 +6740,7 @@ esp-idf/esp_driver_i2c/CMakeFiles/__idf_esp_driver_i2c.dir/all: esp-idf/esp_driv
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_driver_i2c/CMakeFiles/__idf_esp_driver_i2c.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 4
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 5
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_driver_i2c/CMakeFiles/__idf_esp_driver_i2c.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_driver_i2c/CMakeFiles/__idf_esp_driver_i2c.dir/rule
@@ -6537,7 +6772,7 @@ esp-idf/esp_driver_ledc/CMakeFiles/__idf_esp_driver_ledc.dir/all: esp-idf/esp_dr
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_driver_ledc/CMakeFiles/__idf_esp_driver_ledc.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 4
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 5
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_driver_ledc/CMakeFiles/__idf_esp_driver_ledc.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_driver_ledc/CMakeFiles/__idf_esp_driver_ledc.dir/rule
@@ -6569,7 +6804,7 @@ esp-idf/esp_driver_twai/CMakeFiles/__idf_esp_driver_twai.dir/all: esp-idf/driver
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_driver_twai/CMakeFiles/__idf_esp_driver_twai.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 4
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 5
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_driver_twai/CMakeFiles/__idf_esp_driver_twai.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_driver_twai/CMakeFiles/__idf_esp_driver_twai.dir/rule
@@ -6601,7 +6836,7 @@ esp-idf/driver/CMakeFiles/__idf_driver.dir/all: esp-idf/http_parser/CMakeFiles/_
 
 # Build rule for subdir invocation for target.
 esp-idf/driver/CMakeFiles/__idf_driver.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 3
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 4
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/driver/CMakeFiles/__idf_driver.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/driver/CMakeFiles/__idf_driver.dir/rule
@@ -6628,12 +6863,12 @@ esp-idf/driver/CMakeFiles/__idf_driver.dir/clean:
 esp-idf/http_parser/CMakeFiles/__idf_http_parser.dir/all: esp-idf/esp-tls/CMakeFiles/__idf_esp-tls.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/http_parser/CMakeFiles/__idf_http_parser.dir/build.make esp-idf/http_parser/CMakeFiles/__idf_http_parser.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/http_parser/CMakeFiles/__idf_http_parser.dir/build.make esp-idf/http_parser/CMakeFiles/__idf_http_parser.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target __idf_http_parser"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=27 "Built target __idf_http_parser"
 .PHONY : esp-idf/http_parser/CMakeFiles/__idf_http_parser.dir/all
 
 # Build rule for subdir invocation for target.
 esp-idf/http_parser/CMakeFiles/__idf_http_parser.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 2
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 3
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/http_parser/CMakeFiles/__idf_http_parser.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/http_parser/CMakeFiles/__idf_http_parser.dir/rule
@@ -6645,7 +6880,7 @@ __idf_http_parser: esp-idf/http_parser/CMakeFiles/__idf_http_parser.dir/rule
 # codegen rule for target.
 esp-idf/http_parser/CMakeFiles/__idf_http_parser.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/http_parser/CMakeFiles/__idf_http_parser.dir/build.make esp-idf/http_parser/CMakeFiles/__idf_http_parser.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target __idf_http_parser"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=27 "Finished codegen for target __idf_http_parser"
 .PHONY : esp-idf/http_parser/CMakeFiles/__idf_http_parser.dir/codegen
 
 # clean rule for target.
@@ -6692,7 +6927,7 @@ esp-idf/esp-tls/CMakeFiles/__idf_esp-tls.dir/clean:
 esp-idf/esp_adc/CMakeFiles/__idf_esp_adc.dir/all: esp-idf/tcp_transport/CMakeFiles/__idf_tcp_transport.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_adc/CMakeFiles/__idf_esp_adc.dir/build.make esp-idf/esp_adc/CMakeFiles/__idf_esp_adc.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_adc/CMakeFiles/__idf_esp_adc.dir/build.make esp-idf/esp_adc/CMakeFiles/__idf_esp_adc.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=5 "Built target __idf_esp_adc"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target __idf_esp_adc"
 .PHONY : esp-idf/esp_adc/CMakeFiles/__idf_esp_adc.dir/all
 
 # Build rule for subdir invocation for target.
@@ -6709,7 +6944,7 @@ __idf_esp_adc: esp-idf/esp_adc/CMakeFiles/__idf_esp_adc.dir/rule
 # codegen rule for target.
 esp-idf/esp_adc/CMakeFiles/__idf_esp_adc.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_adc/CMakeFiles/__idf_esp_adc.dir/build.make esp-idf/esp_adc/CMakeFiles/__idf_esp_adc.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=5 "Finished codegen for target __idf_esp_adc"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target __idf_esp_adc"
 .PHONY : esp-idf/esp_adc/CMakeFiles/__idf_esp_adc.dir/codegen
 
 # clean rule for target.
@@ -6729,7 +6964,7 @@ esp-idf/esp_driver_cam/CMakeFiles/__idf_esp_driver_cam.dir/all: esp-idf/xtensa/C
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_driver_cam/CMakeFiles/__idf_esp_driver_cam.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_driver_cam/CMakeFiles/__idf_esp_driver_cam.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_driver_cam/CMakeFiles/__idf_esp_driver_cam.dir/rule
@@ -6761,7 +6996,7 @@ esp-idf/esp_driver_touch_sens/CMakeFiles/__idf_esp_driver_touch_sens.dir/all: es
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_driver_touch_sens/CMakeFiles/__idf_esp_driver_touch_sens.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_driver_touch_sens/CMakeFiles/__idf_esp_driver_touch_sens.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_driver_touch_sens/CMakeFiles/__idf_esp_driver_touch_sens.dir/rule
@@ -6793,7 +7028,7 @@ esp-idf/esp_eth/CMakeFiles/__idf_esp_eth.dir/all: esp-idf/xtensa/CMakeFiles/__id
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_eth/CMakeFiles/__idf_esp_eth.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_eth/CMakeFiles/__idf_esp_eth.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_eth/CMakeFiles/__idf_esp_eth.dir/rule
@@ -6825,7 +7060,7 @@ esp-idf/esp_hid/CMakeFiles/__idf_esp_hid.dir/all: esp-idf/xtensa/CMakeFiles/__id
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_hid/CMakeFiles/__idf_esp_hid.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_hid/CMakeFiles/__idf_esp_hid.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_hid/CMakeFiles/__idf_esp_hid.dir/rule
@@ -6857,7 +7092,7 @@ esp-idf/tcp_transport/CMakeFiles/__idf_tcp_transport.dir/all: esp-idf/esp_http_c
 
 # Build rule for subdir invocation for target.
 esp-idf/tcp_transport/CMakeFiles/__idf_tcp_transport.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 1
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 2
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/tcp_transport/CMakeFiles/__idf_tcp_transport.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/tcp_transport/CMakeFiles/__idf_tcp_transport.dir/rule
@@ -6889,7 +7124,7 @@ esp-idf/esp_http_client/CMakeFiles/__idf_esp_http_client.dir/all: esp-idf/esp_ht
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_http_client/CMakeFiles/__idf_esp_http_client.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 1
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 2
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_http_client/CMakeFiles/__idf_esp_http_client.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_http_client/CMakeFiles/__idf_esp_http_client.dir/rule
@@ -6921,7 +7156,7 @@ esp-idf/esp_http_server/CMakeFiles/__idf_esp_http_server.dir/all: esp-idf/esp_ht
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_http_server/CMakeFiles/__idf_esp_http_server.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 1
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 2
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_http_server/CMakeFiles/__idf_esp_http_server.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_http_server/CMakeFiles/__idf_esp_http_server.dir/rule
@@ -6953,7 +7188,7 @@ esp-idf/esp_https_ota/CMakeFiles/__idf_esp_https_ota.dir/all: esp-idf/espcoredum
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_https_ota/CMakeFiles/__idf_esp_https_ota.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 1
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_https_ota/CMakeFiles/__idf_esp_https_ota.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_https_ota/CMakeFiles/__idf_esp_https_ota.dir/rule
@@ -6985,7 +7220,7 @@ esp-idf/esp_https_server/CMakeFiles/__idf_esp_https_server.dir/all: esp-idf/xten
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_https_server/CMakeFiles/__idf_esp_https_server.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_https_server/CMakeFiles/__idf_esp_https_server.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_https_server/CMakeFiles/__idf_esp_https_server.dir/rule
@@ -7017,7 +7252,7 @@ esp-idf/esp_lcd/CMakeFiles/__idf_esp_lcd.dir/all: esp-idf/xtensa/CMakeFiles/__id
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_lcd/CMakeFiles/__idf_esp_lcd.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_lcd/CMakeFiles/__idf_esp_lcd.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_lcd/CMakeFiles/__idf_esp_lcd.dir/rule
@@ -7049,7 +7284,7 @@ esp-idf/protobuf-c/CMakeFiles/__idf_protobuf-c.dir/all: esp-idf/xtensa/CMakeFile
 
 # Build rule for subdir invocation for target.
 esp-idf/protobuf-c/CMakeFiles/__idf_protobuf-c.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/protobuf-c/CMakeFiles/__idf_protobuf-c.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/protobuf-c/CMakeFiles/__idf_protobuf-c.dir/rule
@@ -7073,9 +7308,9 @@ esp-idf/protobuf-c/CMakeFiles/__idf_protobuf-c.dir/clean:
 # Target rules for target esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir
 
 # All Build rule for target.
-esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/all: esp-idf/console/CMakeFiles/__idf_console.dir/all
-esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xtensa.dir/all
 esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/all: esp-idf/protobuf-c/CMakeFiles/__idf_protobuf-c.dir/all
+esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xtensa.dir/all
+esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/all: esp-idf/console/CMakeFiles/__idf_console.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/build.make esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/build.make esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/build
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=79 "Built target __idf_protocomm"
@@ -7083,7 +7318,7 @@ esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/all: esp-idf/protobuf-c/CMakeFi
 
 # Build rule for subdir invocation for target.
 esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 51
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/rule
@@ -7107,11 +7342,11 @@ esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/clean:
 # Target rules for target esp-idf/esp_local_ctrl/CMakeFiles/__idf_esp_local_ctrl.dir
 
 # All Build rule for target.
-esp-idf/esp_local_ctrl/CMakeFiles/__idf_esp_local_ctrl.dir/all: esp-idf/console/CMakeFiles/__idf_console.dir/all
-esp-idf/esp_local_ctrl/CMakeFiles/__idf_esp_local_ctrl.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xtensa.dir/all
 esp-idf/esp_local_ctrl/CMakeFiles/__idf_esp_local_ctrl.dir/all: esp-idf/esp_https_server/CMakeFiles/__idf_esp_https_server.dir/all
 esp-idf/esp_local_ctrl/CMakeFiles/__idf_esp_local_ctrl.dir/all: esp-idf/protobuf-c/CMakeFiles/__idf_protobuf-c.dir/all
 esp-idf/esp_local_ctrl/CMakeFiles/__idf_esp_local_ctrl.dir/all: esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/all
+esp-idf/esp_local_ctrl/CMakeFiles/__idf_esp_local_ctrl.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xtensa.dir/all
+esp-idf/esp_local_ctrl/CMakeFiles/__idf_esp_local_ctrl.dir/all: esp-idf/console/CMakeFiles/__idf_console.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_local_ctrl/CMakeFiles/__idf_esp_local_ctrl.dir/build.make esp-idf/esp_local_ctrl/CMakeFiles/__idf_esp_local_ctrl.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/esp_local_ctrl/CMakeFiles/__idf_esp_local_ctrl.dir/build.make esp-idf/esp_local_ctrl/CMakeFiles/__idf_esp_local_ctrl.dir/build
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=15 "Built target __idf_esp_local_ctrl"
@@ -7119,7 +7354,7 @@ esp-idf/esp_local_ctrl/CMakeFiles/__idf_esp_local_ctrl.dir/all: esp-idf/protocom
 
 # Build rule for subdir invocation for target.
 esp-idf/esp_local_ctrl/CMakeFiles/__idf_esp_local_ctrl.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 50
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 52
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/esp_local_ctrl/CMakeFiles/__idf_esp_local_ctrl.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/esp_local_ctrl/CMakeFiles/__idf_esp_local_ctrl.dir/rule
@@ -7148,12 +7383,12 @@ esp-idf/espcoredump/CMakeFiles/__idf_espcoredump.dir/all: esp-idf/esp_system/CMa
 esp-idf/espcoredump/CMakeFiles/__idf_espcoredump.dir/all: esp-idf/esp_system/CMakeFiles/sections.ld.in.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/espcoredump/CMakeFiles/__idf_espcoredump.dir/build.make esp-idf/espcoredump/CMakeFiles/__idf_espcoredump.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/espcoredump/CMakeFiles/__idf_espcoredump.dir/build.make esp-idf/espcoredump/CMakeFiles/__idf_espcoredump.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target __idf_espcoredump"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=21 "Built target __idf_espcoredump"
 .PHONY : esp-idf/espcoredump/CMakeFiles/__idf_espcoredump.dir/all
 
 # Build rule for subdir invocation for target.
 esp-idf/espcoredump/CMakeFiles/__idf_espcoredump.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 1
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/espcoredump/CMakeFiles/__idf_espcoredump.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/espcoredump/CMakeFiles/__idf_espcoredump.dir/rule
@@ -7165,7 +7400,7 @@ __idf_espcoredump: esp-idf/espcoredump/CMakeFiles/__idf_espcoredump.dir/rule
 # codegen rule for target.
 esp-idf/espcoredump/CMakeFiles/__idf_espcoredump.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/espcoredump/CMakeFiles/__idf_espcoredump.dir/build.make esp-idf/espcoredump/CMakeFiles/__idf_espcoredump.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target __idf_espcoredump"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=21 "Finished codegen for target __idf_espcoredump"
 .PHONY : esp-idf/espcoredump/CMakeFiles/__idf_espcoredump.dir/codegen
 
 # clean rule for target.
@@ -7180,12 +7415,12 @@ esp-idf/espcoredump/CMakeFiles/__idf_espcoredump.dir/clean:
 esp-idf/wear_levelling/CMakeFiles/__idf_wear_levelling.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xtensa.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/wear_levelling/CMakeFiles/__idf_wear_levelling.dir/build.make esp-idf/wear_levelling/CMakeFiles/__idf_wear_levelling.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/wear_levelling/CMakeFiles/__idf_wear_levelling.dir/build.make esp-idf/wear_levelling/CMakeFiles/__idf_wear_levelling.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target __idf_wear_levelling"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=85 "Built target __idf_wear_levelling"
 .PHONY : esp-idf/wear_levelling/CMakeFiles/__idf_wear_levelling.dir/all
 
 # Build rule for subdir invocation for target.
 esp-idf/wear_levelling/CMakeFiles/__idf_wear_levelling.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 50
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/wear_levelling/CMakeFiles/__idf_wear_levelling.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/wear_levelling/CMakeFiles/__idf_wear_levelling.dir/rule
@@ -7197,7 +7432,7 @@ __idf_wear_levelling: esp-idf/wear_levelling/CMakeFiles/__idf_wear_levelling.dir
 # codegen rule for target.
 esp-idf/wear_levelling/CMakeFiles/__idf_wear_levelling.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/wear_levelling/CMakeFiles/__idf_wear_levelling.dir/build.make esp-idf/wear_levelling/CMakeFiles/__idf_wear_levelling.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target __idf_wear_levelling"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=85 "Finished codegen for target __idf_wear_levelling"
 .PHONY : esp-idf/wear_levelling/CMakeFiles/__idf_wear_levelling.dir/codegen
 
 # clean rule for target.
@@ -7218,7 +7453,7 @@ esp-idf/fatfs/CMakeFiles/__idf_fatfs.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xt
 
 # Build rule for subdir invocation for target.
 esp-idf/fatfs/CMakeFiles/__idf_fatfs.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 50
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/fatfs/CMakeFiles/__idf_fatfs.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/fatfs/CMakeFiles/__idf_fatfs.dir/rule
@@ -7250,7 +7485,7 @@ esp-idf/json/CMakeFiles/__idf_json.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xten
 
 # Build rule for subdir invocation for target.
 esp-idf/json/CMakeFiles/__idf_json.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/json/CMakeFiles/__idf_json.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/json/CMakeFiles/__idf_json.dir/rule
@@ -7277,12 +7512,12 @@ esp-idf/json/CMakeFiles/__idf_json.dir/clean:
 esp-idf/mqtt/CMakeFiles/__idf_mqtt.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xtensa.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/mqtt/CMakeFiles/__idf_mqtt.dir/build.make esp-idf/mqtt/CMakeFiles/__idf_mqtt.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/mqtt/CMakeFiles/__idf_mqtt.dir/build.make esp-idf/mqtt/CMakeFiles/__idf_mqtt.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=76 "Built target __idf_mqtt"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target __idf_mqtt"
 .PHONY : esp-idf/mqtt/CMakeFiles/__idf_mqtt.dir/all
 
 # Build rule for subdir invocation for target.
 esp-idf/mqtt/CMakeFiles/__idf_mqtt.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 48
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/mqtt/CMakeFiles/__idf_mqtt.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/mqtt/CMakeFiles/__idf_mqtt.dir/rule
@@ -7294,7 +7529,7 @@ __idf_mqtt: esp-idf/mqtt/CMakeFiles/__idf_mqtt.dir/rule
 # codegen rule for target.
 esp-idf/mqtt/CMakeFiles/__idf_mqtt.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/mqtt/CMakeFiles/__idf_mqtt.dir/build.make esp-idf/mqtt/CMakeFiles/__idf_mqtt.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=76 "Finished codegen for target __idf_mqtt"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target __idf_mqtt"
 .PHONY : esp-idf/mqtt/CMakeFiles/__idf_mqtt.dir/codegen
 
 # clean rule for target.
@@ -7314,7 +7549,7 @@ esp-idf/nvs_sec_provider/CMakeFiles/__idf_nvs_sec_provider.dir/all: esp-idf/xten
 
 # Build rule for subdir invocation for target.
 esp-idf/nvs_sec_provider/CMakeFiles/__idf_nvs_sec_provider.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/nvs_sec_provider/CMakeFiles/__idf_nvs_sec_provider.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/nvs_sec_provider/CMakeFiles/__idf_nvs_sec_provider.dir/rule
@@ -7346,7 +7581,7 @@ esp-idf/perfmon/CMakeFiles/__idf_perfmon.dir/all: esp-idf/xtensa/CMakeFiles/__id
 
 # Build rule for subdir invocation for target.
 esp-idf/perfmon/CMakeFiles/__idf_perfmon.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/perfmon/CMakeFiles/__idf_perfmon.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/perfmon/CMakeFiles/__idf_perfmon.dir/rule
@@ -7378,7 +7613,7 @@ esp-idf/rt/CMakeFiles/__idf_rt.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xtensa.d
 
 # Build rule for subdir invocation for target.
 esp-idf/rt/CMakeFiles/__idf_rt.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/rt/CMakeFiles/__idf_rt.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/rt/CMakeFiles/__idf_rt.dir/rule
@@ -7410,7 +7645,7 @@ esp-idf/spiffs/CMakeFiles/__idf_spiffs.dir/all: esp-idf/xtensa/CMakeFiles/__idf_
 
 # Build rule for subdir invocation for target.
 esp-idf/spiffs/CMakeFiles/__idf_spiffs.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 48
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 50
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/spiffs/CMakeFiles/__idf_spiffs.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/spiffs/CMakeFiles/__idf_spiffs.dir/rule
@@ -7442,7 +7677,7 @@ esp-idf/touch_element/CMakeFiles/__idf_touch_element.dir/all: esp-idf/xtensa/CMa
 
 # Build rule for subdir invocation for target.
 esp-idf/touch_element/CMakeFiles/__idf_touch_element.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/touch_element/CMakeFiles/__idf_touch_element.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/touch_element/CMakeFiles/__idf_touch_element.dir/rule
@@ -7474,7 +7709,7 @@ esp-idf/usb/CMakeFiles/__idf_usb.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xtensa
 
 # Build rule for subdir invocation for target.
 esp-idf/usb/CMakeFiles/__idf_usb.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/usb/CMakeFiles/__idf_usb.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/usb/CMakeFiles/__idf_usb.dir/rule
@@ -7498,19 +7733,19 @@ esp-idf/usb/CMakeFiles/__idf_usb.dir/clean:
 # Target rules for target esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir
 
 # All Build rule for target.
-esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/all: esp-idf/console/CMakeFiles/__idf_console.dir/all
-esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/all: esp-idf/json/CMakeFiles/__idf_json.dir/all
-esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xtensa.dir/all
 esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/all: esp-idf/protobuf-c/CMakeFiles/__idf_protobuf-c.dir/all
 esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/all: esp-idf/protocomm/CMakeFiles/__idf_protocomm.dir/all
+esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/all: esp-idf/json/CMakeFiles/__idf_json.dir/all
+esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xtensa.dir/all
+esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/all: esp-idf/console/CMakeFiles/__idf_console.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/build.make esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/build.make esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=86 "Built target __idf_wifi_provisioning"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target __idf_wifi_provisioning"
 .PHONY : esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/all
 
 # Build rule for subdir invocation for target.
 esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 50
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 51
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/rule
@@ -7522,7 +7757,7 @@ __idf_wifi_provisioning: esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisi
 # codegen rule for target.
 esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/build.make esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=86 "Finished codegen for target __idf_wifi_provisioning"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target __idf_wifi_provisioning"
 .PHONY : esp-idf/wifi_provisioning/CMakeFiles/__idf_wifi_provisioning.dir/codegen
 
 # clean rule for target.
@@ -7542,7 +7777,7 @@ esp-idf/espressif__button/CMakeFiles/__idf_espressif__button.dir/all: esp-idf/xt
 
 # Build rule for subdir invocation for target.
 esp-idf/espressif__button/CMakeFiles/__idf_espressif__button.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 47
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 49
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/espressif__button/CMakeFiles/__idf_espressif__button.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/espressif__button/CMakeFiles/__idf_espressif__button.dir/rule
@@ -7574,7 +7809,7 @@ esp-idf/lvgl__lvgl/CMakeFiles/__idf_lvgl__lvgl.dir/all: esp-idf/xtensa/CMakeFile
 
 # Build rule for subdir invocation for target.
 esp-idf/lvgl__lvgl/CMakeFiles/__idf_lvgl__lvgl.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 88
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 90
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/lvgl__lvgl/CMakeFiles/__idf_lvgl__lvgl.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/lvgl__lvgl/CMakeFiles/__idf_lvgl__lvgl.dir/rule
@@ -7598,18 +7833,18 @@ esp-idf/lvgl__lvgl/CMakeFiles/__idf_lvgl__lvgl.dir/clean:
 # Target rules for target esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir
 
 # All Build rule for target.
+esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/all: esp-idf/esp_lcd/CMakeFiles/__idf_esp_lcd.dir/all
 esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/all: esp-idf/espressif__button/CMakeFiles/__idf_espressif__button.dir/all
 esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/all: esp-idf/lvgl__lvgl/CMakeFiles/__idf_lvgl__lvgl.dir/all
 esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xtensa.dir/all
-esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/all: esp-idf/esp_lcd/CMakeFiles/__idf_esp_lcd.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/build.make esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/build.make esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=92 "Built target lvgl_port_lib"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Built target lvgl_port_lib"
 .PHONY : esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/all
 
 # Build rule for subdir invocation for target.
 esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 89
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 90
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/rule
@@ -7621,7 +7856,7 @@ lvgl_port_lib: esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/rul
 # codegen rule for target.
 esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/build.make esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=92 "Finished codegen for target lvgl_port_lib"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num= "Finished codegen for target lvgl_port_lib"
 .PHONY : esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/codegen
 
 # clean rule for target.
@@ -7633,6 +7868,7 @@ esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/clean:
 # Target rules for target esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir
 
 # All Build rule for target.
+esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/all: esp-idf/esp_lcd/CMakeFiles/__idf_esp_lcd.dir/all
 esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/all: esp-idf/wear_levelling/CMakeFiles/__idf_wear_levelling.dir/all
 esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/all: esp-idf/fatfs/CMakeFiles/__idf_fatfs.dir/all
 esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/all: esp-idf/spiffs/CMakeFiles/__idf_spiffs.dir/all
@@ -7641,7 +7877,6 @@ esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg
 esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/all: esp-idf/lvgl__lvgl/CMakeFiles/__idf_lvgl__lvgl.dir/all
 esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/all: esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/all
 esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xtensa.dir/all
-esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/all: esp-idf/esp_lcd/CMakeFiles/__idf_esp_lcd.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/build.make esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/build.make esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/build
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=22 "Built target __idf_espressif__esp32_s3_usb_otg"
@@ -7649,7 +7884,7 @@ esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg
 
 # Build rule for subdir invocation for target.
 esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 91
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 93
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/rule
@@ -7673,6 +7908,7 @@ esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg
 # Target rules for target esp-idf/main/CMakeFiles/__idf_main.dir
 
 # All Build rule for target.
+esp-idf/main/CMakeFiles/__idf_main.dir/all: esp-idf/esp_lcd/CMakeFiles/__idf_esp_lcd.dir/all
 esp-idf/main/CMakeFiles/__idf_main.dir/all: esp-idf/wear_levelling/CMakeFiles/__idf_wear_levelling.dir/all
 esp-idf/main/CMakeFiles/__idf_main.dir/all: esp-idf/fatfs/CMakeFiles/__idf_fatfs.dir/all
 esp-idf/main/CMakeFiles/__idf_main.dir/all: esp-idf/json/CMakeFiles/__idf_json.dir/all
@@ -7684,7 +7920,6 @@ esp-idf/main/CMakeFiles/__idf_main.dir/all: esp-idf/lvgl__lvgl/CMakeFiles/__idf_
 esp-idf/main/CMakeFiles/__idf_main.dir/all: esp-idf/espressif__esp_lvgl_port/CMakeFiles/lvgl_port_lib.dir/all
 esp-idf/main/CMakeFiles/__idf_main.dir/all: esp-idf/espressif__esp32_s3_usb_otg/CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/all
 esp-idf/main/CMakeFiles/__idf_main.dir/all: esp-idf/xtensa/CMakeFiles/__idf_xtensa.dir/all
-esp-idf/main/CMakeFiles/__idf_main.dir/all: esp-idf/esp_lcd/CMakeFiles/__idf_esp_lcd.dir/all
 	$(MAKE) $(MAKESILENT) -f esp-idf/main/CMakeFiles/__idf_main.dir/build.make esp-idf/main/CMakeFiles/__idf_main.dir/depend
 	$(MAKE) $(MAKESILENT) -f esp-idf/main/CMakeFiles/__idf_main.dir/build.make esp-idf/main/CMakeFiles/__idf_main.dir/build
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles --progress-num=75 "Built target __idf_main"
@@ -7692,7 +7927,7 @@ esp-idf/main/CMakeFiles/__idf_main.dir/all: esp-idf/esp_lcd/CMakeFiles/__idf_esp
 
 # Build rule for subdir invocation for target.
 esp-idf/main/CMakeFiles/__idf_main.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 93
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 94
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/main/CMakeFiles/__idf_main.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles 0
 .PHONY : esp-idf/main/CMakeFiles/__idf_main.dir/rule

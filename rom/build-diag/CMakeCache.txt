@@ -363,6 +363,9 @@ Mbed TLS_IS_TOP_LEVEL:STATIC=OFF
 Mbed TLS_SOURCE_DIR:STATIC=/Users/liyuqing/esp/esp-idf-v5.5/components/mbedtls/mbedtls
 
 //No help, variable specified on the command line.
+PROJECT_VER:UNINITIALIZED=v0.9.3-diag
+
+//No help, variable specified on the command line.
 PYTHON:UNINITIALIZED=/Users/liyuqing/.espressif/python_env/idf5.5_py3.14_env/bin/python
 
 //No help, variable specified on the command line.

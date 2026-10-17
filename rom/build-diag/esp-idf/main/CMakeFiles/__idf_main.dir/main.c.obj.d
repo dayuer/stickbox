@@ -209,9 +209,11 @@ esp-idf/main/CMakeFiles/__idf_main.dir/main.c.obj: \
  /Users/liyuqing/esp/esp-idf-v5.5/components/nvs_flash/include/nvs.h \
  /Users/liyuqing/esp/esp-idf-v5.5/components/esp_partition/include/esp_partition.h \
  /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/cloud_client.h \
+ /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/coredump.h \
  /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/dlna.h \
  /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/lcd_ui.h \
  /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/memdiag.h \
+ /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/ota.h \
  /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/pairband.h \
  /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/jband.h \
  /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/provision.h \

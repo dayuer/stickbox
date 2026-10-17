@@ -47,7 +47,9 @@ static const char *TAG = "ota";
 #endif
 
 /* 开机检查一次，之后每天一次。 */
-#define CHECK_FIRST_DELAY_S   120
+/* 首次检查推迟到开机 10 分钟之后。
+ * 开机那几分钟正忙着取帧（T13b），两边都要开 TLS，峰值会叠加。 */
+#define CHECK_FIRST_DELAY_S   600
 #define CHECK_INTERVAL_S    86400
 
 /* 健康检查窗口：这段时间内 ota_mark_healthy() 没被调用，重启就回滚。 */
@@ -280,16 +282,17 @@ static void ota_check_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* 回调跑在 esp_timer 任务里，那个栈只有 2048（T8 收过）。所以这里**只做
+ * 一次 xTaskCreate**——不打日志（netlog 的 vprintf 钩子会在调用者栈上再拼
+ * 一次）、不读 flash、不碰 NVS。真正的活都在 ota_check_task 里。 */
 static void on_check_timer(void *arg)
 {
     (void)arg;
     if (s_checking) return;          /* 上一轮还没跑完就跳过这次 */
     s_checking = true;
     /* 8192：一次 TLS 握手，4096 太紧。只在检查期间占用。 */
-    if (xTaskCreate(ota_check_task, "ota_check", 8192, NULL, 2, NULL) != pdPASS) {
-        ESP_LOGW(TAG, "内存不够，跳过本轮升级检查");
-        s_checking = false;
-    }
+    if (xTaskCreate(ota_check_task, "ota_check", 8192, NULL, 2, NULL) != pdPASS)
+        s_checking = false;          /* 内存不够，下一轮再说；日志留给下一轮 */
 }
 
 void ota_start(const char *devid)

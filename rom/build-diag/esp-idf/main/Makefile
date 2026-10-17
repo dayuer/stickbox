@@ -207,6 +207,30 @@ cloud_client.c.s:
 	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f esp-idf/main/CMakeFiles/__idf_main.dir/build.make esp-idf/main/CMakeFiles/__idf_main.dir/cloud_client.c.s
 .PHONY : cloud_client.c.s
 
+coredump.obj: coredump.c.obj
+.PHONY : coredump.obj
+
+# target to build an object file
+coredump.c.obj:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f esp-idf/main/CMakeFiles/__idf_main.dir/build.make esp-idf/main/CMakeFiles/__idf_main.dir/coredump.c.obj
+.PHONY : coredump.c.obj
+
+coredump.i: coredump.c.i
+.PHONY : coredump.i
+
+# target to preprocess a source file
+coredump.c.i:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f esp-idf/main/CMakeFiles/__idf_main.dir/build.make esp-idf/main/CMakeFiles/__idf_main.dir/coredump.c.i
+.PHONY : coredump.c.i
+
+coredump.s: coredump.c.s
+.PHONY : coredump.s
+
+# target to generate assembly for a file
+coredump.c.s:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f esp-idf/main/CMakeFiles/__idf_main.dir/build.make esp-idf/main/CMakeFiles/__idf_main.dir/coredump.c.s
+.PHONY : coredump.c.s
+
 dlna.obj: dlna.c.obj
 .PHONY : dlna.obj
 
@@ -447,6 +471,30 @@ netlog.c.s:
 	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f esp-idf/main/CMakeFiles/__idf_main.dir/build.make esp-idf/main/CMakeFiles/__idf_main.dir/netlog.c.s
 .PHONY : netlog.c.s
 
+ota.obj: ota.c.obj
+.PHONY : ota.obj
+
+# target to build an object file
+ota.c.obj:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f esp-idf/main/CMakeFiles/__idf_main.dir/build.make esp-idf/main/CMakeFiles/__idf_main.dir/ota.c.obj
+.PHONY : ota.c.obj
+
+ota.i: ota.c.i
+.PHONY : ota.i
+
+# target to preprocess a source file
+ota.c.i:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f esp-idf/main/CMakeFiles/__idf_main.dir/build.make esp-idf/main/CMakeFiles/__idf_main.dir/ota.c.i
+.PHONY : ota.c.i
+
+ota.s: ota.c.s
+.PHONY : ota.s
+
+# target to generate assembly for a file
+ota.c.s:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f esp-idf/main/CMakeFiles/__idf_main.dir/build.make esp-idf/main/CMakeFiles/__idf_main.dir/ota.c.s
+.PHONY : ota.c.s
+
 pairband.obj: pairband.c.obj
 .PHONY : pairband.obj
 
@@ -536,6 +584,9 @@ help:
 	@echo "... cloud_client.obj"
 	@echo "... cloud_client.i"
 	@echo "... cloud_client.s"
+	@echo "... coredump.obj"
+	@echo "... coredump.i"
+	@echo "... coredump.s"
 	@echo "... dlna.obj"
 	@echo "... dlna.i"
 	@echo "... dlna.s"
@@ -566,6 +617,9 @@ help:
 	@echo "... netlog.obj"
 	@echo "... netlog.i"
 	@echo "... netlog.s"
+	@echo "... ota.obj"
+	@echo "... ota.i"
+	@echo "... ota.s"
 	@echo "... pairband.obj"
 	@echo "... pairband.i"
 	@echo "... pairband.s"

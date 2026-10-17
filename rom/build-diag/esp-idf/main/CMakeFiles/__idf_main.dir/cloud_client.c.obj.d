@@ -273,7 +273,9 @@ esp-idf/main/CMakeFiles/__idf_main.dir/cloud_client.c.obj: \
  /Users/liyuqing/esp/esp-idf-v5.5/components/tcp_transport/include/esp_transport.h \
  /Users/liyuqing/esp/esp-idf-v5.5/components/json/cJSON/cJSON.h \
  /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/cloud_client.h \
+ /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/coredump.h \
  /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/lcd_ui.h \
+ /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/ota.h \
  /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/pairband.h \
  /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/jband.h \
  /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/provision.h \

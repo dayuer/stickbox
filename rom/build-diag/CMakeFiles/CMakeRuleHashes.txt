@@ -30,6 +30,13 @@ d8fbe4aeb4bf035efcc3cb8d928c59f2 bootloader-prefix/src/bootloader-stamp/bootload
 223f4a5e90c3f643136cc5fd550c52d2 bootloader-prefix/src/bootloader-stamp/bootloader-mkdir
 bed2b57e420fe59d83bb687b603ac17f bootloader-prefix/src/bootloader-stamp/bootloader-patch
 a1aa19db71be4907658cb40538b8a1b1 bootloader-prefix/src/bootloader-stamp/bootloader-update
+d06312c70900fb426871dc1bb9300be4 esp-idf/app_update/CMakeFiles/blank_ota_data
+22b7642ffa277a450a5271ebc7607a78 esp-idf/app_update/CMakeFiles/encrypted-otadata-flash
+e5953bedd30ee311ab4a439d2472eb0a esp-idf/app_update/CMakeFiles/erase-otadata
+9d7a82f1dd5220898355c93cace48e68 esp-idf/app_update/CMakeFiles/erase_otadata
+68fabfde317300e67de34697a0a400fb esp-idf/app_update/CMakeFiles/otadata-flash
+056ed7e820e1fd84f3def5dcc9363055 esp-idf/app_update/CMakeFiles/read-otadata
+9d7a82f1dd5220898355c93cace48e68 esp-idf/app_update/CMakeFiles/read_otadata
 14a0ea06bf64423610649d69ad7fdd91 esp-idf/bootloader/CMakeFiles/bootloader-flash
 aa28c05a5dab9528ef67f18c7e88c57d esp-idf/bootloader/CMakeFiles/encrypted-bootloader-flash
 354972075c71202b734e971d57fef21f esp-idf/efuse/CMakeFiles/efuse-common-table
@@ -55,6 +62,7 @@ bcf458f9c0dd12be282d0db34c492588 esp-idf/partition_table/CMakeFiles/partition-ta
 026292d6f35d759c042817b7e0e799dd esp-idf/partition_table/CMakeFiles/partition_table
 026292d6f35d759c042817b7e0e799dd esp-idf/partition_table/CMakeFiles/partition_table-flash
 9686e611827a0ee374abaf5c65b35d06 esp-idf/partition_table/CMakeFiles/partition_table_bin
+9190b8011e2eaddf4663eca1a2d52e19 ota_data_initial.bin
 1def08e9bee5bdbde5fefe791829278d partition_table/partition-table.bin
 c53e896d0680545e39b5e60d65081e16 project_elf_src_esp32s3.c
 daf8d8d47c0b3b25549a21585a6e4a83 x509_crt_bundle.S

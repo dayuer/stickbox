@@ -53,8 +53,13 @@ CONFIG_LV_MEM_SIZE_KILOBYTES=16
 # 服务端只有 MQTT 小消息 + 约 3~4KB 证书链；8KB 足够，握手峰值省约 8KB。
 CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=8192
 # esp_timer 任务实测余量 3.1KB，2048 仍留约 1.5KB。
-CONFIG_ESP_TIMER_TASK_STACK_SIZE=2048
+# esp_timer 栈：T8 曾收到 2048，但 M0 把 ota/coredump 改成定时器唤醒后，
+# 回调一度把它吃到只剩 148 字节。现在回调里只建任务不干重活（见 ota.c、
+# memdiag.c 的注释），这里再留一点兜底——爆栈的现场表现是毫无线索的随机崩溃。
+CONFIG_ESP_TIMER_TASK_STACK_SIZE=3584
 # esp-mqtt 任务实测余量 3.4KB；4096 留约 1.4KB。收发缓冲按用量 payload 定 1KB。
 CONFIG_MQTT_USE_CUSTOM_CONFIG=y
-CONFIG_MQTT_TASK_STACK_SIZE=4096
+# T8 收到 4096，上板实测余量只剩 704 字节，加 1KB。
+CONFIG_MQTT_TASK_STACK_SIZE=5120
+
 CONFIG_MQTT_BUFFER_SIZE=1024

@@ -57,11 +57,25 @@ void memdiag_tasks(const char *label)
     free(st);
 }
 
-static void on_tick(void *arg)
+/* 重活必须离开 esp_timer 任务。
+ *
+ * T8 把 ESP_TIMER_TASK_STACK_SIZE 收到了 2048，而 uxTaskGetSystemState 要
+ * 分配任务数组、再逐个格式化日志（netlog 的 vprintf 钩子还会在调用者栈上
+ * 再拼一次），直接在回调里干会把那 2048 吃到只剩 148 字节——离栈溢出就差
+ * 一点，而且是诊断代码把被诊断的系统推到崩溃边缘。
+ *
+ * 回调里只做一次 xTaskCreate，别的什么都不做。 */
+static void dump_task(void *arg)
 {
     const char *label = arg;
     memdiag_heap(label);
     memdiag_tasks(label);
+    vTaskDelete(NULL);
+}
+
+static void on_tick(void *arg)
+{
+    xTaskCreate(dump_task, "memdump", 4096, arg, 1, NULL);
 }
 
 void memdiag_start(void)

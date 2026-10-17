@@ -132,11 +132,12 @@ static void coredump_task(void *arg)
 
 /* 和 OTA 同理：用定时器代替常驻任务。没有待传镜像时（绝大多数开机）
  * 根本不会创建任务，一个字节的栈都不占。 */
+/* 同 ota：回调跑在 2048 栈的 esp_timer 任务里，只做一次 xTaskCreate。
+ * 镜像存在与否在 coredump_start() 里已经查过了，任务里会再查一次，
+ * 不必在回调里读 flash。 */
 static void on_upload_timer(void *arg)
 {
     (void)arg;
-    size_t addr = 0, size = 0;
-    if (esp_core_dump_image_get(&addr, &size) != ESP_OK || size == 0) return;
     xTaskCreate(coredump_task, "coredump", 8192, NULL, 2, NULL);
 }
 

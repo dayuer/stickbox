@@ -1,7 +1,7 @@
 {
     "version":            "1.2",
     "project_name":       "stickbox",
-    "project_version":    "24d48e1-dirty",
+    "project_version":    "v0.9.3-diag",
     "project_path":       "/Users/liyuqing/sproot/esp-airprint-T13b/rom",
     "idf_path":           "/Users/liyuqing/esp/esp-idf-v5.5",
     "build_dir":          "/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag",
@@ -1310,12 +1310,12 @@
             "dir": "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main",
             "type": "LIBRARY",
             "lib": "__idf_main",
-            "reqs": [ "esp_wifi", "esp_event", "nvs_flash", "esp_netif", "esp_http_server", "esp_http_client", "mqtt", "json", "lwip", "esp_timer", "esp-tls", "driver" ],
+            "reqs": [ "esp_wifi", "esp_event", "nvs_flash", "esp_netif", "esp_http_server", "esp_http_client", "mqtt", "json", "lwip", "esp_timer", "esp-tls", "driver", "app_update", "esp_https_ota", "espcoredump", "esp_partition" ],
             "priv_reqs": [ "espressif__esp32_s3_usb_otg" ],
             "managed_reqs": [],
             "managed_priv_reqs": [ "espressif__esp32_s3_usb_otg" ],
             "file": "/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/esp-idf/main/libmain.a",
-            "sources": [ "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/main.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/cloud_client.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/netlog.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/lcd_ui.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/font_cn_16.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/provision.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/dlna.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/stream.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/jband.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/pairband.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/framepack.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/framepack_band.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/framepack_meta.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/memdiag.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/blank.jpg.S" ],
+            "sources": [ "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/main.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/cloud_client.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/netlog.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/lcd_ui.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/font_cn_16.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/provision.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/dlna.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/stream.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/jband.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/pairband.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/ota.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/coredump.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/memdiag.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/framepack.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/framepack_band.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main/framepack_meta.c", "/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/blank.jpg.S" ],
             "include_dirs": [ "." ]
         },
         "mbedtls": {
@@ -3024,7 +3024,7 @@
             "prefix": "idf",
             "dir": "/Users/liyuqing/sproot/esp-airprint-T13b/rom/main",
             "lib": "__idf_main",
-            "reqs": [ "esp_wifi", "esp_event", "nvs_flash", "esp_netif", "esp_http_server", "esp_http_client", "mqtt", "json", "lwip", "esp_timer", "esp-tls", "driver" ],
+            "reqs": [ "esp_wifi", "esp_event", "nvs_flash", "esp_netif", "esp_http_server", "esp_http_client", "mqtt", "json", "lwip", "esp_timer", "esp-tls", "driver", "app_update", "esp_https_ota", "espcoredump", "esp_partition" ],
             "priv_reqs": [ "espressif__esp32_s3_usb_otg" ],
             "managed_reqs": [],
             "managed_priv_reqs": [ "espressif__esp32_s3_usb_otg" ],

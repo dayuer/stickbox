@@ -175,6 +175,104 @@ __idf_app_update/fast:
 	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/__idf_app_update.dir/build.make esp-idf/app_update/CMakeFiles/__idf_app_update.dir/build
 .PHONY : __idf_app_update/fast
 
+# Convenience name for target.
+esp-idf/app_update/CMakeFiles/blank_ota_data.dir/rule:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/app_update/CMakeFiles/blank_ota_data.dir/rule
+.PHONY : esp-idf/app_update/CMakeFiles/blank_ota_data.dir/rule
+
+# Convenience name for target.
+blank_ota_data: esp-idf/app_update/CMakeFiles/blank_ota_data.dir/rule
+.PHONY : blank_ota_data
+
+# fast build rule for target.
+blank_ota_data/fast:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/blank_ota_data.dir/build.make esp-idf/app_update/CMakeFiles/blank_ota_data.dir/build
+.PHONY : blank_ota_data/fast
+
+# Convenience name for target.
+esp-idf/app_update/CMakeFiles/read-otadata.dir/rule:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/app_update/CMakeFiles/read-otadata.dir/rule
+.PHONY : esp-idf/app_update/CMakeFiles/read-otadata.dir/rule
+
+# Convenience name for target.
+read-otadata: esp-idf/app_update/CMakeFiles/read-otadata.dir/rule
+.PHONY : read-otadata
+
+# fast build rule for target.
+read-otadata/fast:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/read-otadata.dir/build.make esp-idf/app_update/CMakeFiles/read-otadata.dir/build
+.PHONY : read-otadata/fast
+
+# Convenience name for target.
+esp-idf/app_update/CMakeFiles/read_otadata.dir/rule:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/app_update/CMakeFiles/read_otadata.dir/rule
+.PHONY : esp-idf/app_update/CMakeFiles/read_otadata.dir/rule
+
+# Convenience name for target.
+read_otadata: esp-idf/app_update/CMakeFiles/read_otadata.dir/rule
+.PHONY : read_otadata
+
+# fast build rule for target.
+read_otadata/fast:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/read_otadata.dir/build.make esp-idf/app_update/CMakeFiles/read_otadata.dir/build
+.PHONY : read_otadata/fast
+
+# Convenience name for target.
+esp-idf/app_update/CMakeFiles/erase-otadata.dir/rule:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/app_update/CMakeFiles/erase-otadata.dir/rule
+.PHONY : esp-idf/app_update/CMakeFiles/erase-otadata.dir/rule
+
+# Convenience name for target.
+erase-otadata: esp-idf/app_update/CMakeFiles/erase-otadata.dir/rule
+.PHONY : erase-otadata
+
+# fast build rule for target.
+erase-otadata/fast:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/erase-otadata.dir/build.make esp-idf/app_update/CMakeFiles/erase-otadata.dir/build
+.PHONY : erase-otadata/fast
+
+# Convenience name for target.
+esp-idf/app_update/CMakeFiles/erase_otadata.dir/rule:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/app_update/CMakeFiles/erase_otadata.dir/rule
+.PHONY : esp-idf/app_update/CMakeFiles/erase_otadata.dir/rule
+
+# Convenience name for target.
+erase_otadata: esp-idf/app_update/CMakeFiles/erase_otadata.dir/rule
+.PHONY : erase_otadata
+
+# fast build rule for target.
+erase_otadata/fast:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/erase_otadata.dir/build.make esp-idf/app_update/CMakeFiles/erase_otadata.dir/build
+.PHONY : erase_otadata/fast
+
+# Convenience name for target.
+esp-idf/app_update/CMakeFiles/otadata-flash.dir/rule:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/app_update/CMakeFiles/otadata-flash.dir/rule
+.PHONY : esp-idf/app_update/CMakeFiles/otadata-flash.dir/rule
+
+# Convenience name for target.
+otadata-flash: esp-idf/app_update/CMakeFiles/otadata-flash.dir/rule
+.PHONY : otadata-flash
+
+# fast build rule for target.
+otadata-flash/fast:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/otadata-flash.dir/build.make esp-idf/app_update/CMakeFiles/otadata-flash.dir/build
+.PHONY : otadata-flash/fast
+
+# Convenience name for target.
+esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/rule:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/rule
+.PHONY : esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/rule
+
+# Convenience name for target.
+encrypted-otadata-flash: esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/rule
+.PHONY : encrypted-otadata-flash
+
+# fast build rule for target.
+encrypted-otadata-flash/fast:
+	cd /Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag && $(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/build.make esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/build
+.PHONY : encrypted-otadata-flash/fast
+
 esp_ota_app_desc.obj: esp_ota_app_desc.c.obj
 .PHONY : esp_ota_app_desc.obj
 
@@ -235,6 +333,13 @@ help:
 	@echo "... install/strip"
 	@echo "... list_install_components"
 	@echo "... rebuild_cache"
+	@echo "... blank_ota_data"
+	@echo "... encrypted-otadata-flash"
+	@echo "... erase-otadata"
+	@echo "... erase_otadata"
+	@echo "... otadata-flash"
+	@echo "... read-otadata"
+	@echo "... read_otadata"
 	@echo "... __idf_app_update"
 	@echo "... esp_ota_app_desc.obj"
 	@echo "... esp_ota_app_desc.i"

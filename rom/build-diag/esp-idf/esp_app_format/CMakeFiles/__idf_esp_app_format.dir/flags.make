@@ -8,5 +8,5 @@ C_INCLUDES = -I/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/config -I
 
 C_FLAGS = @"/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/toolchain/cflags" -fdiagnostics-color=always -fdiagnostics-color=always -ffunction-sections -fdata-sections -Wall -Werror=all -Wno-error=unused-function -Wno-error=unused-variable -Wno-error=unused-but-set-variable -Wno-error=deprecated-declarations -Wextra -Wno-error=extra -Wno-unused-parameter -Wno-sign-compare -Wno-enum-conversion -gdwarf-4 -ggdb -Og -fno-shrink-wrap -fmacro-prefix-map=/Users/liyuqing/sproot/esp-airprint-T13b/rom=. -fmacro-prefix-map=/Users/liyuqing/esp/esp-idf-v5.5=/IDF -fstrict-volatile-bitfields -fno-jump-tables -fno-tree-switch-conversion -std=gnu17 -Wno-old-style-declaration
 
-# Custom defines: esp-idf/esp_app_format/CMakeFiles/__idf_esp_app_format.dir/esp_app_desc.c.obj_DEFINES = PROJECT_VER="24d48e1-dirty"; PROJECT_NAME="stickbox"
+# Custom defines: esp-idf/esp_app_format/CMakeFiles/__idf_esp_app_format.dir/esp_app_desc.c.obj_DEFINES = PROJECT_VER="v0.9.3-diag"; PROJECT_NAME="stickbox"
 

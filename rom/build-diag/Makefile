@@ -786,6 +786,97 @@ __idf_app_update/fast:
 .PHONY : __idf_app_update/fast
 
 #=============================================================================
+# Target rules for targets named blank_ota_data
+
+# Build rule for target.
+blank_ota_data: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 blank_ota_data
+.PHONY : blank_ota_data
+
+# fast build rule for target.
+blank_ota_data/fast:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/blank_ota_data.dir/build.make esp-idf/app_update/CMakeFiles/blank_ota_data.dir/build
+.PHONY : blank_ota_data/fast
+
+#=============================================================================
+# Target rules for targets named read-otadata
+
+# Build rule for target.
+read-otadata: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 read-otadata
+.PHONY : read-otadata
+
+# fast build rule for target.
+read-otadata/fast:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/read-otadata.dir/build.make esp-idf/app_update/CMakeFiles/read-otadata.dir/build
+.PHONY : read-otadata/fast
+
+#=============================================================================
+# Target rules for targets named read_otadata
+
+# Build rule for target.
+read_otadata: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 read_otadata
+.PHONY : read_otadata
+
+# fast build rule for target.
+read_otadata/fast:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/read_otadata.dir/build.make esp-idf/app_update/CMakeFiles/read_otadata.dir/build
+.PHONY : read_otadata/fast
+
+#=============================================================================
+# Target rules for targets named erase-otadata
+
+# Build rule for target.
+erase-otadata: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 erase-otadata
+.PHONY : erase-otadata
+
+# fast build rule for target.
+erase-otadata/fast:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/erase-otadata.dir/build.make esp-idf/app_update/CMakeFiles/erase-otadata.dir/build
+.PHONY : erase-otadata/fast
+
+#=============================================================================
+# Target rules for targets named erase_otadata
+
+# Build rule for target.
+erase_otadata: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 erase_otadata
+.PHONY : erase_otadata
+
+# fast build rule for target.
+erase_otadata/fast:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/erase_otadata.dir/build.make esp-idf/app_update/CMakeFiles/erase_otadata.dir/build
+.PHONY : erase_otadata/fast
+
+#=============================================================================
+# Target rules for targets named otadata-flash
+
+# Build rule for target.
+otadata-flash: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 otadata-flash
+.PHONY : otadata-flash
+
+# fast build rule for target.
+otadata-flash/fast:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/otadata-flash.dir/build.make esp-idf/app_update/CMakeFiles/otadata-flash.dir/build
+.PHONY : otadata-flash/fast
+
+#=============================================================================
+# Target rules for targets named encrypted-otadata-flash
+
+# Build rule for target.
+encrypted-otadata-flash: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 encrypted-otadata-flash
+.PHONY : encrypted-otadata-flash
+
+# fast build rule for target.
+encrypted-otadata-flash/fast:
+	$(MAKE) $(MAKESILENT) -f esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/build.make esp-idf/app_update/CMakeFiles/encrypted-otadata-flash.dir/build
+.PHONY : encrypted-otadata-flash/fast
+
+#=============================================================================
 # Target rules for targets named __idf_esp_partition
 
 # Build rule for target.
@@ -2062,6 +2153,7 @@ help:
 	@echo "... app"
 	@echo "... app-flash"
 	@echo "... app_check_size"
+	@echo "... blank_ota_data"
 	@echo "... bootloader"
 	@echo "... bootloader-flash"
 	@echo "... confserver"
@@ -2077,8 +2169,11 @@ help:
 	@echo "... encrypted-app-flash"
 	@echo "... encrypted-bootloader-flash"
 	@echo "... encrypted-flash"
+	@echo "... encrypted-otadata-flash"
 	@echo "... encrypted-partition-table-flash"
+	@echo "... erase-otadata"
 	@echo "... erase_flash"
+	@echo "... erase_otadata"
 	@echo "... flash"
 	@echo "... gen_project_binary"
 	@echo "... lib"
@@ -2086,11 +2181,14 @@ help:
 	@echo "... menuconfig"
 	@echo "... merge-bin"
 	@echo "... monitor"
+	@echo "... otadata-flash"
 	@echo "... partition-table"
 	@echo "... partition-table-flash"
 	@echo "... partition_table"
 	@echo "... partition_table-flash"
 	@echo "... partition_table_bin"
+	@echo "... read-otadata"
+	@echo "... read_otadata"
 	@echo "... save-defconfig"
 	@echo "... sections.ld.in"
 	@echo "... show-efuse-table"

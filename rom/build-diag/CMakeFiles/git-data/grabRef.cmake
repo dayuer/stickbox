@@ -18,7 +18,7 @@ set(HEAD_HASH)
 file(READ "/Users/liyuqing/sproot/esp-airprint-T13b/rom/build-diag/CMakeFiles/git-data/HEAD" HEAD_CONTENTS LIMIT 1024)
 
 string(STRIP "${HEAD_CONTENTS}" HEAD_CONTENTS)
-set(GIT_DIR "/Users/liyuqing/sproot/esp-airprint/.git/worktrees/esp-airprint-T13b")
+set(GIT_DIR "/Users/liyuqing/esp/esp-idf-v5.5/.git")
 # handle git-worktree
 if(EXISTS "${GIT_DIR}/commondir")
 	file(READ "${GIT_DIR}/commondir" GIT_DIR_NEW LIMIT 1024)

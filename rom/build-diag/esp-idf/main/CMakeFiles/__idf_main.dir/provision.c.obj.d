@@ -203,4 +203,5 @@ esp-idf/main/CMakeFiles/__idf_main.dir/provision.c.obj: \
  /Users/liyuqing/esp/esp-idf-v5.5/components/lwip/lwip/src/include/lwip/errno.h \
  /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/provision.h \
  /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/portal_html.h \
- /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/lcd_ui.h
+ /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/lcd_ui.h \
+ /Users/liyuqing/sproot/esp-airprint-T13b/rom/main/cloud_creds.h
