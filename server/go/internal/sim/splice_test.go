@@ -27,7 +27,7 @@ func realBundle(t *testing.T) *frame.Bundle {
 		},
 		LastUpdate: now.Add(-2 * time.Minute),
 	}
-	b, err := frame.Build(rr, snap)
+	b, err := frame.Build(render.Quota{R: rr}, snap)
 	if err != nil {
 		t.Fatal(err)
 	}

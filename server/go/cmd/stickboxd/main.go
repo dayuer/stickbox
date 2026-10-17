@@ -106,7 +106,7 @@ func serve(cfg *config.Config) error {
 		source.NewClaude(api.Usage(), cfg.DefaultTZ),
 		source.NewSales(api.Sales(), cfg.DefaultTZ),
 	)
-	fs, err := frames.New(cfg.Root, st, src, br, frames.RenderBuilder{R: rr}, frames.Options{
+	fs, err := frames.New(cfg.Root, st, src, br, frames.ThemeBuilder{T: render.Quota{R: rr}}, frames.Options{
 		CacheMaxBytes:  cfg.FrameCacheMaxBytes,
 		MemoryMaxBytes: cfg.FrameMemoryMaxBytes,
 		BackfillPerSec: cfg.BackfillPerSec,

@@ -13,6 +13,7 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/jpegrestart"
 	"github.com/dayuer/stickbox/server/go/internal/render"
 	"github.com/dayuer/stickbox/server/go/internal/source"
+	"github.com/dayuer/stickbox/server/go/internal/theme"
 )
 
 var testNow = time.Date(2026, 10, 17, 12, 47, 0, 0, time.FixedZone("CST", 8*3600))
@@ -67,10 +68,11 @@ func TestSpliceMatchesFull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	th := render.Quota{R: rr}
 	for _, st := range states {
 		t.Run(st.name, func(t *testing.T) {
 			snap := snapshot(st, testNow)
-			b, err := Build(rr, snap)
+			b, err := Build(th, snap)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -78,7 +80,7 @@ func TestSpliceMatchesFull(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			full, err := jpegrestart.Encode(rr.FullImage(snap), jpegrestart.Options{
+			full, err := jpegrestart.Encode(th.FullImage(snap), jpegrestart.Options{
 				Quality: Quality, RestartInterval: DRI,
 			})
 			if err != nil {
@@ -99,8 +101,9 @@ func TestSpliceArbitraryClock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	th := render.Quota{R: rr}
 	snap := snapshot(states[0], testNow)
-	b, err := Build(rr, snap)
+	b, err := Build(th, snap)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,8 +115,9 @@ func TestSpliceArbitraryClock(t *testing.T) {
 		got := decodeJPEG(t, spliced)
 
 		clockNow := time.Date(2026, 10, 17, hm[0], hm[1], 0, 0, testNow.Location())
-		want := decodeJPEG(t, encodeFull(t, rr, snapshot(states[0], clockNow)))
-		band := image.Rect(0, render.ClockBandRow0*16, Width, render.ClockBandRow1*16)
+		want := decodeJPEG(t, encodeFull(t, th, snapshot(states[0], clockNow)))
+		g := th.Geometry()
+		band := image.Rect(0, g.BandRow0*16, Width, g.BandRow1*16)
 		if diff := maxDiff(got, want, band); diff != 0 {
 			t.Errorf("%02d:%02d: 时钟带最大像素差 %d", hm[0], hm[1], diff)
 		}
@@ -125,8 +129,9 @@ func TestBundleFitsSlot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	th := render.Quota{R: rr}
 	for _, st := range states {
-		b, err := Build(rr, snapshot(st, testNow))
+		b, err := Build(th, snapshot(st, testNow))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -184,7 +189,8 @@ func TestSpliceDecodesWithLibjpeg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := Build(rr, snapshot(states[0], testNow))
+	th := render.Quota{R: rr}
+	b, err := Build(th, snapshot(states[0], testNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,9 +227,9 @@ func TestValidateBandSize(t *testing.T) {
 	}
 }
 
-func encodeFull(t *testing.T, rr *render.Renderer, s source.Snapshot) []byte {
+func encodeFull(t *testing.T, th theme.Theme, s source.Snapshot) []byte {
 	t.Helper()
-	res, err := jpegrestart.Encode(rr.FullImage(s), jpegrestart.Options{
+	res, err := jpegrestart.Encode(th.FullImage(s), jpegrestart.Options{
 		Quality: Quality, RestartInterval: DRI,
 	})
 	if err != nil {

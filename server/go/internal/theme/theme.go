@@ -120,6 +120,10 @@ type Theme interface {
 	Geometry() Geometry
 	// BaseImage 是写进 flash 的底帧：四张数字卡片留空，由设备换入字形。
 	BaseImage(source.Snapshot) *image.RGBA
+	// FullImage 是带当前数字的完整画面。两个用处：预览，以及作为
+	// 「设备拼出来的帧必须等于整帧渲染」那条对照测试的基准——每个主题
+	// 都得过这一条，否则卡片位置和底帧就对不上了。
+	FullImage(source.Snapshot) *image.RGBA
 	// CardTile 是单张卡片（底 + 数字），用于字形图集。
 	// 尺寸必须和 Geometry().Slots 的 W/H 一致。
 	CardTile(digit byte) *image.RGBA

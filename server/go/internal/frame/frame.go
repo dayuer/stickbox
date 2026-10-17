@@ -17,18 +17,18 @@ import (
 
 	"github.com/dayuer/stickbox/server/go/internal/jpegrestart"
 	"github.com/dayuer/stickbox/server/go/internal/metrics"
-	"github.com/dayuer/stickbox/server/go/internal/render"
 	"github.com/dayuer/stickbox/server/go/internal/source"
+	"github.com/dayuer/stickbox/server/go/internal/theme"
 )
 
 const (
 	Version         = 1
 	Width           = 1920
 	Height          = 1080
-	MCUCols         = render.ClockMCUCols
+	MCUCols         = theme.MCUCols
 	MCURows         = (Height + 15) / 16
-	DRI             = render.ClockDRI
-	CardRows        = render.ClockCardRows
+	DRI             = theme.DRI
+	CardRows        = theme.CardRows
 	intervalsPerRow = MCUCols / DRI
 	// Quality 是底帧与字形图集的 JPEG 质量。q=82 时底帧约 181KB、
 	// 图集约 32KB，连同索引仍在 256KB 槽位内；再高会顶到槽位上限。
@@ -102,9 +102,9 @@ type Bundle struct {
 
 // Build 渲染底帧、编码字形图集并生成索引。
 // 指标在包装层观测：耗时与失败、帧包总字节数。
-func Build(r *render.Renderer, s source.Snapshot) (*Bundle, error) {
+func Build(th theme.Theme, s source.Snapshot) (*Bundle, error) {
 	start := time.Now()
-	b, err := build(r, s)
+	b, err := build(th, s)
 	metrics.ObserveRender(time.Since(start), err == nil)
 	if err == nil {
 		if meta, mErr := b.MetaJSON(); mErr == nil {
@@ -114,8 +114,13 @@ func Build(r *render.Renderer, s source.Snapshot) (*Bundle, error) {
 	return b, err
 }
 
-func build(r *render.Renderer, s source.Snapshot) (*Bundle, error) {
-	baseJPEG, err := jpegrestart.Encode(r.BaseImage(s), jpegrestart.Options{
+func build(th theme.Theme, s source.Snapshot) (*Bundle, error) {
+	g := th.Geometry()
+	// 几何错了不会在这里炸，只会在电视上显示成错位的数字——先拦住。
+	if err := g.Validate(); err != nil {
+		return nil, err
+	}
+	baseJPEG, err := jpegrestart.Encode(th.BaseImage(s), jpegrestart.Options{
 		Quality: Quality, RestartInterval: DRI,
 	})
 	if err != nil {
@@ -133,11 +138,11 @@ func build(r *render.Renderer, s source.Snapshot) (*Bundle, error) {
 	b.Meta.JPEG.DRI = DRI
 	b.Meta.JPEG.MCUCols = MCUCols
 	b.Meta.JPEG.MCURows = MCURows
-	b.Meta.Band.Rows = [2]int{render.ClockBandRow0, render.ClockBandRow1}
+	b.Meta.Band.Rows = [2]int{g.BandRow0, g.BandRow1}
 
 	// 时钟带：从第 r0 行第 0 个 interval 到第 r1 行最后一个 interval。
-	bandFirst := baseJPEG.MCUs[render.ClockBandRow0*MCUCols]
-	last := baseJPEG.MCUs[render.ClockBandRow1*MCUCols-1]
+	bandFirst := baseJPEG.MCUs[g.BandRow0*MCUCols]
+	last := baseJPEG.MCUs[g.BandRow1*MCUCols-1]
 	b.Meta.Band.Run = Run{
 		Off: bandFirst.Offset,
 		Len: last.Offset + last.Length - bandFirst.Offset,
@@ -145,19 +150,19 @@ func build(r *render.Renderer, s source.Snapshot) (*Bundle, error) {
 
 	// 每行只取时钟列范围（col 72..112，5 个 interval），给设备按行拼接用。
 	for row := 0; row < CardRows; row++ {
-		baseRow := (render.ClockBandRow0 + row) * MCUCols
-		first := baseJPEG.MCUs[baseRow+render.ClockSlots[0].MCUCol]
-		lastMCU := baseJPEG.MCUs[baseRow+render.ClockSlots[3].MCUCol+DRI-1]
+		baseRow := (g.BandRow0 + row) * MCUCols
+		first := baseJPEG.MCUs[baseRow+g.Slots[0].MCUCol]
+		lastMCU := baseJPEG.MCUs[baseRow+g.Slots[theme.NumSlots-1].MCUCol+g.Slots[theme.NumSlots-1].W/16-1]
 		b.Meta.Band.RowRuns[row] = Run{
 			Off: first.Offset,
 			Len: lastMCU.Offset + lastMCU.Length - first.Offset,
 		}
 	}
 
-	for i, cs := range render.ClockSlots {
+	for i, cs := range g.Slots {
 		slot := Slot{X: cs.X, Y: cs.Y, W: cs.W, H: cs.H, MCUCol: cs.MCUCol}
 		for row := 0; row < CardRows; row++ {
-			baseRow := (render.ClockBandRow0 + row) * MCUCols
+			baseRow := (g.BandRow0 + row) * MCUCols
 			first := baseJPEG.MCUs[baseRow+cs.MCUCol]
 			lastMCU := baseJPEG.MCUs[baseRow+cs.MCUCol+DRI-1]
 			slot.Runs[row] = Run{
@@ -171,7 +176,7 @@ func build(r *render.Renderer, s source.Snapshot) (*Bundle, error) {
 	// 字形图集：每个数字一块 128×192，按 DRI=8 编成 12 段。
 	var atlas []byte
 	for d := 0; d < 10; d++ {
-		res, err := jpegrestart.Encode(r.CardTile(byte('0'+d)), jpegrestart.Options{
+		res, err := jpegrestart.Encode(th.CardTile(byte('0'+d)), jpegrestart.Options{
 			Quality: Quality, RestartInterval: DRI, FinalRST: true,
 		})
 		if err != nil {
@@ -277,7 +282,9 @@ func (b *Bundle) Splice(hour, minute int) ([]byte, error) {
 				seg[len(seg)-1] < 0xD0 || seg[len(seg)-1] > 0xD7 {
 				return nil, fmt.Errorf("frame: 段尾不是 RSTn slot=%d row=%d", slot, row)
 			}
-			interval := (render.ClockBandRow0+row)*intervalsPerRow +
+			// 带起始行从 meta 读，不从主题读：拼接只该依赖帧包自己描述的
+			// 几何，这样服务端和设备走的是同一份数。
+			interval := (b.Meta.Band.Rows[0]+row)*intervalsPerRow +
 				b.Meta.Slots[slot].MCUCol/DRI
 			seg[len(seg)-1] = 0xD0 + byte(interval&7)
 

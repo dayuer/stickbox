@@ -53,7 +53,7 @@ func TestGoldenFrames(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, p := range previews {
-		frame, err := rr.Render(snapshot(p))
+		frame, err := EncodeFrame(Quota{R: rr}.FullImage(snapshot(p)))
 		if err != nil {
 			t.Fatalf("%s: %v", p.name, err)
 		}
@@ -147,7 +147,7 @@ func BenchmarkRender(b *testing.B) {
 	s := snapshot(previews[0])
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := rr.Render(s); err != nil {
+		if _, err := EncodeFrame(Quota{R: rr}.FullImage(s)); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -158,7 +158,7 @@ func TestGoldenFrameIsBaselineJPEG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	frame, err := rr.Render(snapshot(previews[0]))
+	frame, err := EncodeFrame(Quota{R: rr}.FullImage(snapshot(previews[0])))
 	if err != nil {
 		t.Fatal(err)
 	}

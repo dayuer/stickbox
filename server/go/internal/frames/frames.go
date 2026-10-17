@@ -27,9 +27,9 @@ import (
 
 	"github.com/dayuer/stickbox/server/go/internal/frame"
 	"github.com/dayuer/stickbox/server/go/internal/metrics"
-	"github.com/dayuer/stickbox/server/go/internal/render"
 	"github.com/dayuer/stickbox/server/go/internal/source"
 	"github.com/dayuer/stickbox/server/go/internal/store"
+	"github.com/dayuer/stickbox/server/go/internal/theme"
 )
 
 const (
@@ -79,11 +79,14 @@ type Builder interface {
 	Build(source.Snapshot) (*frame.Bundle, error)
 }
 
-// RenderBuilder 把 T13a 的渲染器接到帧服务上。
-type RenderBuilder struct{ R *render.Renderer }
+// ThemeBuilder 把一个主题接到帧服务上。
+//
+// 现在一个服务只接一个主题；播放列表轮播要等帧服务能按主题存多份帧包，
+// 那时这里会变成「一组主题」。
+type ThemeBuilder struct{ T theme.Theme }
 
-func (b RenderBuilder) Build(s source.Snapshot) (*frame.Bundle, error) {
-	return frame.Build(b.R, s)
+func (b ThemeBuilder) Build(s source.Snapshot) (*frame.Bundle, error) {
+	return frame.Build(b.T, s)
 }
 
 type Options struct {

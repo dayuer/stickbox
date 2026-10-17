@@ -98,7 +98,7 @@ func startServerAt(t *testing.T, dir string) (*env, func()) {
 	fs, err := frames.New(cfg.Root, st, source.NewComposite(
 		source.NewClaude(api.Usage(), "UTC"),
 		source.NewSales(api.Sales(), "UTC"),
-	), br, frames.RenderBuilder{R: rr}, frames.Options{
+	), br, frames.ThemeBuilder{T: render.Quota{R: rr}}, frames.Options{
 		Debounce:          100 * time.Millisecond, // 测试里缩短防抖
 		RenderConcurrency: 1,
 		BackfillPerSec:    100,

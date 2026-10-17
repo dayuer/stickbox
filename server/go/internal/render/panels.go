@@ -2,6 +2,7 @@ package render
 
 import (
 	"fmt"
+	"github.com/dayuer/stickbox/server/go/internal/theme"
 	"image"
 	"image/color"
 	"math"
@@ -11,15 +12,16 @@ import (
 
 // ---- 翻页时钟 ----
 
-func (r *renderer) drawClock(dst *image.RGBA, now time.Time, drawDigits bool) {
+func (r *renderer) drawClock(dst *image.RGBA, g theme.Geometry, now time.Time, drawDigits bool) {
 	const px, py, pw, ph = 1134, 48, 714, 222
 	fillRect(dst, px, py, pw, ph, colClockBG)
 	rectOutline(dst, px, py, pw, ph, colFrame)
 	cornerMarks(dst, px, py, pw, ph, colAccent)
 
+	// 坐标只有一份来源：几何。画在哪、告诉设备去哪换，必须是同一组数。
 	digits := fmt.Sprintf("%02d%02d", now.Hour(), now.Minute())
-	for i, x := range clockCardX {
-		r.drawClockCard(dst, x, clockCardY, clockCardW, clockCardH, digits[i:i+1], drawDigits)
+	for i, sl := range g.Slots {
+		r.drawClockCard(dst, sl.X, sl.Y, sl.W, sl.H, digits[i:i+1], drawDigits)
 	}
 
 	// 冒号常亮：帧每分钟一换，不做秒级闪烁。
@@ -28,17 +30,12 @@ func (r *renderer) drawClock(dst *image.RGBA, now time.Time, drawDigits bool) {
 	fillRect(dst, cx, 176, 14, 14, colInk)
 }
 
-// 时钟卡片必须落在 16px 网格上：T13b 的 D 方案按 MCU 整块替换数字。
+// 卡片尺寸与位置见 theme_quota.go 的 quotaGeometry；这里只剩画图用的装饰量。
 const (
-	clockCardW    = 128
-	clockCardH    = 192
 	clockCardGap  = 6 // 卡片右缘留出的黑缝，视觉上分隔两张卡
-	clockCardY    = 64
 	clockColonX   = 1408
 	clockColonGap = 128
 )
-
-var clockCardX = [4]int{1152, 1280, 1536, 1664}
 
 func (r *renderer) drawClockCard(dst *image.RGBA, x, y, w, h int, digit string, drawDigit bool) {
 	inner := w - clockCardGap
@@ -232,27 +229,3 @@ func splitRuns(s string, ascii, cjk fontKind) []textRun {
 	flush()
 	return out
 }
-
-// ClockSlot 是一张数字卡片在画布上的位置，以及它起始的 MCU 列。
-type ClockSlot struct {
-	X, Y, W, H int
-	MCUCol     int
-}
-
-// ClockSlots 对 T13b 的 D 方案公开四张卡片的位置。卡片宽 8 个 MCU、
-// 高 12 个 MCU，起始列都是 8 的整数倍（DRI=8 的 restart 边界）。
-var ClockSlots = [4]ClockSlot{
-	{1152, 64, 128, 192, 72},
-	{1280, 64, 128, 192, 80},
-	{1536, 64, 128, 192, 96},
-	{1664, 64, 128, 192, 104},
-}
-
-// 时钟带：第 4..15 MCU 行（y 64..256），每条 restart 区间 8 个 MCU。
-const (
-	ClockBandRow0 = 4
-	ClockBandRow1 = 16
-	ClockMCUCols  = 120
-	ClockDRI      = 8
-	ClockCardRows = 12
-)
