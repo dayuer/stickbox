@@ -8,7 +8,7 @@ import (
 
 func newStore(t *testing.T) *store.Store {
 	t.Helper()
-	st, err := store.Open(t.TempDir() + "/jobs.db")
+	st, err := store.Open(t.TempDir() + "/test.db")
 	if err != nil {
 		t.Fatal(err)
 	}

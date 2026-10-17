@@ -7,7 +7,6 @@ package httpapi
 import (
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
@@ -16,7 +15,6 @@ import (
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/config"
-	"github.com/dayuer/stickbox/server/go/internal/device"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
 	"github.com/dayuer/stickbox/server/go/internal/store"
 	"github.com/dayuer/stickbox/server/go/internal/usage"
@@ -27,9 +25,8 @@ type Invalidator interface {
 	Invalidate(userID string)
 }
 
-// Publisher 是 httpapi 对 MQTT 的窄依赖：下发怪癖档案、推 Claude 用量。
+// Publisher 是 httpapi 对 MQTT 的窄依赖：推 Claude 用量。
 type Publisher interface {
-	PublishProfile(dev string, profile []byte) error
 	PublishUsage(dev string, payload []byte) error
 }
 
@@ -68,13 +65,6 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/devices", a.requireApp(a.handleDevices))
 	mux.Handle("POST /api/device/enroll", a.requireApp(a.handleEnroll))
 	mux.Handle("POST /api/device/{dev}/unbind", a.requireApp(a.handleUnbind))
-	mux.Handle("POST /api/print", a.requireApp(a.handlePrint))
-	mux.Handle("GET /api/device/{dev}/render-profile", a.requireApp(a.handleRenderProfile))
-	mux.Handle("GET /api/device/{dev}/printers", a.requireApp(a.handlePrinters))
-	mux.Handle("GET /api/device/{dev}/printer", a.requireApp(a.handlePrinter))
-	mux.Handle("GET /api/device/{dev}/tests", a.requireApp(a.handleTests))
-	mux.Handle("POST /api/device/{dev}/tests/{test}/start", a.requireApp(a.handleTestStart))
-	mux.Handle("POST /api/tests/{run_id}/answer", a.requireApp(a.handleTestAnswer))
 
 	mux.Handle("GET /api/usage", a.requireApp(a.handleUsageGet))
 	mux.Handle("GET /api/agents", a.requireApp(a.handleAgents))
@@ -84,9 +74,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/usage", a.requireAgent(a.handleUsagePost))
 	mux.Handle("POST /api/agent/logout", a.requireAgent(a.handleAgentLogout))
 
-	// device 角色
-	mux.Handle("GET /api/job/{id}/data", a.requireDevice(a.handleJobData))
-	mux.Handle("POST /api/device/{dev}/ident", a.requireDevice(a.handleIdent))
+	// device 角色：心跳走 MQTT，HTTP 只保留状态查询
 
 	// 两种角色都行
 	mux.Handle("GET /api/status", a.requireAny(a.handleStatus))
@@ -208,9 +196,4 @@ func clientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
-}
-
-func (a *API) devMsg(dev string, m device.Msg) {
-	slog.Debug("投递 actor 消息", "dev", dev, "kind", m.Kind)
-	a.reg.Send(dev, m)
 }

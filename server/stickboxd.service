@@ -1,5 +1,5 @@
 [Unit]
-Description=StickBox 云打印服务（Go）
+Description=StickBox 服务（Go）
 After=network-online.target
 Wants=network-online.target
 

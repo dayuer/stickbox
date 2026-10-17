@@ -31,12 +31,6 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if c.MQTTAddr != ":8883" {
 		t.Errorf("MQTTAddr = %q，期望默认 :8883", c.MQTTAddr)
 	}
-	if c.JobRetainHours != 24 {
-		t.Errorf("JobRetainHours = %d，期望默认 24", c.JobRetainHours)
-	}
-	if c.JobRetainPerDevice != 50 {
-		t.Errorf("JobRetainPerDevice = %d，期望默认 50", c.JobRetainPerDevice)
-	}
 }
 
 func TestLoadRejectsMissingRequired(t *testing.T) {
@@ -56,12 +50,6 @@ func TestDerivedPaths(t *testing.T) {
 	c, err := Load(write(t, `{"cert_dir":"/c","root":"/srv/ap","phone_pepper":"p","phone_key":"k"}`))
 	if err != nil {
 		t.Fatal(err)
-	}
-	if c.JobsDir() != "/srv/ap/jobs" {
-		t.Errorf("JobsDir = %q", c.JobsDir())
-	}
-	if c.IdentsDir() != "/srv/ap/idents" {
-		t.Errorf("IdentsDir = %q", c.IdentsDir())
 	}
 	if c.DBPath() != "/srv/ap/jobs.db" {
 		t.Errorf("DBPath = %q", c.DBPath())

@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
-	"path/filepath"
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 )
@@ -111,15 +109,11 @@ func (a *API) handleLogout(w http.ResponseWriter, r *http.Request, id auth.Ident
 // handleAccountDelete 立即执行，不设冷静期——那需要额外的状态机和定时任务，
 // 而这里没有值得挽回的东西。
 func (a *API) handleAccountDelete(w http.ResponseWriter, r *http.Request, id auth.Identity) {
-	jobIDs, err := a.store.DeleteUser(id.UserID)
-	if err != nil {
+	if err := a.store.DeleteUser(id.UserID); err != nil {
 		fail(w, 500, "server error", "")
 		return
 	}
-	for _, jid := range jobIDs {
-		os.Remove(filepath.Join(a.cfg.JobsDir(), jid+".urf"))
-	}
 	a.v.InvalidateAll() // 该用户的所有 token 都失效了
 	a.mem.Invalidate(id.UserID)
-	writeJSON(w, 200, map[string]any{"ok": 1, "jobs_deleted": len(jobIDs)})
+	writeJSON(w, 200, map[string]int{"ok": 1})
 }

@@ -118,11 +118,14 @@ func TestRoleIsolation(t *testing.T) {
 	appTok := login(t, h, dep, "13800008888")
 	devKey := enroll(t, h, appTok, "f412fa87c9e0")
 
-	if rr := get(h, "/api/job/xxx/data", bearer(appTok)); rr.Code != 401 {
-		t.Errorf("app 令牌走取件端点 = %d，期望 401", rr.Code)
+	if rr := get(h, "/api/agents", bearer(devKey)); rr.Code != 401 {
+		t.Errorf("device 密钥走 agent 列表 = %d，期望 401", rr.Code)
 	}
 	if rr := post(h, "/api/device/enroll", `{"dev":"aaaaaaaaaaaa"}`, bearer(devKey)); rr.Code != 401 {
 		t.Errorf("device 密钥走 enroll = %d，期望 401", rr.Code)
+	}
+	if rr := post(h, "/api/usage", `{}`, bearer(appTok)); rr.Code != 401 {
+		t.Errorf("app 令牌走用量上报 = %d，期望 401", rr.Code)
 	}
 }
 

@@ -4,103 +4,83 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/dayuer/stickbox/server/go/internal/device"
-	"github.com/dayuer/stickbox/server/go/internal/store"
 )
 
-type nopPub struct {
-	mu sync.Mutex
-	n  int
-}
-
-func (p *nopPub) PublishJob(dev, job string, size int64, hooks []byte) error {
-	p.mu.Lock()
-	p.n++
-	p.mu.Unlock()
-	return nil
-}
-
-func newReg(t *testing.T, idle time.Duration) (*Registry, *store.Store, *nopPub) {
+func newReg(t *testing.T, idle time.Duration, now func() time.Time) (*Registry, chan time.Time) {
 	t.Helper()
-	st, err := store.Open(t.TempDir() + "/jobs.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
-	pub := &nopPub{}
-	r := New(st, pub, device.Options{
-		JobTimeout:  180 * time.Second,
-		IdleTimeout: idle,
-	})
+	tick := make(chan time.Time)
+	r := New(Options{IdleTimeout: idle, Ticker: tick, Now: now})
 	t.Cleanup(r.Shutdown)
-	return r, st, pub
+	return r, tick
 }
 
-// 第一条消息就该把 actor 建起来。
-func TestSendCreatesActor(t *testing.T) {
-	r, _, _ := newReg(t, time.Hour)
-	r.Send("d1", device.Msg{Kind: device.KindHeartbeat, Serial: "PA"})
+func TestSeenMarksDeviceOnline(t *testing.T) {
+	now := time.Unix(1000, 0)
+	r, _ := newReg(t, time.Hour, func() time.Time { return now })
+
+	r.Seen("d1")
+	if !r.IsOnline("d1") {
+		t.Fatal("心跳后设备不在线")
+	}
 	if got := r.Online(); len(got) != 1 || got[0] != "d1" {
 		t.Fatalf("在线列表 = %v，期望 [d1]", got)
 	}
 }
 
-// 离线后 actor 自己退出并被摘除，不能泄漏 goroutine。
-func TestActorExitsAndIsRemoved(t *testing.T) {
-	r, _, _ := newReg(t, 50*time.Millisecond)
-	r.Send("d1", device.Msg{Kind: device.KindHeartbeat, Serial: "PA"})
+func TestIdleDeviceExpires(t *testing.T) {
+	now := time.Unix(1000, 0)
+	r, tick := newReg(t, 120*time.Second, func() time.Time { return now })
+	r.Seen("d1")
+
+	now = now.Add(121 * time.Second)
+	tick <- now
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(r.Online()) == 0 {
+		if !r.IsOnline("d1") {
 			return
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("超过 IdleTimeout 后 actor 仍在 registry 里")
+	t.Fatal("超过 IdleTimeout 后设备仍在线")
 }
 
-// 摘除后再来消息要能重建，且队列还在。
-func TestActorRebuildsAfterExit(t *testing.T) {
-	r, st, _ := newReg(t, 50*time.Millisecond)
-	st.InsertJob(store.Job{ID: "j1", Dev: "d1", Serial: "PA", State: store.StateQueued})
+func TestHeartbeatRefreshesDevice(t *testing.T) {
+	now := time.Unix(1000, 0)
+	r, tick := newReg(t, 120*time.Second, func() time.Time { return now })
+	r.Seen("d1")
 
-	r.Send("d1", device.Msg{Kind: device.KindHeartbeat, Serial: "PA"})
-	deadline := time.Now().Add(5 * time.Second)
-	for len(r.Online()) > 0 && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if _, ok, _ := st.GetJob("j1"); !ok {
-		t.Fatal("actor 退出把作业带走了")
-	}
-	r.Send("d1", device.Msg{Kind: device.KindHeartbeat, Serial: "PA"})
-	if len(r.Online()) != 1 {
-		t.Fatal("actor 没能重建")
+	now = now.Add(100 * time.Second)
+	r.Seen("d1") // 第二拍
+	now = now.Add(100 * time.Second)
+	tick <- now // 距第一拍 200 秒，距第二拍 100 秒
+	time.Sleep(50 * time.Millisecond)
+	if !r.IsOnline("d1") {
+		t.Fatal("设备持续心跳却被判离线")
 	}
 }
 
-func TestConcurrentSendCreatesOneActor(t *testing.T) {
-	r, _, _ := newReg(t, time.Hour)
+func TestConcurrentSeen(t *testing.T) {
+	r, _ := newReg(t, time.Hour, time.Now)
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r.Send("d1", device.Msg{Kind: device.KindHeartbeat, Serial: "PA"})
+			r.Seen("d1")
 		}()
 	}
 	wg.Wait()
 	if len(r.Online()) != 1 {
-		t.Errorf("并发建了 %d 个 actor，期望 1 个", len(r.Online()))
+		t.Errorf("并发心跳记出了 %d 台设备", len(r.Online()))
 	}
 }
 
 func TestShutdownIsIdempotent(t *testing.T) {
-	r, _, _ := newReg(t, time.Hour)
-	r.Send("d1", device.Msg{Kind: device.KindHeartbeat, Serial: "PA"})
+	r, _ := newReg(t, time.Hour, time.Now)
+	r.Seen("d1")
 	r.Shutdown()
 	r.Shutdown() // 第二次不能 panic
-	if len(r.Online()) != 0 {
-		t.Errorf("关闭后仍有 %d 个 actor", len(r.Online()))
+	if len(r.Online()) != 1 {
+		t.Error("关闭后在线表不该被清空——关闭不改变已经观测到的事实")
 	}
 }

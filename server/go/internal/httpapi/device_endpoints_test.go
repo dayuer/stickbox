@@ -2,8 +2,6 @@ package httpapi
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -106,97 +104,6 @@ func TestUnbindReleasesDevice(t *testing.T) {
 	}
 }
 
-func writeIdent(t *testing.T, dep *testDeps, dev, body string) {
-	t.Helper()
-	dir := filepath.Join(dep.cfg.IdentsDir(), dev)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "latest.json"), []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestRenderProfileFromIdent(t *testing.T) {
-	h, dep := newTestAPI(t)
-	token := login(t, h, dep, "13800008888")
-	enroll(t, h, token, "f412fa87c9e0")
-	writeIdent(t, dep, "f412fa87c9e0",
-		`{"urf_caps":"CP1,RS600,V1.4,W8","serial":"CNB9K1P2X4"}`)
-
-	rr := get(h, "/api/device/f412fa87c9e0/render-profile", bearer(token))
-	if rr.Code != 200 {
-		t.Fatalf("render-profile = %d %s", rr.Code, rr.Body)
-	}
-	var out struct {
-		Serial string `json:"serial"`
-		DPI    int    `json:"dpi"`
-		Color  string `json:"color"`
-		Pages  map[string]struct {
-			W int `json:"w_px"`
-			H int `json:"h_px"`
-		} `json:"pages"`
-	}
-	json.Unmarshal(rr.Body.Bytes(), &out)
-	if out.DPI != 600 || out.Color != "gray8" {
-		t.Errorf("dpi=%d color=%q", out.DPI, out.Color)
-	}
-	// App 光栅前记下它，上传时用 X-Printer-Serial 带回来
-	if out.Serial != "CNB9K1P2X4" {
-		t.Errorf("serial = %q", out.Serial)
-	}
-	if a4 := out.Pages["a4"]; a4.W != 4962 || a4.H != 7014 {
-		t.Errorf("A4 = %dx%d", a4.W, a4.H)
-	}
-}
-
-// 没上报过 ident 就返回 404，App 不能用默认值蒙——尺寸蒙错就是废纸。
-func TestRenderProfile404WithoutIdent(t *testing.T) {
-	h, dep := newTestAPI(t)
-	token := login(t, h, dep, "13800008888")
-	enroll(t, h, token, "f412fa87c9e0")
-	if rr := get(h, "/api/device/f412fa87c9e0/render-profile", bearer(token)); rr.Code != 404 {
-		t.Errorf("= %d，期望 404", rr.Code)
-	}
-}
-
-func TestRenderProfileRejectsForeignDevice(t *testing.T) {
-	h, dep := newTestAPI(t)
-	token := login(t, h, dep, "13800008888")
-	if rr := get(h, "/api/device/aaaaaaaaaaaa/render-profile", bearer(token)); rr.Code != 403 {
-		t.Errorf("= %d，期望 403", rr.Code)
-	}
-}
-
-// 用户看不到排队数就会以为打印失败了。
-func TestPrintersListsQueuedPerPrinter(t *testing.T) {
-	h, dep := newTestAPI(t)
-	token := login(t, h, dep, "13800008888")
-	enroll(t, h, token, "f412fa87c9e0")
-	upload(h, token, "f412fa87c9e0", "PRINTER-A", "image/urf", urfBytes(1, 4962, 7014))
-	upload(h, token, "f412fa87c9e0", "PRINTER-B", "image/urf", urfBytes(1, 4962, 7014))
-	upload(h, token, "f412fa87c9e0", "PRINTER-B", "image/urf", urfBytes(1, 4962, 7014))
-
-	rr := get(h, "/api/device/f412fa87c9e0/printers", bearer(token))
-	if rr.Code != 200 {
-		t.Fatalf("= %d %s", rr.Code, rr.Body)
-	}
-	var out struct {
-		Printers []struct {
-			Serial     string `json:"serial"`
-			QueuedJobs int    `json:"queued_jobs"`
-		} `json:"printers"`
-	}
-	json.Unmarshal(rr.Body.Bytes(), &out)
-	got := map[string]int{}
-	for _, p := range out.Printers {
-		got[p.Serial] = p.QueuedJobs
-	}
-	if got["PRINTER-A"] != 1 || got["PRINTER-B"] != 2 {
-		t.Errorf("排队统计 = %+v，期望 A:1 B:2", got)
-	}
-}
-
 func TestStatusScopedToOwnDevice(t *testing.T) {
 	h, dep := newTestAPI(t)
 	token := login(t, h, dep, "13800008888")
@@ -211,6 +118,41 @@ func TestStatusScopedToOwnDevice(t *testing.T) {
 		"Authorization": "Bearer " + token, "X-Device": "aaaaaaaaaaaa"})
 	if rr.Code != 403 {
 		t.Errorf("查别人的设备 = %d，期望 403", rr.Code)
+	}
+}
+
+// 在线判据就是最近一次 MQTT 心跳；没发过心跳就是离线。
+func TestStatusReportsHeartbeatPresence(t *testing.T) {
+	h, dep := newTestAPI(t)
+	token := login(t, h, dep, "13800008888")
+	devKey := enroll(t, h, token, "f412fa87c9e0")
+
+	getStatus := func(tok string) bool {
+		rr := get(h, "/api/status", map[string]string{
+			"Authorization": "Bearer " + tok, "X-Device": "f412fa87c9e0"})
+		if rr.Code != 200 {
+			t.Fatalf("status = %d %s", rr.Code, rr.Body)
+		}
+		var out struct {
+			Device struct {
+				Online bool `json:"online"`
+			} `json:"device"`
+		}
+		json.Unmarshal(rr.Body.Bytes(), &out)
+		return out.Device.Online
+	}
+
+	if getStatus(token) {
+		t.Error("没发过心跳却显示在线")
+	}
+	dep.reg.Seen("f412fa87c9e0")
+	if !getStatus(token) {
+		t.Error("收到心跳后仍显示离线")
+	}
+	// 设备角色查自己，不依赖 X-Device
+	rr := get(h, "/api/status", bearer(devKey))
+	if rr.Code != 200 {
+		t.Fatalf("device 查状态 = %d %s", rr.Code, rr.Body)
 	}
 }
 

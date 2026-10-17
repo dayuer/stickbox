@@ -1,113 +1,109 @@
-// Package registry 管 devid → actor 的映射与 actor 的生死。
+// Package registry 记录哪些设备最近发过心跳。
 //
-// 一台设备一个 goroutine。actor 的状态全部私有，registry 只负责创建、
-// 路由消息、在它退出后摘除，以及 panic 时摘掉它。
+// 打印退役后这里不再有每设备 actor 和作业派发，只剩「在线」这一件事：
+// 设备在 printer/{dev}/status 上发心跳，收到就记下时间；超过 IdleTimeout
+// 没有心跳即判离线。所有状态由一把锁保护，一个后台 goroutine 负责过期。
 package registry
 
 import (
-	"log/slog"
 	"sync"
-
-	"github.com/dayuer/stickbox/server/go/internal/device"
-	"github.com/dayuer/stickbox/server/go/internal/store"
+	"time"
 )
 
+type Options struct {
+	// IdleTimeout 是多久没心跳就判离线，默认 120 秒。
+	// 设备保证状态一变 2 秒内推、没变也 30 秒一拍，连丢四拍才判离线。
+	IdleTimeout time.Duration
+	// Ticker 驱动过期检查。nil 时自建 1 秒 ticker；测试里可以手动喂。
+	Ticker <-chan time.Time
+	Now    func() time.Time
+}
+
 type Registry struct {
-	st   *store.Store
-	pub  device.Publisher
-	opts device.Options
-
-	mu    sync.RWMutex
-	items map[string]*device.Actor
-	stop  chan struct{}
-	wg    sync.WaitGroup
+	mu          sync.Mutex
+	lastSeen    map[string]time.Time
+	idleTimeout time.Duration
+	now         func() time.Time
+	stop        chan struct{}
+	done        chan struct{}
+	stopOnce    sync.Once
 }
 
-func New(st *store.Store, pub device.Publisher, opts device.Options) *Registry {
-	return &Registry{
-		st: st, pub: pub, opts: opts,
-		items: map[string]*device.Actor{},
-		stop:  make(chan struct{}),
+func New(o Options) *Registry {
+	if o.Now == nil {
+		o.Now = time.Now
+	}
+	if o.IdleTimeout == 0 {
+		o.IdleTimeout = 120 * time.Second
+	}
+	r := &Registry{
+		lastSeen:    map[string]time.Time{},
+		idleTimeout: o.IdleTimeout,
+		now:         o.Now,
+		stop:        make(chan struct{}),
+		done:        make(chan struct{}),
+	}
+	go r.run(o.Ticker)
+	return r
+}
+
+func (r *Registry) run(tick <-chan time.Time) {
+	defer close(r.done)
+	if tick == nil {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		tick = t.C
+	}
+	for {
+		select {
+		case <-r.stop:
+			return
+		case <-tick:
+			r.expire()
+		}
 	}
 }
 
-// Send 把消息投给该设备的 actor，没有就先建一个。
-func (r *Registry) Send(dev string, m device.Msg) {
-	if a := r.getOrCreate(dev); a != nil {
-		a.Send(m)
+// Seen 记下一次心跳。设备可能刚上线，也可能本来就在线。
+func (r *Registry) Seen(dev string) {
+	if dev == "" {
+		return
 	}
-}
-
-func (r *Registry) getOrCreate(dev string) *device.Actor {
-	r.mu.RLock()
-	a, ok := r.items[dev]
-	r.mu.RUnlock()
-	if ok {
-		return a
-	}
-
+	now := r.now()
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if a, ok := r.items[dev]; ok { // 并发下别人先建好了
-		return a
-	}
-	select {
-	case <-r.stop:
-		return nil
-	default:
-	}
-	a = device.New(dev, r.st, r.pub, r.opts)
-	r.items[dev] = a
-	r.wg.Add(1)
-	go r.run(dev, a)
-	return a
+	r.lastSeen[dev] = now
+	r.mu.Unlock()
 }
 
-// run 跑一个 actor，并在它退出或 panic 时把它摘掉。
-//
-// 不在这里自动重建：重建会立刻再收到同样的消息、再 panic 一次，成为忙循环。
-// 摘掉之后，下一条消息自然会建一个干净的 actor——那时状态是全新的。
-// inflight 作业由启动恢复和 180 秒超时兜底，不会永久卡住。
-func (r *Registry) run(dev string, a *device.Actor) {
-	defer r.wg.Done()
-	defer func() {
-		if v := recover(); v != nil {
-			slog.Error("actor panic，已摘除", "dev", dev, "panic", v)
+func (r *Registry) expire() {
+	cutoff := r.now().Add(-r.idleTimeout)
+	r.mu.Lock()
+	for dev, at := range r.lastSeen {
+		if at.Before(cutoff) {
+			delete(r.lastSeen, dev)
 		}
-		r.mu.Lock()
-		if cur, ok := r.items[dev]; ok && cur == a {
-			delete(r.items, dev)
-		}
-		r.mu.Unlock()
-	}()
-	a.Run(r.stop)
+	}
+	r.mu.Unlock()
 }
 
 func (r *Registry) Online() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make([]string, 0, len(r.items))
-	for d := range r.items {
-		out = append(out, d)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, 0, len(r.lastSeen))
+	for dev := range r.lastSeen {
+		out = append(out, dev)
 	}
 	return out
 }
 
-// Actor 取一个在线 actor，用于读它的当前状态（serial、面板状态）。
-// 不在线返回 nil。
-func (r *Registry) Actor(dev string) *device.Actor {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.items[dev]
+func (r *Registry) IsOnline(dev string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.lastSeen[dev]
+	return ok
 }
 
 func (r *Registry) Shutdown() {
-	r.mu.Lock()
-	select {
-	case <-r.stop:
-	default:
-		close(r.stop)
-	}
-	r.mu.Unlock()
-	r.wg.Wait()
+	r.stopOnce.Do(func() { close(r.stop) })
+	<-r.done
 }

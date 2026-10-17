@@ -18,7 +18,7 @@ func (f *fakeSender) Send(ctx context.Context, phone, code string) error {
 
 func newSMS(t *testing.T) (*SMS, *fakeSender, *time.Time) {
 	t.Helper()
-	st, err := store.Open(t.TempDir() + "/jobs.db")
+	st, err := store.Open(t.TempDir() + "/test.db")
 	if err != nil {
 		t.Fatal(err)
 	}

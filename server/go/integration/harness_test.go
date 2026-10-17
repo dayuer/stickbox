@@ -8,7 +8,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -27,7 +26,6 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/broker"
 	"github.com/dayuer/stickbox/server/go/internal/config"
-	"github.com/dayuer/stickbox/server/go/internal/device"
 	"github.com/dayuer/stickbox/server/go/internal/httpapi"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
 	"github.com/dayuer/stickbox/server/go/internal/store"
@@ -67,15 +65,7 @@ func startServerWithDevLogin(t *testing.T, devPhone, devCode string) *env {
 	}
 	writeSelfSigned(t, certDir)
 
-	cfg := &config.Config{
-		Root: dir, CertDir: certDir,
-		JobRetainHours: 24, JobRetainPerDevice: 50,
-	}
-	for _, d := range []string{cfg.JobsDir(), cfg.IdentsDir()} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
+	cfg := &config.Config{Root: dir, CertDir: certDir}
 	st, err := store.Open(cfg.DBPath())
 	if err != nil {
 		t.Fatal(err)
@@ -99,10 +89,7 @@ func startServerWithDevLogin(t *testing.T, devPhone, devCode string) *env {
 		t.Fatal(err)
 	}
 
-	pubShim := &publisherShim{}
-	reg := registry.New(st, pubShim, device.Options{
-		JobTimeout: 180 * time.Second, IdleTimeout: time.Hour,
-	})
+	reg := registry.New(registry.Options{IdleTimeout: time.Hour})
 	t.Cleanup(reg.Shutdown)
 
 	mqttAddr := freeAddr(t)
@@ -110,13 +97,13 @@ func startServerWithDevLogin(t *testing.T, devPhone, devCode string) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pubShim.b = br
 	if err := br.Serve(); err != nil { // 非阻塞：启动监听后立即返回
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { br.Close() })
 
 	api := httpapi.New(cfg, st, v, pb, smsSvc, reg, mem, br)
+	br.SetUsageResender(api.Usage())
 	ln, err := tls.Listen("tcp", freeAddr(t), reloader.Config())
 	if err != nil {
 		t.Fatal(err)
@@ -132,12 +119,6 @@ func startServerWithDevLogin(t *testing.T, devPhone, devCode string) *env {
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // 仅测试
 		}},
 	}
-}
-
-type publisherShim struct{ b *broker.Broker }
-
-func (p *publisherShim) PublishJob(dev, job string, size int64, hooks []byte) error {
-	return p.b.PublishJob(dev, job, size, hooks)
 }
 
 func freeAddr(t *testing.T) string {
@@ -199,22 +180,24 @@ func (e *env) req(method, path, body string, hdr map[string]string) (int, []byte
 	return resp.StatusCode, out
 }
 
-func (e *env) login(phone string) string {
+func (e *env) sendCode(phone string) string {
 	e.t.Helper()
 	if code, b := e.req("POST", "/api/auth/sms", `{"phone":"`+phone+`"}`,
 		map[string]string{"Content-Type": "application/json"}); code != 200 {
 		e.t.Fatalf("发码 = %d %s", code, b)
 	}
-	return e.verify(phone, e.sender.last)
+	return e.sender.last
+}
+
+func (e *env) login(phone string) string {
+	e.t.Helper()
+	return e.verify(phone, e.sendCode(phone))
 }
 
 // loginWithCode 用已知验证码登录，给固定手机号用。
 func (e *env) loginWithCode(phone, code string) string {
 	e.t.Helper()
-	if st, b := e.req("POST", "/api/auth/sms", `{"phone":"`+phone+`"}`,
-		map[string]string{"Content-Type": "application/json"}); st != 200 {
-		e.t.Fatalf("发码 = %d %s", st, b)
-	}
+	e.sendCode(phone)
 	return e.verify(phone, code)
 }
 
@@ -225,6 +208,29 @@ func (e *env) verify(phone, verifyCode string) string {
 		map[string]string{"Content-Type": "application/json"})
 	if code != 200 {
 		e.t.Fatalf("登录 = %d %s", code, b)
+	}
+	var out struct {
+		Token string `json:"token"`
+	}
+	json.Unmarshal(b, &out)
+	return out.Token
+}
+
+// agentLogin 为已有账号签发一把 agent 令牌。
+func (e *env) agentLogin(phone string) string {
+	e.t.Helper()
+	return e.agentLoginWithCode(phone, e.sendCode(phone))
+}
+
+// agentLoginWithCode 不再发码：调用方已经让 sms_codes 里有了这条记录。
+// 固定手机号旁路下，先调 sendCode 写入固定验证码，再传固定 code 即可。
+func (e *env) agentLoginWithCode(phone, verifyCode string) string {
+	e.t.Helper()
+	code, b := e.req("POST", "/api/agent/login",
+		fmt.Sprintf(`{"phone":"%s","code":"%s","name":"itest-mac"}`, phone, verifyCode),
+		map[string]string{"Content-Type": "application/json"})
+	if code != 200 {
+		e.t.Fatalf("agent 登录 = %d %s", code, b)
 	}
 	var out struct {
 		Token string `json:"token"`
@@ -248,60 +254,23 @@ func (e *env) enroll(token, dev string) string {
 	return out.DeviceKey
 }
 
-func (e *env) upload(token, dev, serial string, body []byte) string {
+func (e *env) reportUsage(agentToken string, body []byte) {
 	e.t.Helper()
-	req, _ := http.NewRequest("POST", e.httpBase+"/api/print", strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "image/urf")
-	req.Header.Set("X-Device", dev)
-	req.Header.Set("X-Printer-Serial", serial)
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := e.client.Do(req)
-	if err != nil {
-		e.t.Fatal(err)
+	code, b := e.req("POST", "/api/usage", string(body),
+		map[string]string{"Content-Type": "application/json",
+			"Authorization": "Bearer " + agentToken})
+	if code != 200 {
+		e.t.Fatalf("上报用量 = %d %s", code, b)
 	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		e.t.Fatalf("上传 = %d %s", resp.StatusCode, b)
-	}
-	var out struct {
-		Job string `json:"job"`
-	}
-	json.Unmarshal(b, &out)
-	return out.Job
-}
-
-// waitJobState 轮询数据库，不用固定 sleep——那是 flaky 之源。
-func (e *env) waitJobState(jid, want string, d time.Duration) {
-	e.t.Helper()
-	deadline := time.Now().Add(d)
-	var last string
-	for time.Now().Before(deadline) {
-		j, ok, _ := e.store.GetJob(jid)
-		if ok {
-			last = j.State
-			if last == want {
-				return
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	e.t.Fatalf("作业 %s 状态停在 %q，期望 %q", jid, last, want)
 }
 
 // —— 设备侧（用 paho 当假固件）——
 
 type fakeDevice struct {
-	t        *testing.T
-	c        paho.Client
-	dev      string
-	jobs     chan jobSignal
-	profiles chan []byte
-}
-
-type jobSignal struct {
-	ID   string `json:"id"`
-	Size int64  `json:"size"`
+	t     *testing.T
+	c     paho.Client
+	dev   string
+	usage chan []byte
 }
 
 func (e *env) connectDevice(dev, key string) *fakeDevice {
@@ -323,21 +292,12 @@ func (e *env) tryConnectDevice(dev, key string) (*fakeDevice, error) {
 		SetConnectTimeout(5 * time.Second).
 		SetAutoReconnect(false)
 
-	fd := &fakeDevice{t: e.t, dev: dev,
-		jobs: make(chan jobSignal, 8), profiles: make(chan []byte, 8)}
+	fd := &fakeDevice{t: e.t, dev: dev, usage: make(chan []byte, 8)}
 	opts.SetDefaultPublishHandler(func(_ paho.Client, m paho.Message) {
-		payload := append([]byte(nil), m.Payload()...)
-		if strings.HasSuffix(m.Topic(), "/profile") {
+		if strings.HasSuffix(m.Topic(), "/usage") {
+			payload := append([]byte(nil), m.Payload()...)
 			select {
-			case fd.profiles <- payload:
-			default:
-			}
-			return
-		}
-		var js jobSignal
-		if json.Unmarshal(payload, &js) == nil {
-			select {
-			case fd.jobs <- js:
+			case fd.usage <- payload:
 			default:
 			}
 		}
@@ -349,11 +309,6 @@ func (e *env) tryConnectDevice(dev, key string) (*fakeDevice, error) {
 	}
 	fd.c = c
 	e.t.Cleanup(func() { c.Disconnect(100) })
-	for _, leaf := range []string{"/job", "/profile"} {
-		if err := fd.subscribe("printer/" + dev + leaf); err != nil {
-			return nil, err
-		}
-	}
 	return fd, nil
 }
 
@@ -379,45 +334,30 @@ func (d *fakeDevice) subscribe(topic string) error {
 	return nil
 }
 
-func (d *fakeDevice) heartbeat(state, job, serial string) {
+func (d *fakeDevice) subscribeUsage() error {
+	return d.subscribe("printer/" + d.dev + "/usage")
+}
+
+func (d *fakeDevice) disconnect() {
+	d.c.Disconnect(100)
+}
+
+func (d *fakeDevice) heartbeat(state string) {
 	d.t.Helper()
-	payload, _ := json.Marshal(map[string]any{
-		"dev": d.dev, "job": job, "state": state, "bytes": 0, "serial": serial,
-		"prn": map[string]any{"display": "Ready"},
-	})
+	payload, _ := json.Marshal(map[string]any{"dev": d.dev, "state": state})
 	tok := d.c.Publish("printer/"+d.dev+"/status", 1, false, payload)
 	if !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
 		d.t.Fatalf("心跳发送失败：%v", tok.Error())
 	}
 }
 
-func (d *fakeDevice) waitProfile(timeout time.Duration) []byte {
+func (d *fakeDevice) waitUsage(timeout time.Duration) []byte {
 	d.t.Helper()
 	select {
-	case b := <-d.profiles:
+	case b := <-d.usage:
 		return b
 	case <-time.After(timeout):
-		d.t.Fatal("没有收到怪癖档案")
+		d.t.Fatal("没有收到用量")
 		return nil
 	}
-}
-
-func (d *fakeDevice) waitJob(timeout time.Duration) jobSignal {
-	d.t.Helper()
-	select {
-	case js := <-d.jobs:
-		return js
-	case <-time.After(timeout):
-		d.t.Fatal("没有收到派发信令")
-		return jobSignal{}
-	}
-}
-
-func urfBytes(pages uint32, w, h uint32) []byte {
-	b := make([]byte, 12+32+512)
-	copy(b, "UNIRAST\x00")
-	binary.BigEndian.PutUint32(b[8:12], pages)
-	binary.BigEndian.PutUint32(b[24:28], w)
-	binary.BigEndian.PutUint32(b[28:32], h)
-	return b
 }

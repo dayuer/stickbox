@@ -1,7 +1,6 @@
 package broker
 
 import (
-	"encoding/json"
 	"log/slog"
 	"strings"
 
@@ -9,12 +8,11 @@ import (
 	"github.com/mochi-mqtt/server/v2/packets"
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
-	"github.com/dayuer/stickbox/server/go/internal/device"
 )
 
-// Router 是 broker 对 registry 的窄依赖。
+// Router 是 broker 对在线状态表的窄依赖：收到设备心跳就记一笔。
 type Router interface {
-	Send(dev string, m device.Msg)
+	Seen(dev string)
 }
 
 // UsageResender 在设备订阅 printer/{dev}/usage 时把最新用量补发给它。
@@ -158,80 +156,22 @@ func (h *Hook) OnDisconnect(cl *mqtt.Client, err error, expire bool) {
 	h.ids.drop(cl)
 }
 
-func (h *Hook) OnPublished(cl *mqtt.Client, pk packets.Packet) {
-	if strings.HasSuffix(pk.TopicName, "/status") {
-		routeStatus(h.router, pk.TopicName, pk.Payload)
-	}
-}
-
-// statusPayload 是设备心跳的结构。字段定义见 docs/API-cloud-print.md 第 3.6 节。
-type statusPayload struct {
-	Job    string          `json:"job"`
-	State  string          `json:"state"`
-	Bytes  int64           `json:"bytes"`
-	Err    string          `json:"err"`
-	Serial string          `json:"serial"`
-	Prn    json.RawMessage `json:"prn"`
-	// USB 事件计数（API 文档 3.6 的 usb 字段）。设备侧那个「拔掉能认出来、
-	// 插回去一直未连接」的故障在设备上没有任何可见输出，只能靠它诊断。
-	USB json.RawMessage `json:"usb"`
-	// Heap 是设备的空闲堆字节数。设备一直在报，之前被丢掉了——结果堆耗尽
-	// 引起的 TLS 握手失败在服务端只表现为「证书错」，查不出真因。
-	Heap uint32 `json:"heap"`
-}
-
-// routeStatus 把一条 status 消息翻译成 actor 消息。
+// OnPublished：设备往自己的 status 主题发心跳，记一笔在线。
 //
-// dev 一律从 topic 取，不用 payload 里的——payload 是设备自报的，
-// topic 是经过 ACL 校验的，只有后者可信。
-func routeStatus(r Router, topic string, payload []byte) {
-	parts := strings.Split(topic, "/")
-	if len(parts) != 3 || parts[0] != "printer" {
+// topic 是经过 ACL 校验的，dev 一律从 topic 取；payload 内容不参与判断——
+// 设备在打印退役后只用心跳维持「在线」这一个状态，作业/打印机字段都已删除。
+func (h *Hook) OnPublished(cl *mqtt.Client, pk packets.Packet) {
+	if h.router == nil {
 		return
 	}
-	dev := parts[1]
-
-	var p statusPayload
-	if err := json.Unmarshal(payload, &p); err != nil {
-		slog.Warn("status payload 非法 JSON", "dev", dev)
+	parts := strings.Split(pk.TopicName, "/")
+	// 主题固定是三段：printer/{dev}/status。不做通配符展开，
+	// 也不接受畸形 dev——否则 "printer/+/status" 会把通配符记成在线设备。
+	if len(parts) != 3 || parts[0] != "printer" || parts[2] != "status" {
 		return
 	}
-
-	// USB 计数原样带给 actor，/api/status 会把它摊出来。
-	//
-	// 只在异常时打日志是不够的：那类故障在设备上没有任何可见输出，
-	// 排查时需要的是「现在的计数是多少」，而不是「出事那一刻打了条日志」。
-	if len(p.USB) > 0 {
-		var u struct {
-			Att uint32 `json:"att"`
-			Det uint32 `json:"det"`
-			Err string `json:"err"`
-		}
-		if json.Unmarshal(p.USB, &u) == nil {
-			if u.Err != "" {
-				slog.Error("设备 USB 清理失败——插回打印机可能认不出来",
-					"dev", dev, "err", u.Err, "att", u.Att, "det", u.Det)
-			} else if u.Det > 0 && u.Att < u.Det {
-				slog.Warn("设备有一次插回后未枚举成功",
-					"dev", dev, "att", u.Att, "det", u.Det)
-			}
-		}
+	if !auth.ValidDev(parts[1]) {
+		return
 	}
-
-	m := device.Msg{Serial: p.Serial, Printer: p.Prn, JobID: p.Job,
-		Bytes: p.Bytes, Err: p.Err, USB: p.USB, Heap: p.Heap}
-	switch p.State {
-	case "done":
-		m.Kind = device.KindJobDone
-	case "failed":
-		m.Kind = device.KindJobFailed
-	case "downloading":
-		m.Kind = device.KindDownloading
-	case "offline":
-		m.Kind = device.KindHeartbeat
-		m.Serial = "" // 掉线了就没有打印机
-	default:
-		m.Kind = device.KindHeartbeat
-	}
-	r.Send(dev, m)
+	h.router.Seen(parts[1])
 }

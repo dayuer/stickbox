@@ -24,10 +24,6 @@ type Config struct {
 	HTTPAddr string `json:"http_addr"`
 	MQTTAddr string `json:"mqtt_addr"`
 
-	// URF 是光栅，单份 200KB~15MB，不清理很快写满盘。
-	JobRetainHours     int `json:"job_retain_hours"`
-	JobRetainPerDevice int `json:"job_retain_per_device"`
-
 	// 两把密钥的运维含义不同：
 	//   PhonePepper 换了全体用户无法登录（HMAC 对不上），绝不轮换
 	//   PhoneKey    换了旧密文解不开，但登录不受影响
@@ -72,12 +68,6 @@ func Load(path string) (*Config, error) {
 	if c.MQTTAddr == "" {
 		c.MQTTAddr = ":8883"
 	}
-	if c.JobRetainHours < 1 {
-		c.JobRetainHours = 24
-	}
-	if c.JobRetainPerDevice < 1 {
-		c.JobRetainPerDevice = 50
-	}
 	if c.DevLogin.Enabled() {
 		if len(c.DevLogin.Code) != 6 {
 			return nil, errors.New("config: dev_login.code 必须是 6 位")
@@ -92,8 +82,8 @@ func Load(path string) (*Config, error) {
 	return &c, nil
 }
 
-func (c *Config) JobsDir() string   { return filepath.Join(c.Root, "jobs") }
-func (c *Config) IdentsDir() string { return filepath.Join(c.Root, "idents") }
-func (c *Config) DBPath() string    { return filepath.Join(c.Root, "jobs.db") }
-func (c *Config) CertPath() string  { return filepath.Join(c.CertDir, "fullchain.pem") }
-func (c *Config) KeyPath() string   { return filepath.Join(c.CertDir, "privkey.pem") }
+// DBPath 沿用 jobs.db 这个文件名：已有部署的账号与设备都在这只库里，
+// 改名等于让升级丢数据。文件名里的旧词不代表还存着作业。
+func (c *Config) DBPath() string   { return filepath.Join(c.Root, "jobs.db") }
+func (c *Config) CertPath() string { return filepath.Join(c.CertDir, "fullchain.pem") }
+func (c *Config) KeyPath() string  { return filepath.Join(c.CertDir, "privkey.pem") }

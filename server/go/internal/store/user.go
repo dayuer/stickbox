@@ -118,44 +118,15 @@ func (s *Store) GetPhone(userID string) ([]byte, bool, error) {
 	return enc, true, nil
 }
 
-// DeleteUser 执行注销：清空该用户的一切个人数据，返回需要删除的作业文件 id。
-//
-// 刻意不碰 printers / profiles / test_runs——那些按打印机序列号存，
-// 绑的是硬件不是人，里面没有能关联到自然人的字段。
-func (s *Store) DeleteUser(userID string) ([]string, error) {
-	devs, err := s.DevicesOfUser(userID)
-	if err != nil {
-		return nil, err
-	}
-	jobIDs := []string{}
-	for _, d := range devs {
-		rows, err := s.db.Query(`SELECT id FROM jobs WHERE dev=?`, d)
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			jobIDs = append(jobIDs, id)
-		}
-		rows.Close()
-	}
-
+// DeleteUser 执行注销：清空该用户的一切个人数据。
+func (s *Store) DeleteUser(userID string) error {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	tx, err := s.db.Begin()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer tx.Rollback()
-	for _, d := range devs {
-		if _, err := tx.Exec(`DELETE FROM jobs WHERE dev=?`, d); err != nil {
-			return nil, err
-		}
-	}
 	for _, q := range []string{
 		`DELETE FROM devices WHERE user_id=?`,
 		`DELETE FROM usage WHERE user_id=?`,
@@ -163,10 +134,10 @@ func (s *Store) DeleteUser(userID string) ([]string, error) {
 		`DELETE FROM users WHERE id=?`,
 	} {
 		if _, err := tx.Exec(q, userID); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return jobIDs, tx.Commit()
+	return tx.Commit()
 }
 
 type SMSCode struct {

@@ -1,114 +1,77 @@
 package broker
 
 import (
-	"encoding/json"
 	"testing"
 
 	mqtt "github.com/mochi-mqtt/server/v2"
+	"github.com/mochi-mqtt/server/v2/packets"
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
-
-	"github.com/dayuer/stickbox/server/go/internal/device"
 )
 
-type capturedMsg struct {
-	dev string
-	msg device.Msg
+type fakeRouter struct{ seen []string }
+
+func (f *fakeRouter) Seen(dev string) { f.seen = append(f.seen, dev) }
+
+func publishStatus(h *Hook, topic string, payload []byte) {
+	h.OnPublished(nil, packets.Packet{TopicName: topic, Payload: payload})
 }
 
-type fakeRouter struct{ got []capturedMsg }
-
-func (f *fakeRouter) Send(dev string, m device.Msg) {
-	f.got = append(f.got, capturedMsg{dev, m})
-}
-
-func TestRouteStatusHeartbeat(t *testing.T) {
+// 设备心跳只要到达 status 主题就记在线；payload 不参与判断。
+func TestStatusHeartbeatMarksSeen(t *testing.T) {
 	r := &fakeRouter{}
-	payload, _ := json.Marshal(map[string]any{
-		"dev": "aaa", "job": "", "state": "ready", "bytes": 0,
-		"serial": "PA",
-		"prn":    map[string]any{"display": "Ready"},
-	})
-	routeStatus(r, "printer/aaa/status", payload)
+	h := &Hook{router: r}
+	publishStatus(h, "printer/f412fa87c9e0/status", []byte(`{"state":"ready","heap":51234}`))
 
-	if len(r.got) != 1 {
-		t.Fatalf("投递了 %d 条", len(r.got))
-	}
-	m := r.got[0].msg
-	if m.Kind != device.KindHeartbeat || m.Serial != "PA" {
-		t.Errorf("消息 = %+v，期望 Heartbeat + serial=PA", m)
-	}
-	if len(m.Printer) == 0 {
-		t.Error("prn 原文没带上，/api/status 就没东西可显示")
+	if len(r.seen) != 1 || r.seen[0] != "f412fa87c9e0" {
+		t.Fatalf("在线记录 = %v，期望 [f412fa87c9e0]", r.seen)
 	}
 }
 
-// done 必须带 job 字段，否则服务端要等 180 秒超时才知道这件结束了。
-func TestRouteStatusDone(t *testing.T) {
+// payload 畸形也不影响在线判断：能发到经 ACL 校验的主题，就说明连接活着。
+func TestStatusIgnoresPayloadContent(t *testing.T) {
 	r := &fakeRouter{}
-	routeStatus(r, "printer/aaa/status",
-		[]byte(`{"dev":"aaa","job":"j1","state":"done","bytes":4096,"serial":"PA"}`))
-
-	m := r.got[0].msg
-	if m.Kind != device.KindJobDone || m.JobID != "j1" || m.Bytes != 4096 {
-		t.Errorf("消息 = %+v", m)
-	}
-}
-
-func TestRouteStatusFailedCarriesError(t *testing.T) {
-	r := &fakeRouter{}
-	routeStatus(r, "printer/aaa/status",
-		[]byte(`{"dev":"aaa","job":"j1","state":"failed","err":"USB 超时"}`))
-	m := r.got[0].msg
-	if m.Kind != device.KindJobFailed || m.Err != "USB 超时" {
-		t.Errorf("消息 = %+v", m)
-	}
-}
-
-func TestRouteStatusDownloading(t *testing.T) {
-	r := &fakeRouter{}
-	routeStatus(r, "printer/aaa/status",
-		[]byte(`{"dev":"aaa","job":"j1","state":"downloading","serial":"PA"}`))
-	if m := r.got[0].msg; m.Kind != device.KindDownloading || m.JobID != "j1" {
-		t.Errorf("消息 = %+v", m)
-	}
-}
-
-// LWT：设备掉线时 broker 代发，serial 要清空。
-func TestRouteStatusOffline(t *testing.T) {
-	r := &fakeRouter{}
-	routeStatus(r, "printer/aaa/status", []byte(`{"dev":"aaa","state":"offline"}`))
-	m := r.got[0].msg
-	if m.Kind != device.KindHeartbeat || m.Serial != "" {
-		t.Errorf("消息 = %+v，offline 时 serial 应为空", m)
-	}
-}
-
-// 畸形 JSON 不能让 broker 崩，也不能投出垃圾消息。
-func TestRouteStatusIgnoresGarbage(t *testing.T) {
-	r := &fakeRouter{}
-	routeStatus(r, "printer/aaa/status", []byte("not json at all"))
-	if len(r.got) != 0 {
-		t.Errorf("畸形 payload 投出了 %d 条消息", len(r.got))
+	h := &Hook{router: r}
+	publishStatus(h, "printer/f412fa87c9e0/status", []byte("not json at all"))
+	if len(r.seen) != 1 || r.seen[0] != "f412fa87c9e0" {
+		t.Fatalf("在线记录 = %v，期望 [f412fa87c9e0]", r.seen)
 	}
 }
 
 // topic 里的 dev 是权威，payload 里的 dev 是设备自报的，不能信。
-func TestRouteStatusTrustsTopicNotPayload(t *testing.T) {
+func TestStatusTrustsTopicNotPayload(t *testing.T) {
 	r := &fakeRouter{}
-	routeStatus(r, "printer/aaa/status", []byte(`{"dev":"bbb","state":"ready"}`))
-	if len(r.got) != 1 || r.got[0].dev != "aaa" {
-		t.Errorf("路由到了 %+v，必须以 topic 为准", r.got)
+	h := &Hook{router: r}
+	publishStatus(h, "printer/f412fa87c9e0/status", []byte(`{"dev":"aabbccddeeff"}`))
+	if len(r.seen) != 1 || r.seen[0] != "f412fa87c9e0" {
+		t.Fatalf("记录 = %v，必须以 topic 为准", r.seen)
 	}
 }
 
-func TestRouteStatusIgnoresBadTopic(t *testing.T) {
+// 除了 status，其它叶子主题都不再参与在线判断。
+func TestNonStatusTopicsIgnored(t *testing.T) {
 	r := &fakeRouter{}
-	for _, topic := range []string{"status", "printer/status", "x/aaa/status"} {
-		routeStatus(r, topic, []byte(`{"state":"ready"}`))
+	h := &Hook{router: r}
+	for _, topic := range []string{
+		"printer/f412fa87c9e0/job", "printer/f412fa87c9e0/profile", "printer/f412fa87c9e0/usage",
+		"printer/f412fa87c9e0/ident", "printer/f412fa87c9e0/cmd",
+	} {
+		publishStatus(h, topic, []byte(`{}`))
 	}
-	if len(r.got) != 0 {
-		t.Errorf("非法 topic 投出了 %d 条消息", len(r.got))
+	if len(r.seen) != 0 {
+		t.Errorf("非 status 主题记了在线：%v", r.seen)
+	}
+}
+
+func TestBadTopicIgnored(t *testing.T) {
+	r := &fakeRouter{}
+	h := &Hook{router: r}
+	for _, topic := range []string{"status", "printer/status", "x/aaa/status",
+		"printer/f412fa87c9e0/status/x", "printer/+/status"} {
+		publishStatus(h, topic, []byte(`{}`))
+	}
+	if len(r.seen) != 0 {
+		t.Errorf("非法 topic 记了在线：%v", r.seen)
 	}
 }
 
@@ -142,52 +105,5 @@ func TestIdentityDroppedOnDisconnect(t *testing.T) {
 	tbl.drop(cl)
 	if _, ok := tbl.get(cl); ok {
 		t.Error("断开后身份没清掉")
-	}
-}
-
-// USB 事件计数随心跳上报（API 文档 3.6 的 usb 字段）。
-//
-// 多出来的字段不能让整条心跳解析失败——老固件不带它，新固件带，
-// 两种都得能收。
-func TestRouteStatusAcceptsUSBField(t *testing.T) {
-	r := &fakeRouter{}
-	payload := []byte(`{"dev":"aaa","job":"","state":"ready","bytes":0,` +
-		`"serial":"PA","usb":{"att":3,"det":2,"err":"release=ESP_ERR_INVALID_STATE close=ESP_ERR_INVALID_STATE"}}`)
-	routeStatus(r, "printer/aaa/status", payload)
-
-	if len(r.got) != 1 {
-		t.Fatalf("带 usb 字段的心跳没被投递，投了 %d 条", len(r.got))
-	}
-	if r.got[0].msg.Serial != "PA" {
-		t.Errorf("serial = %q，usb 字段不该影响其它字段的解析", r.got[0].msg.Serial)
-	}
-}
-
-// 老固件不带 usb 字段，照样要能收。
-func TestRouteStatusWithoutUSBField(t *testing.T) {
-	r := &fakeRouter{}
-	routeStatus(r, "printer/aaa/status",
-		[]byte(`{"dev":"aaa","job":"","state":"ready","bytes":0,"serial":"PA"}`))
-	if len(r.got) != 1 {
-		t.Fatal("不带 usb 字段的心跳应当照常投递")
-	}
-}
-
-// 心跳里的 heap 要一路带到 actor。
-//
-// 这条是为一次误诊写的：设备堆耗尽时 mbedtls 分不到大数缓冲，握手失败在
-// 服务端日志里长得跟证书错误一模一样（tls: access denied / connection reset）。
-// 设备一直在报 heap，服务端却把它丢了，于是只能靠串口——而用户现场的板子
-// 串口够不着。丢掉这个字段等于把唯一的远程诊断依据丢掉。
-func TestStatusCarriesHeap(t *testing.T) {
-	r := &fakeRouter{}
-	routeStatus(r, "printer/f412fa87c9e0/status",
-		[]byte(`{"state":"idle","heap":51234,"serial":"CNB1S5N3S7"}`))
-
-	if len(r.got) != 1 {
-		t.Fatalf("发出 %d 条消息，期望 1 条", len(r.got))
-	}
-	if got := r.got[0].msg.Heap; got != 51234 {
-		t.Errorf("Heap = %d，期望 51234——丢掉它就没法远程判断堆耗尽", got)
 	}
 }

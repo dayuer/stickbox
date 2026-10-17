@@ -1,20 +1,17 @@
 package httpapi
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/config"
-	"github.com/dayuer/stickbox/server/go/internal/device"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
 	"github.com/dayuer/stickbox/server/go/internal/store"
 )
@@ -26,25 +23,14 @@ func (f *fakeSender) Send(ctx context.Context, phone, code string) error {
 	return nil
 }
 
-// recPub 记下下发过的档案，测试据此断言。
-type recPub struct{ profiles, usage map[string][]byte }
+// recPub 记下推给每台设备的最后一份用量，测试据此断言。
+type recPub struct{ usage map[string][]byte }
 
-func (p *recPub) PublishJob(dev, job string, size int64, hooks []byte) error { return nil }
-
-// PublishUsage 记下推给每台设备的最后一份用量。
 func (p *recPub) PublishUsage(dev string, payload []byte) error {
 	if p.usage == nil {
 		p.usage = map[string][]byte{}
 	}
 	p.usage[dev] = payload
-	return nil
-}
-
-func (p *recPub) PublishProfile(dev string, body []byte) error {
-	if p.profiles == nil {
-		p.profiles = map[string][]byte{}
-	}
-	p.profiles[dev] = body
 	return nil
 }
 
@@ -66,7 +52,7 @@ type testDeps struct {
 func newTestAPI(t *testing.T) (http.Handler, *testDeps) {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(dir + "/jobs.db")
+	st, err := store.Open(filepath.Join(dir, "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,21 +67,13 @@ func newTestAPI(t *testing.T) (http.Handler, *testDeps) {
 		clock: time.Unix(1_000_000, 0)}
 	sms := auth.NewSMS(st, dep.sender, func() time.Time { return dep.clock })
 	dep.pub = &recPub{}
-	reg := registry.New(st, dep.pub, device.Options{
-		JobTimeout: 180 * time.Second, IdleTimeout: time.Hour,
-	})
+	reg := registry.New(registry.Options{IdleTimeout: time.Hour})
 	t.Cleanup(reg.Shutdown)
 	dep.reg = reg
 	dep.v = auth.NewVerifier(st)
 
-	cfg := &config.Config{Root: dir, JobRetainHours: 24, JobRetainPerDevice: 50}
-	for _, d := range []string{cfg.JobsDir(), cfg.IdentsDir()} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	dep.cfg = cfg
-	return New(cfg, st, dep.v, pb, sms, reg, nopMem{}, dep.pub).Handler(), dep
+	dep.cfg = &config.Config{Root: dir}
+	return New(dep.cfg, st, dep.v, pb, sms, reg, nopMem{}, dep.pub).Handler(), dep
 }
 
 // —— 请求辅助 ——
@@ -123,27 +101,7 @@ func get(h http.Handler, path string, hdr map[string]string) *httptest.ResponseR
 	return do(h, httptest.NewRequest("GET", path, nil), hdr)
 }
 
-func upload(h http.Handler, token, dev, serial, ct string, body []byte) *httptest.ResponseRecorder {
-	req := httptest.NewRequest("POST", "/api/print", bytes.NewReader(body))
-	return do(h, req, map[string]string{
-		"Content-Type":     ct,
-		"X-Device":         dev,
-		"X-Printer-Serial": serial,
-		"Authorization":    "Bearer " + token,
-	})
-}
-
-// urfBytes 拼一份最小可用的 URF。
-func urfBytes(pages uint32, w, h uint32) []byte {
-	b := make([]byte, 12+32+512)
-	copy(b, "UNIRAST\x00")
-	binary.BigEndian.PutUint32(b[8:12], pages)
-	binary.BigEndian.PutUint32(b[24:28], w)
-	binary.BigEndian.PutUint32(b[28:32], h)
-	return b
-}
-
-// login 走完整的发码 → 校验流程，返回 session token。
+// login 走完整的发码 → 校验流程，返回 app session token。
 func login(t *testing.T, h http.Handler, dep *testDeps, phone string) string {
 	t.Helper()
 	if rr := post(h, "/api/auth/sms", `{"phone":"`+phone+`"}`, nil); rr.Code != 200 {
@@ -157,6 +115,27 @@ func login(t *testing.T, h http.Handler, dep *testDeps, phone string) string {
 	json.Unmarshal(rr.Body.Bytes(), &out)
 	if out.Token == "" {
 		t.Fatalf("登录失败：%d %s", rr.Code, rr.Body)
+	}
+	return out.Token
+}
+
+// agentLogin 为已有账号签发一把 agent 令牌。
+// 发码复用 /api/auth/sms；agent 登录不会新建账号。
+func agentLogin(t *testing.T, h http.Handler, dep *testDeps, phone string) string {
+	t.Helper()
+	// 同一号码 60 秒内不能重发；测试时钟往前拨，绕开短信闸。
+	dep.clock = dep.clock.Add(2 * time.Minute)
+	if rr := post(h, "/api/auth/sms", `{"phone":"`+phone+`"}`, nil); rr.Code != 200 {
+		t.Fatalf("发码失败：%d %s", rr.Code, rr.Body)
+	}
+	rr := post(h, "/api/agent/login",
+		`{"phone":"`+phone+`","code":"`+dep.sender.last+`","name":"mac"}`, nil)
+	var out struct {
+		Token string `json:"token"`
+	}
+	json.Unmarshal(rr.Body.Bytes(), &out)
+	if out.Token == "" {
+		t.Fatalf("agent 登录失败：%d %s", rr.Code, rr.Body)
 	}
 	return out.Token
 }

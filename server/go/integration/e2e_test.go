@@ -1,93 +1,127 @@
 package integration
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
-
-	"github.com/dayuer/stickbox/server/go/internal/profile"
 )
 
-// 完整链路：登录 → enroll → 上传 URF → 派发信令 → 设备取件 → 回执。
+type deviceUsage struct {
+	Now      int64 `json:"now"`
+	TS       int64 `json:"ts"`
+	FiveHour *struct {
+		UsedPercentage float64 `json:"used_percentage"`
+		ResetsAt       int64   `json:"resets_at"`
+	} `json:"five_hour"`
+	SevenDay *struct {
+		UsedPercentage float64 `json:"used_percentage"`
+		ResetsAt       int64   `json:"resets_at"`
+	} `json:"seven_day"`
+}
+
+func usageReport(now time.Time, pct float64) []byte {
+	b, _ := json.Marshal(map[string]any{
+		"five_hour": map[string]any{
+			"used_percentage": pct,
+			"resets_at":       now.Add(time.Hour).Unix(),
+		},
+		"seven_day": map[string]any{
+			"used_percentage": pct / 2,
+			"resets_at":       now.Add(48 * time.Hour).Unix(),
+		},
+		"limits": []map[string]any{{"kind": "weekly_all", "percent": pct / 2}},
+	})
+	return b
+}
+
+func parseUsage(t *testing.T, raw []byte) deviceUsage {
+	t.Helper()
+	var u deviceUsage
+	if err := json.Unmarshal(raw, &u); err != nil {
+		t.Fatalf("设备收到的用量不是合法 JSON：%v（%s）", err, raw)
+	}
+	return u
+}
+
+// 完整用量链路：agent 上报 → 服务端落库 → MQTT printer/{dev}/usage → 设备。
 //
 // 单测都过不代表串起来能用——mochi 的 Serve() 非阻塞那个 bug 就是
 // 只有真跑起来才暴露的。
-func TestEndToEndPrintFlow(t *testing.T) {
-	e := startServer(t)
-
-	token := e.login("13800008888")
-	devKey := e.enroll(token, "f412fa87c9e0")
-
+func TestEndToEndUsageDelivery(t *testing.T) {
+	const phone, code = "13800000000", "424242"
+	e := startServerWithDevLogin(t, phone, code)
+	appTok := e.loginWithCode(phone, code)
+	devKey := e.enroll(appTok, "f412fa87c9e0")
 	dev := e.connectDevice("f412fa87c9e0", devKey)
-	dev.heartbeat("ready", "", "CNB9K1P2X4")
+	dev.heartbeat("ready")
 
-	jid := e.upload(token, "f412fa87c9e0", "CNB9K1P2X4", urfBytes(2, 4962, 7014))
-
-	got := dev.waitJob(5 * time.Second)
-	if got.ID != jid {
-		t.Fatalf("派发的作业 = %s，期望 %s", got.ID, jid)
+	if err := dev.subscribeUsage(); err != nil {
+		t.Fatalf("订阅用量 = %v", err)
 	}
+	e.sendCode(phone)
+	agentTok := e.agentLoginWithCode(phone, code)
 
-	code, body := e.req("GET", "/api/job/"+jid+"/data", "",
-		map[string]string{"Authorization": "Bearer " + devKey})
-	if code != 200 {
-		t.Fatalf("取件 = %d %s", code, body)
+	before := time.Now().Unix()
+	e.reportUsage(agentTok, usageReport(time.Now(), 12.5))
+	got := parseUsage(t, dev.waitUsage(5*time.Second))
+	after := time.Now().Unix()
+
+	if got.FiveHour == nil || got.FiveHour.UsedPercentage != 12.5 {
+		t.Errorf("five_hour = %+v，期望 12.5", got.FiveHour)
 	}
-	if int64(len(body)) != got.Size {
-		t.Errorf("取回 %d 字节，信令说 %d", len(body), got.Size)
+	if got.SevenDay == nil || got.SevenDay.UsedPercentage != 6.25 {
+		t.Errorf("seven_day = %+v，期望 6.25", got.SevenDay)
 	}
-
-	dev.heartbeat("done", jid, "CNB9K1P2X4")
-	e.waitJobState(jid, "done", 5*time.Second)
-}
-
-// 一次只派一件：设备没有本地队列，堆过去等于丢件。
-func TestEndToEndDispatchesOneAtATime(t *testing.T) {
-	e := startServer(t)
-	token := e.login("13800008888")
-	devKey := e.enroll(token, "f412fa87c9e0")
-	dev := e.connectDevice("f412fa87c9e0", devKey)
-	dev.heartbeat("ready", "", "PA")
-
-	first := e.upload(token, "f412fa87c9e0", "PA", urfBytes(1, 4962, 7014))
-	second := e.upload(token, "f412fa87c9e0", "PA", urfBytes(1, 4962, 7014))
-
-	if got := dev.waitJob(5 * time.Second); got.ID != first {
-		t.Fatalf("先派了 %s，期望 %s", got.ID, first)
+	if got.Now < before || got.Now > after {
+		t.Errorf("now = %d，不在 [%d,%d]——设备要靠它和服务端对表", got.Now, before, after)
 	}
-	select {
-	case js := <-dev.jobs:
-		t.Fatalf("第一件还没结束就派了第二件 %s", js.ID)
-	case <-time.After(500 * time.Millisecond):
-	}
-
-	dev.heartbeat("done", first, "PA")
-	if got := dev.waitJob(5 * time.Second); got.ID != second {
-		t.Fatalf("回执后派了 %s，期望 %s", got.ID, second)
+	if got.TS < before || got.TS > after {
+		t.Errorf("ts = %d，不在 [%d,%d]", got.TS, before, after)
 	}
 }
 
-// 换打印机后，为旧机器光栅的作业不能派给新机器。
-func TestEndToEndPrinterSwap(t *testing.T) {
-	e := startServer(t)
-	token := e.login("13800008888")
-	devKey := e.enroll(token, "f412fa87c9e0")
-	dev := e.connectDevice("f412fa87c9e0", devKey)
+// 设备重连并重新订阅时，应立即收到补发。
+//
+// usage 没有 retain（payload 的 now 会过期），所以补发必须由 OnSubscribed
+// 现场生成一份新 now；ts 仍是服务端最初收到数据的时间。
+func TestEndToEndUsageResendOnReconnect(t *testing.T) {
+	const phone, code = "13800000000", "424242"
+	e := startServerWithDevLogin(t, phone, code)
+	appTok := e.loginWithCode(phone, code)
+	devKey := e.enroll(appTok, "f412fa87c9e0")
 
-	dev.heartbeat("ready", "", "PRINTER-A")
-	jidA := e.upload(token, "f412fa87c9e0", "PRINTER-A", urfBytes(1, 4962, 7014))
-	if got := dev.waitJob(5 * time.Second); got.ID != jidA {
-		t.Fatalf("首次派了 %s", got.ID)
+	first := e.connectDevice("f412fa87c9e0", devKey)
+	first.heartbeat("ready")
+	if err := first.subscribeUsage(); err != nil {
+		t.Fatalf("首次订阅 = %v", err)
 	}
+	first.disconnect()
 
-	// 用户换了台打印机
-	dev.heartbeat("ready", "", "PRINTER-B")
-	jidB := e.upload(token, "f412fa87c9e0", "PRINTER-B", urfBytes(1, 4962, 7014))
+	e.sendCode(phone)
+	agentTok := e.agentLoginWithCode(phone, code)
+	before := time.Now().Unix()
+	e.reportUsage(agentTok, usageReport(time.Now(), 33))
+	after := time.Now().Unix()
 
-	if got := dev.waitJob(5 * time.Second); got.ID != jidB {
-		t.Fatalf("换机后派了 %s，期望 %s（A 机的作业必须留在队列里）", got.ID, jidB)
+	// 隔开一秒，确保补发的 now 一定大于最初收到的 ts。
+	time.Sleep(1200 * time.Millisecond)
+
+	second := e.connectDevice("f412fa87c9e0", devKey)
+	second.heartbeat("ready")
+	if err := second.subscribeUsage(); err != nil {
+		t.Fatalf("重连订阅 = %v", err)
 	}
-	// A 机的作业留着等它插回来，不失败也不删
-	e.waitJobState(jidA, "queued", 5*time.Second)
+	got := parseUsage(t, second.waitUsage(5*time.Second))
+
+	if got.TS < before || got.TS > after {
+		t.Errorf("ts = %d，期望是服务端最初收到的时间 [%d,%d]", got.TS, before, after)
+	}
+	if got.Now <= got.TS {
+		t.Errorf("now = %d 不晚于 ts = %d——补发必须现场盖 now", got.Now, got.TS)
+	}
+	if got.FiveHour == nil || got.FiveHour.UsedPercentage != 33 {
+		t.Errorf("five_hour = %+v，期望 33", got.FiveHour)
+	}
 }
 
 // ACL：设备不能订阅别人的 topic。
@@ -97,7 +131,7 @@ func TestEndToEndACLBlocksCrossDevice(t *testing.T) {
 	devKey := e.enroll(token, "f412fa87c9e0")
 	dev := e.connectDevice("f412fa87c9e0", devKey)
 
-	if err := dev.subscribe("printer/aaaaaaaaaaaa/job"); err == nil {
+	if err := dev.subscribe("printer/aaaaaaaaaaaa/usage"); err == nil {
 		t.Error("设备订阅了别人的 topic——ACL 没生效")
 	}
 }
@@ -120,40 +154,15 @@ func TestEndToEndRejectsMismatchedUsername(t *testing.T) {
 	}
 }
 
-// 插上打印机 → 上报机型档案 → 服务端建档 → 下发怪癖档案。
-//
-// 那 9 个字节的 UEL 现在住在 profile 里，不在固件里——这条链路通了，
-// 新机型的新怪癖才能改服务端一行文本就生效。
-func TestEndToEndProfileDelivery(t *testing.T) {
-	e := startServer(t)
-	token := e.login("13800008888")
-	devKey := e.enroll(token, "f412fa87c9e0")
-	dev := e.connectDevice("f412fa87c9e0", devKey)
-	dev.heartbeat("ready", "", "CNB9K1P2X4")
-
-	body := `{"serial":"CNB9K1P2X4","vid":"03F0","pid":"F22A","make":"HP",` +
-		`"model":"HP Laser MFP 136a","cmd":"URF,PCL,PJL,PWGRaster",` +
-		`"urf_caps":"CP1,RS600,V1.4,W8"}`
-	code, resp := e.req("POST", "/api/device/f412fa87c9e0/ident", body,
-		map[string]string{"Content-Type": "application/json",
-			"Authorization": "Bearer " + devKey})
-	if code != 200 {
-		t.Fatalf("上报 = %d %s", code, resp)
-	}
-
-	got := dev.waitProfile(5 * time.Second)
-	p, err := profile.Unmarshal(got)
-	if err != nil {
-		t.Fatalf("下发的档案不是合法 JSON：%v", err)
-	}
-	if p.Serial != "CNB9K1P2X4" {
-		t.Errorf("档案 serial = %q", p.Serial)
-	}
-	if len(p.Hooks.JobEnd) != 1 || p.Hooks.JobEnd[0].Data != profile.UEL {
-		t.Errorf("默认档案没发 UEL：%+v", p.Hooks.JobEnd)
-	}
-	if len(got) > profile.MaxBytes {
-		t.Errorf("档案 %d 字节，超过上限 %d", len(got), profile.MaxBytes)
+// agent 令牌只能走 HTTP，不能连 MQTT。
+func TestEndToEndAgentCannotConnectMQTT(t *testing.T) {
+	const phone, code = "13800000000", "424242"
+	e := startServerWithDevLogin(t, phone, code)
+	e.loginWithCode(phone, code)
+	e.sendCode(phone)
+	agentTok := e.agentLoginWithCode(phone, code)
+	if _, err := e.tryConnectDevice("f412fa87c9e0", agentTok); err == nil {
+		t.Error("agent 令牌连上了 MQTT")
 	}
 }
 

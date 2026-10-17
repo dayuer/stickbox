@@ -52,14 +52,10 @@ func TestDeleteUserRemovesEverything(t *testing.T) {
 	u, _, _ := s.UpsertUser("HMAC-A", "8888")
 	s.PutPhone(u.ID, []byte("x"))
 	s.InsertKey(Key{KeyID: "k1", Dev: "d1", Role: "device", UserID: u.ID, Hash: "h"})
-	s.InsertJob(Job{ID: "j1", Dev: "d1", Serial: "PA", State: StateQueued})
+	s.PutUsage(u.ID, []byte(`{}`), 1)
 
-	files, err := s.DeleteUser(u.ID)
-	if err != nil {
+	if err := s.DeleteUser(u.ID); err != nil {
 		t.Fatal(err)
-	}
-	if len(files) != 1 || files[0] != "j1" {
-		t.Errorf("返回待删文件 %v，期望 [j1]", files)
 	}
 	if _, ok, _ := s.UserByHMAC("HMAC-A"); ok {
 		t.Error("users 行还在")
@@ -70,8 +66,8 @@ func TestDeleteUserRemovesEverything(t *testing.T) {
 	if _, ok, _ := s.KeyByID("k1"); ok {
 		t.Error("密钥还在")
 	}
-	if _, ok, _ := s.GetJob("j1"); ok {
-		t.Error("作业记录还在")
+	if _, _, ok, _ := s.GetUsage(u.ID); ok {
+		t.Error("用量还在")
 	}
 }
 

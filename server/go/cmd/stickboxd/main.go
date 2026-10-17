@@ -14,9 +14,7 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/broker"
 	"github.com/dayuer/stickbox/server/go/internal/config"
-	"github.com/dayuer/stickbox/server/go/internal/device"
 	"github.com/dayuer/stickbox/server/go/internal/httpapi"
-	"github.com/dayuer/stickbox/server/go/internal/janitor"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
 	"github.com/dayuer/stickbox/server/go/internal/sms"
 	"github.com/dayuer/stickbox/server/go/internal/store"
@@ -48,23 +46,15 @@ func main() {
 }
 
 func serve(cfg *config.Config) error {
-	for _, d := range []string{cfg.JobsDir(), cfg.IdentsDir()} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			return err
-		}
+	// 数据库文件在 root 下，先把目录建出来。
+	if err := os.MkdirAll(cfg.Root, 0o755); err != nil {
+		return err
 	}
 	st, err := store.Open(cfg.DBPath())
 	if err != nil {
 		return err
 	}
 	defer st.Close()
-
-	// 进程上次退出时悬空的作业退回队列，否则永远卡在 downloading。
-	if n, err := st.RecoverOnBoot(); err != nil {
-		return err
-	} else if n > 0 {
-		slog.Info("恢复悬空作业", "count", n)
-	}
 
 	pb, err := auth.NewPhoneBox(cfg.PhonePepper, cfg.PhoneKey)
 	if err != nil {
@@ -89,37 +79,28 @@ func serve(cfg *config.Config) error {
 		return err
 	}
 
-	// registry 需要 Publisher，broker 需要 Router——互相依赖，
-	// 用一个延迟绑定的壳打破环。
-	pubShim := &publisherShim{}
-	reg := registry.New(st, pubShim, device.Options{
-		// 判离线 120 秒：设备保证状态一变 2 秒内推、没变也 30 秒一拍，
-		// 连丢四拍才判离线（SERVER-REQUIREMENTS 2.1）。
-		JobTimeout: 180 * time.Second, IdleTimeout: 120 * time.Second,
-		HooksFor: testRunHooks(st),
-	})
+	// 判离线 120 秒：设备保证状态一变 2 秒内推、没变也 30 秒一拍，
+	// 连丢四拍才判离线。
+	reg := registry.New(registry.Options{IdleTimeout: 120 * time.Second})
 	defer reg.Shutdown()
 
 	br, err := broker.New(cfg.MQTTAddr, reloader.Config(), v, mem, reg, st)
 	if err != nil {
 		return err
 	}
-	pubShim.set(br)
 
 	api := httpapi.New(cfg, st, v, pb, smsSvc, reg, mem, br)
+	// 设备订阅 usage 时补发最新一份；usage.Service 要用 broker 发消息，
+	// 所以只能在两边都构造完之后接上。
+	br.SetUsageResender(api.Usage())
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           api.Handler(),
 		TLSConfig:         reloader.Config(),
 		ReadHeaderTimeout: 10 * time.Second,
-		// 不设 WriteTimeout：取件是流式大文件，慢设备会被拦腰砍断。
-		IdleTimeout: 120 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
-
-	stop := make(chan struct{})
-	jan := janitor.New(st, cfg.JobsDir(), cfg.JobRetainHours, 72,
-		cfg.JobRetainPerDevice, time.Now)
-	go jan.Run(stop)
 
 	// mochi 的 Serve() 是非阻塞的：启动监听后立即返回 nil。
 	// 当成「服务退出」会让进程刚起来就结束——这个 bug 是冒烟测试抓到的，
@@ -143,46 +124,15 @@ func serve(cfg *config.Config) error {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	select {
 	case err := <-errc:
-		close(stop)
 		br.Close()
 		return err
 	case <-sig:
 		slog.Info("收到退出信号，优雅关闭")
-		close(stop)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		srv.Shutdown(ctx)
 		br.Close()
 		return nil
-	}
-}
-
-// publisherShim 打破 registry 与 broker 的循环依赖：
-// registry 构造时 broker 还不存在，构造完再填进来。
-type publisherShim struct{ b *broker.Broker }
-
-func (p *publisherShim) set(b *broker.Broker) { p.b = b }
-
-func (p *publisherShim) PublishJob(dev, job string, size int64, hooks []byte) error {
-	if p.b == nil {
-		return errors.New("broker 尚未就绪")
-	}
-	return p.b.PublishJob(dev, job, size, hooks)
-}
-
-// testRunHooks 把一轮适配测试的 run_id 换成随作业下发的一次性钩子覆盖
-// （API 文档 3.4 / 4.9）。
-//
-// 只读 store，不依赖 httpapi——registry 在 httpapi 之前构造。
-// 查不到就返回 nil，那件作业按普通作业派：宁可少一个变体（测试判 unclear），
-// 也不要因为查库失败把作业卡在队列里。
-func testRunHooks(st *store.Store) func(string) []byte {
-	return func(runID string) []byte {
-		run, ok, err := st.GetTestRun(runID)
-		if err != nil || !ok || run.Variant == "" {
-			return nil
-		}
-		return []byte(run.Variant)
 	}
 }
 

@@ -9,7 +9,7 @@ import (
 
 func newMem(t *testing.T) (*Membership, *store.Store, *time.Time) {
 	t.Helper()
-	st, err := store.Open(t.TempDir() + "/jobs.db")
+	st, err := store.Open(t.TempDir() + "/test.db")
 	if err != nil {
 		t.Fatal(err)
 	}

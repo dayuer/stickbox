@@ -1,11 +1,10 @@
 # stickboxd 部署
 
-Go 重写版的部署说明。设计见
-`docs/superpowers/specs/2026-08-30-go-print-server-design.md`，
-接口契约见 `docs/API-cloud-print.md`。
+StickBox 服务端的部署说明。项目方向与接口约定见
+[`docs/PLAN.md`](../docs/PLAN.md)。
 
 **部署物只有两样：一个 Go 二进制和一个 sqlite 文件。**
-不需要 CUPS、PPD、字体、Python——服务端不渲染，光栅由 App 完成。
+不再需要 CUPS、PPD、字体、Python，也不再保存任何打印作业文件。
 
 ---
 
@@ -22,9 +21,12 @@ cd server/go && CGO_ENABLED=0 go build -ldflags "-X github.com/dayuer/stickbox/s
 
 ```bash
 sudo useradd -r -s /usr/sbin/nologin stickbox
-sudo mkdir -p /opt/stickbox/{bin,jobs,idents}
+sudo mkdir -p /opt/stickbox/bin
 sudo chown -R stickbox:stickbox /opt/stickbox
 ```
+
+数据库文件 `jobs.db` 会在首次启动时自动创建在 `root` 目录下。
+文件名沿用旧版：已有部署的账号与设备都在这只库里，改名等于让升级丢数据。
 
 生成两把密钥：
 
@@ -46,27 +48,8 @@ openssl rand -hex 32
 
 ## 4. 证书
 
-certbot 照旧。**deploy hook 从「必需」降级为「可选」**——进程按文件 mtime
-自己热重载，不再需要靠重启换证书。
-
-### ⚠ 但旧 hook 必须改，不然会在续签时把停掉的服务拉起来
-
-原来的 `/etc/letsencrypt/renewal-hooks/deploy/mosquitto.sh` 最后一行是：
-
-```
-systemctl reload mosquitto || systemctl restart mosquitto; systemctl restart airprint-job
-```
-
-切到 stickboxd 之后 mosquitto 已经停用，**这行会在下次续签时把它拉起来抢占
-8883**。而且是几十天后才发作，现场没人会想到是证书续签干的。
-
-改成只留改权限的两行——stickbox 用户要靠它们读到私钥：
-
-```sh
-#!/bin/sh
-chgrp -R ssl-cert /etc/letsencrypt/live /etc/letsencrypt/archive 2>/dev/null
-chmod -R g+rX /etc/letsencrypt/live /etc/letsencrypt/archive 2>/dev/null
-```
+certbot 照旧。**deploy hook 不需要了**——进程按文件 mtime 自己热重载，
+不再需要靠重启换证书。
 
 ### 私钥读不到时先看补充组
 
@@ -76,16 +59,14 @@ chmod -R g+rX /etc/letsencrypt/live /etc/letsencrypt/archive 2>/dev/null
 验证热重载生效：
 
 ```bash
-sudo touch /etc/letsencrypt/live/mqtt.silkline.id/fullchain.pem && sudo journalctl -u stickboxd -n 20 | grep 热重载
+sudo touch /etc/letsencrypt/live/your.host/fullchain.pem && sudo journalctl -u stickboxd -n 20 | grep 热重载
 ```
 
 ## 5. 备份
 
-**`jobs.db` 现在含个人信息**（加密的手机号）。备份文件必须加密且限权，
-不能像以前那样随手 `scp` 到本地。
-
-作业文件（`jobs/*.urf`）不用备份——URF 是光栅，单份 200KB~15MB，且
-App 随时可以重新生成。
+**`jobs.db` 含个人信息**（加密的手机号与用量）。备份文件必须加密且限权，
+不能随手 `scp` 到本地。文件名虽旧，里面已经没有作业数据——打印表在
+启动时会一次性清掉。
 
 ## 5b. ⚠ 别用 root 试跑二进制
 
@@ -107,34 +88,35 @@ chown -R stickbox:stickbox /opt/stickbox && systemctl restart stickboxd
 
 要试跑就带上身份：`sudo -u stickbox /opt/stickbox/bin/stickboxd -conf ...`
 
-## 6. 切换
+## 6. 从旧服务切换
+
+旧部署里的作业服务与独立 mosquitto 都要停掉；broker 已内嵌，
+设备侧要同步换密钥，不设并行期。
 
 ```bash
 sudo systemctl stop stickbox-job.service mosquitto.service
-```
-
-```bash
 sudo systemctl disable mosquitto.service
+sudo cp server/stickboxd.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now stickboxd.service
 ```
 
-```bash
-sudo cp server/stickboxd.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now stickboxd.service
-```
+打印功能在本次切换中整条退役：`/api/print`、作业取件、打印机档案与适配
+测试端点都已删除，旧固件不能再打印。
 
-**mosquitto 直接下线，不设并行期。** broker 已内嵌，设备侧要同步改密钥，
-并行期只会让两条认证路径同时半生不熟。
+**MQTT 主题前缀仍然叫 `printer/{dev}/…`。** 打印退役不改变主题名：固件、
+ACL、部署校验脚本都按这个约定写好了，改名会让设备与运维脚本必须同时升
+级，没有收益。现在只使用 `printer/{dev}/status`（心跳）与
+`printer/{dev}/usage`（用量）两个叶子主题。
 
 ## 7. 回滚
 
-反过来即可。数据库双向兼容——Python 版忽略新增的表和列。
-
-**回滚的前提是 CUPS 还在**，所以先别急着卸载 `cups` / `fonts-noto-cjk` /
-`python3-gi`，跑稳一个月再清。卸载是不可逆的。
+回滚到打印版不再受支持——打印代码和数据库表都已删除。如果只是升级
+stickboxd 本身出了问题，换回上一版二进制并恢复 `jobs.db` 备份即可。
 
 ## 8. 上线验证清单
 
-切换后逐条执行。`$DEV` / `$DEVKEY` / `$APPTOK` 按
-`docs/API-cloud-print.md` 第 7 节拿。
+切换后逐条执行。`$DEV` / `$DEVKEY` / `$APPTOK` 按接口文档拿。
 
 ```bash
 ss -lntp | grep -E ':(8883|9443)'
@@ -148,10 +130,9 @@ openssl s_client -connect mqtt.silkline.id:9443 -servername mqtt.silkline.id </d
 curl -s -o /dev/null -w '%{http_code}\n' https://mqtt.silkline.id:9443/api/status
 ```
 
-### 三条必须为「失败」的检查
+### 必须为「失败」的检查
 
-这三条对应本次重写补的三个洞。**它们没有用户可见的症状，坏了也不会有人报障**，
-所以必须主动验。
+这几条没有用户可见的症状，坏了也不会有人报障，所以必须主动验。
 
 ```bash
 mosquitto_pub -h mqtt.silkline.id -p 8883 --capath /etc/ssl/certs -u $DEV -P 'bogus.key' -t "printer/$DEV/status" -m '{}'; echo "退出码=$? （非 0 才对）"
@@ -162,10 +143,13 @@ mosquitto_pub -h mqtt.silkline.id -p 8883 --capath /etc/ssl/certs -u $DEV -P "$D
 ```
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' -X POST https://mqtt.silkline.id:9443/api/print -H "Authorization: Bearer $APPTOK" -H "X-Device: $DEV" -H 'X-Printer-Serial: PA' -H 'Content-Type: image/urf' --data-binary '%PDF-1.7 fake'
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://mqtt.silkline.id:9443/api/print -H "Authorization: Bearer $APPTOK"
 ```
 
-依次应当是：连接被拒（非 0）、订阅被拒（非 0）、`400`。
+依次应当是：连接被拒（非 0）、订阅被拒（非 0）、`404`（打印端点已删除）。
+
+用量链路另验一条：App 读取自己的最新用量应返回 `200`（还没上报过则是
+`404`），agent 用手机号 + 验证码登录后能 `POST /api/usage`。
 
 ## 9. 运维子命令
 
@@ -184,12 +168,3 @@ sudo -u stickbox /opt/stickbox/bin/stickboxd -conf /opt/stickbox/config.json dev
 
 `device unbind` 绕过所有权检查，所以只能在服务器上执行，不暴露为 API。
 `user phone` 是唯一能解出完整号码的入口。
-
-## 10. 还没退场的东西
-
-- `server/bin/jobsrv.py` —— Python 版，切换后不再运行。**当前有未提交的本地
-  改动，删除前先确认。** 回滚要用它
-- `tools/reference/render.py`、`text2pdf.py` —— 已标注不再部署。
-  `fix_page_count` 是 App 端 URF 编码器的参考实现，别删
-- `/opt/stickbox/ppd/hp136a.ppd` —— 不再被任何代码读取，留作 render-profile
-  参数的人工核对依据

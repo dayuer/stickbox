@@ -7,18 +7,10 @@ import (
 
 type devicesResp struct {
 	Devices []struct {
-		Dev        string `json:"dev"`
-		Name       string `json:"name"`
-		Online     bool   `json:"online"`
-		State      string `json:"state"`
-		Bound      int64  `json:"bound"`
-		QueuedJobs int    `json:"queued_jobs"`
-		Printer    *struct {
-			Serial   string `json:"serial"`
-			Make     string `json:"make"`
-			Model    string `json:"model"`
-			Attached bool   `json:"attached"`
-		} `json:"printer"`
+		Dev    string `json:"dev"`
+		Name   string `json:"name"`
+		Online bool   `json:"online"`
+		Bound  int64  `json:"bound"`
 	} `json:"devices"`
 }
 
@@ -52,8 +44,8 @@ func TestDevicesListsEnrolled(t *testing.T) {
 	h, dep := newTestAPI(t)
 	token := login(t, h, dep, "13800008888")
 
-	post(h, "/api/device/enroll", `{"dev":"f412fa87c9e0","name":"工位打印机"}`, bearer(token))
-	post(h, "/api/device/enroll", `{"dev":"aabbccddeeff","name":"仓库备用机"}`, bearer(token))
+	post(h, "/api/device/enroll", `{"dev":"f412fa87c9e0","name":"客厅电视"}`, bearer(token))
+	post(h, "/api/device/enroll", `{"dev":"aabbccddeeff","name":"卧室电视"}`, bearer(token))
 
 	rr := get(h, "/api/devices", bearer(token))
 	var out devicesResp
@@ -67,18 +59,22 @@ func TestDevicesListsEnrolled(t *testing.T) {
 		if d.Online {
 			t.Errorf("%s 没连过 MQTT，不该是在线", d.Dev)
 		}
-		if d.State != "offline" {
-			t.Errorf("%s state=%q，期望 offline", d.Dev, d.State)
-		}
-		if d.Printer != nil {
-			t.Errorf("%s 没插打印机时 printer 必须是 null", d.Dev)
-		}
 		if d.Bound == 0 {
 			t.Errorf("%s 没有绑定时间", d.Dev)
 		}
 	}
-	if byDev["f412fa87c9e0"] != "工位打印机" || byDev["aabbccddeeff"] != "仓库备用机" {
+	if byDev["f412fa87c9e0"] != "客厅电视" || byDev["aabbccddeeff"] != "卧室电视" {
 		t.Errorf("名字对不上：%v", byDev)
+	}
+
+	// 有心跳的那台显示在线。
+	dep.reg.Seen("f412fa87c9e0")
+	rr = get(h, "/api/devices", bearer(token))
+	json.Unmarshal(rr.Body.Bytes(), &out)
+	for _, d := range out.Devices {
+		if d.Dev == "f412fa87c9e0" && !d.Online {
+			t.Error("发过心跳的设备仍显示离线")
+		}
 	}
 }
 
