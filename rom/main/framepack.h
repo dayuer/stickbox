@@ -55,6 +55,17 @@ size_t fp_build_band(const fp_index_t *ix,
                      int hh, int mm,
                      uint8_t *out, size_t cap);
 
+/* 解析 meta.json 填 fp_index_t。失败返回 false——输入来自网络，一律当
+ * 不可信处理。和拼接核心一样不依赖 IDF，主机侧测的就是这一份。 */
+bool fp_parse_meta(const char *json, size_t len, fp_index_t *ix);
+
+/* 索引自洽性检查：行段在底帧内、槽在行内且按列升序、数字段在图集内、
+ * max_band_bytes 不超过本机缓冲。why 回填一句人能看懂的原因。
+ *
+ * 加载时查一次，比每帧拼接时才发现问题要早得多。 */
+bool fp_index_valid(const fp_index_t *ix, size_t base_len, size_t atlas_len,
+                    size_t band_cap, const char **why);
+
 /* 拼接后各行段在输出缓冲里的偏移，和 fp_build_band 的写入顺序一致。
  * 推流时要用它把行段和底帧的连接段交替发出去。 */
 void fp_band_layout(const fp_index_t *ix, uint32_t out_off[FP_BAND_ROWS],

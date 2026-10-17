@@ -26,87 +26,6 @@ static unsigned char *slurp(const char *path, size_t *len)
     return b;
 }
 
-/* 极简 JSON 取数：找到 "key" 之后的第一个数字。meta.json 是服务端生成的，
- * 结构固定，这里只为测试，不做通用解析。 */
-static const char *find_key(const char *s, const char *key)
-{
-    char pat[64];
-    snprintf(pat, sizeof pat, "\"%s\"", key);
-    return strstr(s, pat);
-}
-
-static long num_after(const char **p)
-{
-    const char *s = *p;
-    while (*s && (*s < '0' || *s > '9') && *s != '-') s++;
-    char *end;
-    long v = strtol(s, &end, 10);
-    *p = end;
-    return v;
-}
-
-/* 从 "runs":[{"off":N,"len":M},...] 里读 count 段。 */
-static void read_runs(const char **p, fp_run_t *out, int count)
-{
-    const char *s = find_key(*p, "runs");
-    if (!s) { fprintf(stderr, "缺 runs\n"); exit(2); }
-    s += 6;
-    for (int i = 0; i < count; i++) {
-        const char *o = find_key(s, "off"); const char *l;
-        if (!o) { fprintf(stderr, "runs 段不够\n"); exit(2); }
-        o += 5; out[i].off = (uint32_t)num_after(&o);
-        l = find_key(o, "len"); l += 5; out[i].len = (uint32_t)num_after(&l);
-        s = l;
-    }
-    *p = s;
-}
-
-static void parse_meta(const char *json, fp_index_t *ix)
-{
-    memset(ix, 0, sizeof *ix);
-    ix->band_row0 = 4;
-    ix->intervals_per_row = 15;
-
-    const char *p = find_key(json, "dri");
-    if (p) { p += 5; long dri = num_after(&p);
-             const char *c = find_key(json, "mcu_cols");
-             if (c) { c += 10; long cols = num_after(&c); ix->intervals_per_row = (uint16_t)(cols / dri); } }
-
-    p = find_key(json, "rows");
-    if (p) { p += 6; ix->band_row0 = (uint16_t)num_after(&p); }
-
-    p = find_key(json, "max_band_bytes");
-    if (p) { p += 16; ix->max_band_bytes = (uint32_t)num_after(&p); }
-
-    p = find_key(json, "row_runs");
-    if (!p) { fprintf(stderr, "缺 row_runs\n"); exit(2); }
-    p += 10;
-    for (int i = 0; i < FP_BAND_ROWS; i++) {
-        const char *o = find_key(p, "off"); o += 5; ix->row_runs[i].off = (uint32_t)num_after(&o);
-        const char *l = find_key(o, "len"); l += 5; ix->row_runs[i].len = (uint32_t)num_after(&l);
-        p = l;
-    }
-
-    p = find_key(json, "slots");
-    if (!p) { fprintf(stderr, "缺 slots\n"); exit(2); }
-    for (int s = 0; s < FP_SLOTS; s++) {
-        const char *mc = find_key(p, "mcu_col");
-        if (!mc) { fprintf(stderr, "slots 不够\n"); exit(2); }
-        mc += 9; ix->slot_mcu_col[s] = (uint16_t)num_after(&mc);
-        p = mc;
-        read_runs(&p, ix->slot_runs[s], FP_BAND_ROWS);
-    }
-
-    p = find_key(json, "digits");
-    if (!p) { fprintf(stderr, "缺 digits\n"); exit(2); }
-    for (int d = 0; d < FP_DIGITS; d++) {
-        const char *dd = find_key(p, "\"d\"");
-        if (!dd) dd = p;
-        p = dd;
-        read_runs(&p, ix->digit_runs[d], FP_BAND_ROWS);
-    }
-}
-
 int main(int argc, char **argv)
 {
     if (argc != 7) {
@@ -124,7 +43,11 @@ int main(int argc, char **argv)
     memcpy(metaz, meta, mlen); metaz[mlen] = 0;
 
     fp_index_t ix;
-    parse_meta(metaz, &ix);
+    if (!fp_parse_meta(metaz, mlen, &ix)) { fprintf(stderr, "meta 解析失败\n"); return 1; }
+    const char *why;
+    if (!fp_index_valid(&ix, blen, alen, 16 * 1024, &why)) {
+        fprintf(stderr, "索引不合法：%s\n", why); return 1;
+    }
 
     static unsigned char out[64 * 1024];
     size_t n = fp_build_band(&ix, base, blen, atlas, alen, hh, mm, out, sizeof out);
