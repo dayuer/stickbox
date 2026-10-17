@@ -2,6 +2,7 @@ package broker
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"time"
@@ -58,49 +59,61 @@ func (h *Hook) ID() string { return "stickbox-auth" }
 
 func (h *Hook) Provides(b byte) bool {
 	switch b {
-	case mqtt.OnConnectAuthenticate, mqtt.OnACLCheck, mqtt.OnPublished, mqtt.OnDisconnect,
-		mqtt.OnSubscribed:
+	case mqtt.OnConnect, mqtt.OnConnectAuthenticate, mqtt.OnACLCheck,
+		mqtt.OnPublished, mqtt.OnPublishDropped, mqtt.OnQosDropped,
+		mqtt.OnDisconnect, mqtt.OnSubscribed:
 		return true
 	}
 	return false
 }
 
-func (h *Hook) OnConnectAuthenticate(cl *mqtt.Client, pk packets.Packet) bool {
-	// 先做全局准入，再做（可能很贵的）令牌校验，避免重连风暴把认证队列打满。
-	if h.admit != nil && !h.admit.allow() {
+// OnConnect 做准入 + 认证 + 身份登记。
+//
+// 认证原本在 OnConnectAuthenticate 里，但那个钩子只能返回 bool，mochi 会
+// 统一回 CONNACK 0x05（未授权）。服务端繁忙/限流/数据库错误也回 0x05 的话，
+// 固件会以为密钥被吊销而清 NVS、重新注册——攻击者只要打满连接就能逐台
+// “解绑”设备。所以把可能返回 0x03（server unavailable）的判断搬到
+// OnConnect，只有真正的密钥/身份问题才留给 OnConnectAuthenticate 回 0x05。
+func (h *Hook) OnConnect(cl *mqtt.Client, pk packets.Packet) error {
+	if h.admit != nil && !h.admit.allow(cl.Net.Remote) {
 		slog.Warn("MQTT 连接被准入限流", "remote", cl.Net.Remote)
-		return false
+		return packets.ErrServerUnavailable // 0x03：让设备退避重试，不要清密钥
 	}
 	user := string(pk.Connect.Username)
 	id, err := h.v.Verify(string(pk.Connect.Password))
 	if err != nil {
-		slog.Warn("MQTT 认证失败", "username", user, "remote", cl.Net.Remote)
-		return false
+		if errors.Is(err, auth.ErrDenied) {
+			// 真·密钥不对：让 OnConnectAuthenticate 回 0x05。
+			slog.Warn("MQTT 认证失败", "username", user, "remote", cl.Net.Remote)
+			return nil
+		}
+		// 查库失败等临时错误：0x03，不能告诉设备密钥无效。
+		slog.Warn("MQTT 认证暂时不可用", "username", user, "remote", cl.Net.Remote, "err", err)
+		return packets.ErrServerUnavailable
 	}
 
 	// agent 只走 HTTP，ACL 也不给它任何 topic。
 	if id.Role == auth.RoleAgent {
 		slog.Warn("agent 令牌不允许连 MQTT", "username", user)
-		return false
+		return nil
 	}
 
 	// T7 起设备注册时就直接带 dev，不会再签出 dev='' 的密钥。
-	// 旧库里若还有这种密钥，直接拒绝，让设备重新注册出码。
 	if id.Role == auth.RoleDevice && id.Dev == "" {
 		slog.Warn("设备密钥未绑定 dev，拒绝连接；请重新注册", "key_id", id.KeyID)
-		return false
+		return nil
 	}
 	// device 角色的 username 必须等于它自己的 dev——防止拿 A 的密钥冒充 B 连接。
 	if id.Role == auth.RoleDevice && id.Dev != user {
 		slog.Warn("MQTT username 与密钥不符", "username", user, "key_dev", id.Dev)
-		return false
+		return nil
 	}
 	// pending 密钥只能读 pair；它不能把已在线 active 设备顶下线。
-	// 同一个 dev 的 pending 连接还要限频，防止趁合法设备重连空档抢先。
 	if id.Role == auth.RoleDevice && id.Pending {
 		if h.pending != nil && !h.pending.allow(id.Dev, time.Now()) {
-			slog.Warn("pending 连接过频，拒绝", "dev", id.Dev, "remote", cl.Net.Remote)
-			return false
+			// 限频不是“密钥无效”，回 0x03 让设备退避。
+			slog.Warn("pending 连接过频，稍后重试", "dev", id.Dev, "remote", cl.Net.Remote)
+			return packets.ErrServerUnavailable
 		}
 		// CLI 的 device unbind/revoke 直接改库，不和 broker 同进程，没法
 		// 主动踢线。先清掉已经失效的在线身份，否则那条幽灵连接会把新
@@ -108,17 +121,34 @@ func (h *Hook) OnConnectAuthenticate(cl *mqtt.Client, pk packets.Packet) bool {
 		h.dropRevoked(id.Dev)
 		if !h.ids.admit(cl, id) {
 			metrics.IncPendingTakeoverRejected()
-			slog.Warn("pending 连接试图顶掉在线设备", "dev", id.Dev, "remote", cl.Net.Remote)
-			return false
+			// 已有一台 active 在线：这是“稍后再试”，不是密钥被吊销。
+			slog.Warn("pending 连接试图顶掉在线设备，稍后重试",
+				"dev", id.Dev, "remote", cl.Net.Remote)
+			return packets.ErrServerUnavailable
 		}
 		h.evictStale(cl.ID)
-		return true
+		return nil
 	}
 	if !h.ids.admit(cl, id) {
-		return false
+		slog.Warn("连接身份登记失败，稍后重试", "remote", cl.Net.Remote)
+		return packets.ErrServerUnavailable
 	}
 	h.evictStale(cl.ID)
-	return true
+	return nil
+}
+
+// OnConnectAuthenticate 只回答“OnConnect 是否已经放行并登记了这条连接”。
+func (h *Hook) OnConnectAuthenticate(cl *mqtt.Client, pk packets.Packet) bool {
+	_, ok := h.ids.get(cl)
+	return ok
+}
+
+func (h *Hook) OnPublishDropped(cl *mqtt.Client, pk packets.Packet) {
+	metrics.IncMQTTPublishDropped()
+}
+
+func (h *Hook) OnQosDropped(cl *mqtt.Client, pk packets.Packet) {
+	metrics.IncMQTTQosDropped()
 }
 
 // dropRevoked 把同 dev、非 pending、但密钥已在库里被吊销/禁用的连接

@@ -33,7 +33,7 @@ func IssueDeviceKey(v *Verifier, st SessionStore, userID, dev, name string, pend
 
 func issueKey(v *Verifier, st SessionStore, k store.Key) (token, keyID string, err error) {
 	keyID, secret, token := NewToken()
-	hash, err := v.HashSecret(secret)
+	hash, err := v.HashSecret(keyID, secret)
 	if err != nil {
 		return "", "", err
 	}

@@ -24,19 +24,21 @@ func (f *fakeKeys) KeyByID(id string) (store.Key, bool, error) {
 	return k, ok, nil
 }
 
-func (f *fakeKeys) UpdateKeyHash(id, hash string) error {
+func (f *fakeKeys) UpdateKeyHash(id, oldHash, newHash string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	k := f.keys[id]
-	k.Hash = hash
-	f.keys[id] = k
+	if k.Hash == oldHash {
+		k.Hash = newHash
+		f.keys[id] = k
+	}
 	return nil
 }
 
 func newFixture(t *testing.T) (*Verifier, *fakeKeys, string) {
 	t.Helper()
 	keyID, secret, token := NewToken()
-	h, err := HashSecret(testPepper, secret)
+	h, err := HashSecret(testPepper, keyID, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +168,7 @@ type blockingKeys struct {
 	release chan struct{}
 }
 
-func (f *blockingKeys) UpdateKeyHash(string, string) error { return nil }
+func (f *blockingKeys) UpdateKeyHash(string, string, string) error { return nil }
 
 func (f *blockingKeys) KeyByID(string) (store.Key, bool, error) {
 	f.mu.Lock()
@@ -186,7 +188,7 @@ func (f *blockingKeys) KeyByID(string) (store.Key, bool, error) {
 // 写回缓存，之后一小时的重连全部被当成待配对。修复后必须重新查库。
 func TestVerifyDoesNotCacheIdentityInvalidatedMidFlight(t *testing.T) {
 	keyID, secret, token := NewToken()
-	h, err := HashSecret(testPepper, secret)
+	h, err := HashSecret(testPepper, keyID, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +261,7 @@ func TestVerifyMigratesLegacyArgon2(t *testing.T) {
 
 func TestVerifyRejectsWrongPepper(t *testing.T) {
 	keyID, secret, token := NewToken()
-	h, err := HashSecret(testPepper, secret)
+	h, err := HashSecret(testPepper, keyID, secret)
 	if err != nil {
 		t.Fatal(err)
 	}

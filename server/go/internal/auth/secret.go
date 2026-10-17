@@ -68,12 +68,14 @@ func SplitToken(token string) (keyID, secret string, err error) {
 //
 // 不需要 salt：secret 本身是 24 字节随机数，彩虹表和预计算无从下手。
 // pepper 让数据库单独泄露时哈希不可离线验证。
-func HashSecret(pepper, secret string) (string, error) {
+func HashSecret(pepper, keyID, secret string) (string, error) {
 	if pepper == "" {
 		return "", errors.New("auth: 缺少 token pepper")
 	}
 	mac := hmac.New(sha256.New, []byte(pepper))
-	mac.Write([]byte(secret))
+	// 域分离：把 key_id 也绑进 MAC 输入，同一 secret 出现在别的 key_id
+	// 下不会产生相同哈希，哈希也不能被挪到别的记录上复用。
+	mac.Write([]byte("stickbox-token-v1|" + keyID + "|" + secret))
 	sum := mac.Sum(nil)
 	return "$" + hmacScheme + "$" + hmacVer + "$" +
 		base64.RawStdEncoding.EncodeToString(sum), nil
@@ -81,7 +83,10 @@ func HashSecret(pepper, secret string) (string, error) {
 
 // VerifySecret 校验 secret 与存储的哈希。legacy 为 true 表示命中的是
 // 旧的 argon2id 记录，调用方可就地迁移成 HMAC。
-func VerifySecret(pepper, secret, encoded string) (ok, legacy bool) {
+func VerifySecret(pepper, keyID, secret, encoded string) (ok, legacy bool) {
+	if pepper == "" {
+		return false, false
+	}
 	parts := strings.Split(encoded, "$")
 	switch {
 	case len(parts) == 4 && parts[1] == hmacScheme && parts[2] == hmacVer:
@@ -90,7 +95,7 @@ func VerifySecret(pepper, secret, encoded string) (ok, legacy bool) {
 			return false, false
 		}
 		mac := hmac.New(sha256.New, []byte(pepper))
-		mac.Write([]byte(secret))
+		mac.Write([]byte("stickbox-token-v1|" + keyID + "|" + secret))
 		return subtle.ConstantTimeCompare(mac.Sum(nil), want) == 1, false
 	case len(parts) == 6 && parts[1] == "argon2id":
 		return verifyArgon2(secret, encoded), true

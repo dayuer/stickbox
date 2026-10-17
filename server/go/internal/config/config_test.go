@@ -15,7 +15,7 @@ func write(t *testing.T, body string) string {
 	return p
 }
 
-const minimal = `{"cert_dir":"/etc/le/live/x","token_pepper":"0123456789abcdef"}`
+const minimal = `{"cert_dir":"/etc/le/live/x","token_pepper":"0123456789abcdefghijklmn"}`
 
 func TestLoadAppliesDefaults(t *testing.T) {
 	c, err := Load(write(t, minimal))
@@ -47,16 +47,24 @@ func TestLoadRejectsMissingPepper(t *testing.T) {
 	if _, err := Load(write(t, `{"cert_dir":"/c","token_pepper":"short"}`)); err == nil {
 		t.Error("token_pepper 太短时应当拒绝启动")
 	}
+	if _, err := Load(write(t,
+		`{"cert_dir":"/c","token_pepper":"请用 openssl rand -base64 32 生成，至少 16 字符"}`)); err == nil {
+		t.Error("示例占位符应当被拒绝")
+	}
+	if _, err := Load(write(t,
+		`{"cert_dir":"/c","token_pepper":"  short-but-padded  "}`)); err == nil {
+		t.Error("TrimSpace 后不足 16 字节应当被拒绝")
+	}
 }
 
 func TestLoadRejectsMissingCertDir(t *testing.T) {
-	if _, err := Load(write(t, `{"root":"/srv/ap","token_pepper":"0123456789abcdef"}`)); err == nil {
+	if _, err := Load(write(t, `{"root":"/srv/ap","token_pepper":"0123456789abcdefghijklmn"}`)); err == nil {
 		t.Error("缺 cert_dir 时应当报错")
 	}
 }
 
 func TestDerivedPaths(t *testing.T) {
-	c, err := Load(write(t, `{"cert_dir":"/c","root":"/srv/ap","token_pepper":"0123456789abcdef"}`))
+	c, err := Load(write(t, `{"cert_dir":"/c","root":"/srv/ap","token_pepper":"0123456789abcdefghijklmn"}`))
 	if err != nil {
 		t.Fatal(err)
 	}

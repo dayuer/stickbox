@@ -20,8 +20,11 @@
 存储格式：
 
 ```
-$hmac-sha256$v=1$base64(HMAC-SHA256(pepper, secret))
+$hmac-sha256$v=1$base64(HMAC-SHA256(pepper, "stickbox-token-v1|key_id|secret"))
 ```
+
+`key_id` 也参与 MAC（域分离）：把一条记录的哈希挪到另一个 `key_id` 下
+不会通过，防止哈希在记录之间复用。
 
 - **快**：一次 HMAC 是微秒级。服务端重启后所有设备同时重连时，不会像
   Argon2 那样每个连接占 64MB、把 CPU 全花在清零内存上（T21 实测

@@ -20,10 +20,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/dayuer/stickbox/server/go/internal/frame"
+	"github.com/dayuer/stickbox/server/go/internal/metrics"
 	"github.com/dayuer/stickbox/server/go/internal/render"
 	"github.com/dayuer/stickbox/server/go/internal/source"
 	"github.com/dayuer/stickbox/server/go/internal/store"
@@ -119,6 +122,18 @@ type worker struct {
 	ch     chan struct{}
 	cancel context.CancelFunc
 	active bool // 有未完成的标记（排队/防抖/渲染）
+}
+
+// memNode 记录 LRU 节点入账时的帧包大小，避免替换/命中时 memBytes 漂移。
+type memNode struct {
+	id   string
+	size int64
+}
+
+// evicted 是磁盘淘汰的用户，用于在锁外删目录并写版本墓碑。
+type evicted struct {
+	id  string
+	ver uint64
 }
 
 // Service 维护全部用户的当前帧。
@@ -277,9 +292,7 @@ func (s *Service) load() {
 	s.mu.Lock()
 	victims := s.evictDiskLocked("", s.opt.CacheMaxBytes)
 	s.mu.Unlock()
-	for _, id := range victims {
-		os.RemoveAll(s.userDir(id))
-	}
+	s.finishEvictions(victims)
 }
 
 // MarkDirty 标记用户数据变了，后台 worker 会在防抖窗口后重渲染。
@@ -451,6 +464,10 @@ func (s *Service) commit(userID string, data []byte, now time.Time, received tim
 	ver := uint64(1)
 	if cur != nil {
 		ver = cur.ver + 1
+	} else if gone, ok := s.readGoneVer(userID); ok {
+		// 帧被磁盘 LRU 淘汰过：从墓碑接着递增，绝不回到 1。
+		// 固件拿版本号做等值比较，回退会让它误以为手里已是最新帧。
+		ver = gone + 1
 	}
 	rec := int64(0)
 	if hasUsage {
@@ -481,11 +498,9 @@ func (s *Service) commit(userID string, data []byte, now time.Time, received tim
 	victims := s.evictDiskLocked(userID, s.opt.CacheMaxBytes)
 	s.mu.Unlock()
 
-	for _, id := range victims {
-		if err := os.RemoveAll(s.userDir(id)); err != nil {
-			slog.Warn("淘汰帧缓存失败", "user", id, "err", err)
-		}
-	}
+	// 这次提交成功后墓碑就过时了（版本已经重新建立在它之上）。
+	os.Remove(s.goneFile(userID))
+	s.finishEvictions(victims)
 	if err := syncDir(s.userDir(userID)); err != nil {
 		slog.Warn("同步帧缓存目录失败", "user", userID, "err", err)
 	}
@@ -500,28 +515,34 @@ func (s *Service) touchMemLocked(userID string, c *cached) {
 		return
 	}
 	if e, ok := s.memIndex[userID]; ok {
+		n := e.Value.(*memNode)
+		if n.size != c.size {
+			s.memBytes += c.size - n.size
+			n.size = c.size
+		}
 		s.memLRU.MoveToFront(e)
 		return
 	}
-	e := s.memLRU.PushFront(userID)
-	s.memIndex[userID] = e
+	n := &memNode{id: userID, size: c.size}
+	s.memIndex[userID] = s.memLRU.PushFront(n)
 	s.memBytes += c.size
 	for s.memBytes > s.opt.MemoryMaxBytes && s.memLRU.Len() > 1 {
 		back := s.memLRU.Back()
-		id := back.Value.(string)
+		node := back.Value.(*memNode)
 		s.memLRU.Remove(back)
-		delete(s.memIndex, id)
-		if old, ok := s.cache[id]; ok && old.data != nil {
-			s.memBytes -= old.size
+		delete(s.memIndex, node.id)
+		s.memBytes -= node.size
+		if old, ok := s.cache[node.id]; ok {
 			old.data = nil
 		}
 	}
 }
 
 // evictDiskLocked 按 used 从旧到新删除，直到磁盘总量回到上限内。
-// 返回需要删除目录的 userID；要求持有 s.mu。
-func (s *Service) evictDiskLocked(keep string, max int64) []string {
-	var victims []string
+// 返回需要删除目录的用户及其版本（版本写墓碑，保证不倒退）；
+// 要求持有 s.mu。
+func (s *Service) evictDiskLocked(keep string, max int64) []evicted {
+	var victims []evicted
 	for s.diskBytes > max {
 		var oldestID string
 		var oldest int64
@@ -540,15 +561,52 @@ func (s *Service) evictDiskLocked(keep string, max int64) []string {
 		delete(s.cache, oldestID)
 		s.diskBytes -= old.size + cacheHeader
 		if e, ok := s.memIndex[oldestID]; ok {
+			node := e.Value.(*memNode)
 			s.memLRU.Remove(e)
 			delete(s.memIndex, oldestID)
-			if old.data != nil {
-				s.memBytes -= old.size
-			}
+			s.memBytes -= node.size
 		}
-		victims = append(victims, oldestID)
+		victims = append(victims, evicted{id: oldestID, ver: old.ver})
 	}
 	return victims
+}
+
+// finishEvictions 在锁外删目录并写版本墓碑。
+func (s *Service) finishEvictions(victims []evicted) {
+	if len(victims) == 0 {
+		return
+	}
+	metrics.IncFrameCacheEviction(len(victims))
+	for _, v := range victims {
+		if err := os.MkdirAll(s.goneDir(), 0o700); err != nil {
+			slog.Warn("创建版本墓碑目录失败", "err", err)
+		} else if err := os.WriteFile(s.goneFile(v.id),
+			[]byte(strconv.FormatUint(v.ver, 10)), 0o600); err != nil {
+			slog.Warn("写版本墓碑失败", "user", v.id, "err", err)
+		}
+		if err := os.RemoveAll(s.userDir(v.id)); err != nil {
+			slog.Warn("淘汰帧缓存失败", "user", v.id, "err", err)
+		}
+	}
+}
+
+func (s *Service) goneDir() string { return filepath.Join(s.dir(), ".gone") }
+
+func (s *Service) goneFile(id string) string {
+	return filepath.Join(s.goneDir(), id)
+}
+
+// readGoneVer 读被杀用户的版本墓碑；没有墓碑表示从未淘汰过。
+func (s *Service) readGoneVer(id string) (uint64, bool) {
+	raw, err := os.ReadFile(s.goneFile(id))
+	if err != nil {
+		return 0, false
+	}
+	v, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 64)
+	if err != nil || v == 0 {
+		return 0, false
+	}
+	return v, true
 }
 
 func (s *Service) writeTemp(userID string, c *cached) (string, error) {
@@ -627,62 +685,73 @@ func (s *Service) cachedVersion(userID string) (uint64, bool) {
 // Current 返回用户的当前帧包与版本。返回的字节是共享缓存，调用方不要改。
 //
 // 帧包不常驻内存：不在 LRU 里时从磁盘读一次，同时更新 used 供淘汰。
+//
+// 读文件时不持锁。期间 commit 可能把文件换成 v2，而 v2 的 data 又立刻被
+// 内存 LRU 淘汰——如果不比对文件里的版本，就会把 v1 的字节挂到 v2 名下。
+// 所以 readPackFile 连版本一起返回，和内存里的 c.ver 不一致就丢弃重读。
 func (s *Service) Current(userID string) (data []byte, ver uint64, ok bool) {
-	s.mu.Lock()
-	c, ok := s.cache[userID]
-	if !ok {
+	for attempt := 0; attempt < 3; attempt++ {
+		s.mu.Lock()
+		c, ok := s.cache[userID]
+		if !ok {
+			s.mu.Unlock()
+			return nil, 0, false
+		}
+		if c.data != nil {
+			if e, ok := s.memIndex[userID]; ok {
+				s.memLRU.MoveToFront(e)
+			}
+			c.used = s.opt.Now().Unix()
+			data, ver := c.data, c.ver
+			s.mu.Unlock()
+			return data, ver, true
+		}
 		s.mu.Unlock()
-		return nil, 0, false
-	}
-	needRead := c.data == nil
-	s.mu.Unlock()
 
-	if needRead {
-		got, err := readPackFile(s.cacheFile(userID))
+		got, fileVer, err := readPackFile(s.cacheFile(userID))
 		if err != nil {
 			slog.Warn("读帧缓存失败", "user", userID, "err", err)
 			return nil, 0, false
 		}
+
 		s.mu.Lock()
 		c, ok = s.cache[userID]
 		if !ok {
 			s.mu.Unlock()
 			return nil, 0, false
 		}
+		if c.ver != fileVer {
+			// 文件已经被更新的提交换掉了；重读一次。
+			s.mu.Unlock()
+			continue
+		}
 		if c.data == nil {
 			c.data = got
 			c.size = int64(len(got))
 			s.touchMemLocked(userID, c)
 		}
+		if e, ok := s.memIndex[userID]; ok {
+			s.memLRU.MoveToFront(e)
+		}
+		c.used = s.opt.Now().Unix()
+		data, ver := c.data, c.ver
 		s.mu.Unlock()
+		return data, ver, true
 	}
-
-	s.mu.Lock()
-	c, ok = s.cache[userID]
-	if !ok {
-		s.mu.Unlock()
-		return nil, 0, false
-	}
-	if e, ok := s.memIndex[userID]; ok {
-		s.memLRU.MoveToFront(e)
-	}
-	c.used = s.opt.Now().Unix()
-	data, ver = c.data, c.ver
-	s.mu.Unlock()
-	return data, ver, true
+	return nil, 0, false
 }
 
-// readPackFile 读取并校验磁盘缓存，返回帧包字节。
-func readPackFile(path string) ([]byte, error) {
+// readPackFile 读取并校验磁盘缓存，返回帧包字节与文件里的版本。
+func readPackFile(path string) ([]byte, uint64, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	c, err := decodeCache(raw)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return c.data, nil
+	return c.data, c.ver, nil
 }
 
 // CurrentForKey 按令牌自己的 KeyID 判权：未配对、已吊销、角色不对、
@@ -744,13 +813,15 @@ func (s *Service) drop(userID string) {
 		delete(s.cache, userID)
 	}
 	if e, ok := s.memIndex[userID]; ok {
+		node := e.Value.(*memNode)
 		s.memLRU.Remove(e)
 		delete(s.memIndex, userID)
-		if had && c.data != nil {
-			s.memBytes -= c.size
-		}
+		s.memBytes -= node.size
 	}
 	s.mu.Unlock()
+
+	// 解绑/删除用户后墓碑也没有意义了。
+	os.Remove(s.goneFile(userID))
 
 	s.workersMu.Lock()
 	if w, ok := s.workers[userID]; ok {

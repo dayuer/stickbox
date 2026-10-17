@@ -760,6 +760,31 @@ func TestDiskLRUEvictsLeastRecentlyUsed(t *testing.T) {
 	}
 }
 
+// 磁盘淘汰后重新渲染，版本号必须继续递增；回退到 1 会让固件误判
+// “手里已经是这个版本”而跳过下载。
+func TestVersionMonotonicAfterEviction(t *testing.T) {
+	f := newFixture(t)
+	t1 := f.currentTime()
+	f.setNow(t1)
+	f.rebuild("u1")
+	before := f.version("u1")
+
+	// 把上限压到装不下一帧：重建 u2 会淘汰 u1。
+	f.svc.opt.CacheMaxBytes = 1
+	f.setNow(t1.Add(time.Minute))
+	f.rebuild("u2")
+	if _, _, ok := f.svc.Current("u1"); ok {
+		t.Fatal("u1 应已被淘汰")
+	}
+
+	f.setNow(t1.Add(2 * time.Minute))
+	f.rebuild("u1")
+	after := f.version("u1")
+	if after <= before {
+		t.Fatalf("淘汰后版本回退：%d → %d", before, after)
+	}
+}
+
 // 常驻内存也有上限：超过后只保留最近取用的用户。
 func TestMemoryCapEvictsFrames(t *testing.T) {
 	f := newFixture(t)

@@ -20,6 +20,9 @@ func TestRenderText(t *testing.T) {
 	m.IncPairFail()
 	m.IncRateLimited("reg_dev")
 	m.IncPendingTakeoverRejected()
+	m.IncMQTTPublishDropped()
+	m.IncMQTTQosDropped()
+	m.IncFrameCacheEviction(2)
 
 	rr := httptest.NewRecorder()
 	m.Handler().ServeHTTP(rr, httptest.NewRequest("GET", "/metrics", nil))
@@ -41,6 +44,9 @@ func TestRenderText(t *testing.T) {
 		`stickbox_pair_total{result="fail"} 1`,
 		`stickbox_rate_limited_total{limiter="reg_dev"} 1`,
 		`stickbox_pending_takeover_rejected_total 1`,
+		`stickbox_mqtt_publish_dropped_total 1`,
+		`stickbox_mqtt_qos_dropped_total 1`,
+		`stickbox_frame_cache_evictions_total 2`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("缺少指标行 %q\n%s", want, body)

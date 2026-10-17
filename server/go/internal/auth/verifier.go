@@ -46,7 +46,8 @@ func ValidDev(s string) bool { return devRe.MatchString(s) }
 type KeyStore interface {
 	KeyByID(keyID string) (store.Key, bool, error)
 	// UpdateKeyHash 用于把旧 argon2id 记录就地迁移成 HMAC。
-	UpdateKeyHash(keyID, hash string) error
+	// oldHash 是本次校验时读到的值，作为 CAS 条件。
+	UpdateKeyHash(keyID, oldHash, newHash string) error
 }
 
 const cacheTTL = time.Hour
@@ -85,8 +86,8 @@ func NewVerifier(keys KeyStore, pepper string) *Verifier {
 }
 
 // HashSecret 用本进程的 pepper 生成存储哈希（签发路径用）。
-func (v *Verifier) HashSecret(secret string) (string, error) {
-	return HashSecret(v.pepper, secret)
+func (v *Verifier) HashSecret(keyID, secret string) (string, error) {
+	return HashSecret(v.pepper, keyID, secret)
 }
 
 // Verify 校验 "{key_id}.{secret}" 形式的令牌。
@@ -126,10 +127,10 @@ func (v *Verifier) Verify(token string) (Identity, error) {
 		// 先做一次格式判断，避免付 64MB 的钱去跑一个 HMAC 比较。
 		okPass, legacy := false, false
 		if strings.HasPrefix(k.Hash, "$"+hmacScheme+"$") {
-			okPass, _ = VerifySecret(v.pepper, secret, k.Hash)
+			okPass, _ = VerifySecret(v.pepper, keyID, secret, k.Hash)
 		} else {
 			v.sem <- struct{}{}
-			okPass, legacy = VerifySecret(v.pepper, secret, k.Hash)
+			okPass, legacy = VerifySecret(v.pepper, keyID, secret, k.Hash)
 			<-v.sem
 		}
 		if !okPass {
@@ -137,8 +138,9 @@ func (v *Verifier) Verify(token string) (Identity, error) {
 		}
 		if legacy {
 			// 校验成功即迁移；失败不影响本次登录（下次再试）。
-			if h, err := v.HashSecret(secret); err == nil {
-				if err := v.keys.UpdateKeyHash(keyID, h); err != nil {
+			// 带上旧哈希做 CAS：并发校验/轮换时不会把别人刚写的新哈希盖回去。
+			if h, err := v.HashSecret(keyID, secret); err == nil {
+				if err := v.keys.UpdateKeyHash(keyID, k.Hash, h); err != nil {
 					slog.Warn("令牌哈希迁移失败", "key_id", keyID, "err", err)
 				}
 			}

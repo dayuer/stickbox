@@ -4,10 +4,12 @@
 package config
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type Config struct {
@@ -88,8 +90,9 @@ func Load(path string) (*Config, error) {
 		// 只监听回环：指标不经过 nginx，也不对公网开放。
 		c.MetricsAddr = "127.0.0.1:9090"
 	}
-	if len(c.TokenPepper) < 16 {
-		return nil, errors.New("config: token_pepper 必填且至少 16 字符（openssl rand -base64 32）")
+	c.TokenPepper = strings.TrimSpace(c.TokenPepper)
+	if err := checkPepper(c.TokenPepper); err != nil {
+		return nil, err
 	}
 	if c.MQTTMaxWritesPending <= 0 {
 		c.MQTTMaxWritesPending = 64
@@ -113,6 +116,34 @@ func Load(path string) (*Config, error) {
 		c.BackfillPerSec = 2
 	}
 	return &c, nil
+}
+
+// checkPepper 拒绝空值、示例占位符和熵不足的 pepper。
+// openssl rand -base64 32 解出来是 32 字节；短于 16 字节没有意义。
+func checkPepper(p string) error {
+	if p == "" {
+		return errors.New("config: token_pepper 必填（openssl rand -base64 32）")
+	}
+	lower := strings.ToLower(p)
+	for _, bad := range []string{"openssl", "请用", "changeme", "placeholder", "example", "your-"} {
+		if strings.Contains(lower, bad) {
+			return errors.New("config: token_pepper 仍是示例占位符，请生成随机值")
+		}
+	}
+	key := []byte(p)
+	for _, enc := range []*base64.Encoding{
+		base64.StdEncoding, base64.RawStdEncoding,
+		base64.URLEncoding, base64.RawURLEncoding,
+	} {
+		if dec, err := enc.DecodeString(p); err == nil {
+			key = dec
+			break
+		}
+	}
+	if len(key) < 16 {
+		return errors.New("config: token_pepper 解码后至少需要 16 字节")
+	}
+	return nil
 }
 
 // DBPath 沿用 jobs.db 这个文件名：已有部署的数据都在这只库里，

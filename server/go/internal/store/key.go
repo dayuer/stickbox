@@ -85,11 +85,14 @@ func (s *Store) DisableKey(keyID string) error {
 }
 
 // UpdateKeyHash 在旧 argon2 记录校验成功后原地迁移成 HMAC。
-// 只改哈希，不动密钥的身份/归属/状态。
-func (s *Store) UpdateKeyHash(keyID, hash string) error {
+// 只改哈希，不动密钥的身份/归属/状态。oldHash 是 CAS 条件：
+// 并发迁移/轮换时不会覆盖已经变化的值。
+func (s *Store) UpdateKeyHash(keyID, oldHash, newHash string) error {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	_, err := s.db.Exec(`UPDATE devices SET key_hash=? WHERE key_id=?`, hash, keyID)
+	_, err := s.db.Exec(
+		`UPDATE devices SET key_hash=? WHERE key_id=? AND key_hash=?`,
+		newHash, keyID, oldHash)
 	return err
 }
 

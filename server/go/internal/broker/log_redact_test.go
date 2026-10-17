@@ -29,13 +29,17 @@ func TestAuthFailureLogDoesNotLeakToken(t *testing.T) {
 	}
 	defer st.Close()
 
-	h := &Hook{v: auth.NewVerifier(st, "test-pepper-0123456789abcdef")}
+	h := &Hook{v: auth.NewVerifier(st, "test-pepper-0123456789abcdef"), ids: newIDTable()}
 	token := "a3f91c04bd77.kJ8xQ2mN4pL7vR1sT6wY9zA0bC3dE5fH"
 	pk := packets.Packet{Connect: packets.ConnectParams{
 		Username: []byte("f412fa87c9e0"),
 		Password: []byte(token),
 	}}
-	if h.OnConnectAuthenticate(&mqtt.Client{}, pk) {
+	cl := &mqtt.Client{}
+	if err := h.OnConnect(cl, pk); err != nil {
+		t.Fatalf("无效令牌应交给 OnConnectAuthenticate 回 0x05，而不是 %v", err)
+	}
+	if h.OnConnectAuthenticate(cl, pk) {
 		t.Fatal("无效令牌不应通过认证")
 	}
 
