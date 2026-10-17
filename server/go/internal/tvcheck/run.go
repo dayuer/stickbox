@@ -149,8 +149,9 @@ func Run(ctx context.Context, r Renderer, opt Options) (*Report, error) {
 		Renderer:    r,
 	}
 
-	// 1. 电视声明支持哪些 MIME。
-	rep.ProtocolInfo = queryProtocolInfo(ctx, r.ControlURL)
+	// 1. 电视声明支持哪些 MIME。GetProtocolInfo 属于 ConnectionManager，
+	// 不是 AVTransport；发错服务时三星会回 500。
+	rep.ProtocolInfo = queryProtocolInfo(ctx, r.ConnectionManagerURL)
 
 	// 2. 测试卡 + 推流服务。
 	card, err := NewCard(r.Display())
@@ -240,6 +241,10 @@ func makeStreamURL(listenAddr, host string) (string, error) {
 
 func queryProtocolInfo(ctx context.Context, controlURL string) ProtocolInfo {
 	out := ProtocolInfo{VideoMIME: []string{}}
+	if controlURL == "" {
+		out.Error = "电视没有声明 ConnectionManager 服务"
+		return out
+	}
 	status, raw, err := sim.SoapCallRaw(ctx, controlURL, "GetProtocolInfo", nil)
 	out.Status = status
 	if err != nil {

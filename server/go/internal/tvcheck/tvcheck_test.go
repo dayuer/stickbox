@@ -27,8 +27,10 @@ type fakeTV struct {
 	pollIndex    int
 	streamURL    string
 
-	dropAfter  time.Duration
-	pullRounds int
+	dropAfter    time.Duration
+	pullRounds   int
+	cmCalls      int
+	avtInfoCalls int
 
 	done chan struct{}
 }
@@ -49,11 +51,28 @@ func newFakeTV(t *testing.T) (*fakeTV, *httptest.Server) {
   <friendlyName>Fake Samsung</friendlyName>
   <manufacturer>Samsung</manufacturer>
   <modelName>Room C</modelName>
-  <serviceList><service>
-    <serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType>
-    <controlURL>/ctl</controlURL>
-  </service></serviceList>
+  <serviceList>
+    <service>
+      <serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType>
+      <controlURL>/ctl</controlURL>
+    </service>
+    <service>
+      <serviceType>urn:schemas-upnp-org:service:ConnectionManager:1</serviceType>
+      <controlURL>/cm</controlURL>
+    </service>
+  </serviceList>
 </device></root>`)
+	})
+	mux.HandleFunc("/cm", func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		_ = raw
+		f.mu.Lock()
+		sink := f.sink
+		f.cmCalls++
+		f.mu.Unlock()
+		fmt.Fprintf(w, `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>`+
+			`<u:GetProtocolInfoResponse xmlns:u="urn:schemas-upnp-org:service:ConnectionManager:1">`+
+			`<Source></Source><Sink>%s</Sink></u:GetProtocolInfoResponse></s:Body></s:Envelope>`, sink)
 	})
 	mux.HandleFunc("/ctl", func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
@@ -64,11 +83,9 @@ func newFakeTV(t *testing.T) (*fakeTV, *httptest.Server) {
 		f.mu.Lock()
 		switch action {
 		case "GetProtocolInfo":
-			sink := f.sink
+			f.avtInfoCalls++
 			f.mu.Unlock()
-			fmt.Fprintf(w, `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>`+
-				`<u:GetProtocolInfoResponse xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">`+
-				`<Source></Source><Sink>%s</Sink></u:GetProtocolInfoResponse></s:Body></s:Envelope>`, sink)
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		case "SetAVTransportURI":
 			uri := currentURI(string(raw))
@@ -186,12 +203,13 @@ func testOptions() Options {
 func TestRunSamsungLikeTV(t *testing.T) {
 	f, srv := newFakeTV(t)
 	rep, err := Run(context.Background(), Renderer{
-		Name:         "Fake Samsung",
-		Manufacturer: "Samsung",
-		Model:        "Room C",
-		IP:           "127.0.0.1",
-		ControlURL:   srv.URL + "/ctl",
-		Location:     srv.URL + "/desc.xml",
+		Name:                 "Fake Samsung",
+		Manufacturer:         "Samsung",
+		Model:                "Room C",
+		IP:                   "127.0.0.1",
+		ControlURL:           srv.URL + "/ctl",
+		ConnectionManagerURL: srv.URL + "/cm",
+		Location:             srv.URL + "/desc.xml",
 	}, testOptions())
 	if err != nil {
 		t.Fatal(err)
@@ -217,6 +235,15 @@ func TestRunSamsungLikeTV(t *testing.T) {
 	if !hasWarning(rep, "transitioning", "info") {
 		t.Errorf("缺少 TRANSITIONING 提示：%+v", rep.Warnings)
 	}
+	if rep.ProtocolInfo.Error != "" {
+		t.Errorf("GetProtocolInfo 失败：%s", rep.ProtocolInfo.Error)
+	}
+	f.mu.Lock()
+	cmCalls, avtCalls := f.cmCalls, f.avtInfoCalls
+	f.mu.Unlock()
+	if cmCalls == 0 || avtCalls != 0 {
+		t.Errorf("GetProtocolInfo 应走 ConnectionManager：cm=%d avt=%d", cmCalls, avtCalls)
+	}
 	if rep.HasErrors() {
 		t.Errorf("不应有 error：%+v", rep.Warnings)
 	}
@@ -237,10 +264,28 @@ func TestRunSamsungLikeTV(t *testing.T) {
 	_ = f
 }
 
+// 电视没有 ConnectionManager 时，工具应该明确说明，而不是把
+// GetProtocolInfo 发到 AVTransport 吃一个 500。
+func TestProtocolInfoWithoutConnectionManager(t *testing.T) {
+	_, srv := newFakeTV(t)
+	rep, err := Run(context.Background(), Renderer{
+		Name: "No CM", IP: "127.0.0.1", ControlURL: srv.URL + "/ctl",
+	}, testOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.ProtocolInfo.Status != 0 || rep.ProtocolInfo.Error == "" {
+		t.Fatalf("ProtocolInfo = %+v", rep.ProtocolInfo)
+	}
+	if !hasWarning(rep, "protocol_info_error", "warn") {
+		t.Errorf("缺少 protocol_info_error：%+v", rep.Warnings)
+	}
+}
+
 func TestRun402WarnsNumericEntities(t *testing.T) {
 	f, srv := newFakeTV(t)
 	f.setURIStatus = http.StatusPaymentRequired
-	rep, err := Run(context.Background(), Renderer{Name: "Bad TV", IP: "127.0.0.1", ControlURL: srv.URL + "/ctl"}, testOptions())
+	rep, err := Run(context.Background(), Renderer{Name: "Bad TV", IP: "127.0.0.1", ControlURL: srv.URL + "/ctl", ConnectionManagerURL: srv.URL + "/cm"}, testOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +299,7 @@ func TestRunNoPlaying(t *testing.T) {
 	f.states = []string{"TRANSITIONING", "TRANSITIONING", "TRANSITIONING"}
 	opt := testOptions()
 	opt.PlayTimeout = 80 * time.Millisecond
-	rep, err := Run(context.Background(), Renderer{Name: "Slow TV", IP: "127.0.0.1", ControlURL: srv.URL + "/ctl"}, opt)
+	rep, err := Run(context.Background(), Renderer{Name: "Slow TV", IP: "127.0.0.1", ControlURL: srv.URL + "/ctl", ConnectionManagerURL: srv.URL + "/cm"}, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +311,7 @@ func TestRunNoPlaying(t *testing.T) {
 func TestRunMIMENotDeclared(t *testing.T) {
 	f, srv := newFakeTV(t)
 	f.sink = "http-get:*:video/mp4:*"
-	rep, err := Run(context.Background(), Renderer{Name: "MP4 TV", IP: "127.0.0.1", ControlURL: srv.URL + "/ctl"}, testOptions())
+	rep, err := Run(context.Background(), Renderer{Name: "MP4 TV", IP: "127.0.0.1", ControlURL: srv.URL + "/ctl", ConnectionManagerURL: srv.URL + "/cm"}, testOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +326,7 @@ func TestRunMeasuresReconnect(t *testing.T) {
 	f.pullRounds = 2
 	opt := testOptions()
 	opt.Duration = 900 * time.Millisecond
-	rep, err := Run(context.Background(), Renderer{Name: "Flaky TV", IP: "127.0.0.1", ControlURL: srv.URL + "/ctl"}, opt)
+	rep, err := Run(context.Background(), Renderer{Name: "Flaky TV", IP: "127.0.0.1", ControlURL: srv.URL + "/ctl", ConnectionManagerURL: srv.URL + "/cm"}, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,13 +350,15 @@ func TestParseDescription(t *testing.T) {
   <serviceList>
     <service><serviceType>urn:schemas-upnp-org:service:RenderingControl:1</serviceType><controlURL>/rc</controlURL></service>
     <service><serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType><controlURL>/upnp/control/AVTransport1</controlURL></service>
+    <service><serviceType>urn:schemas-upnp-org:service:ConnectionManager:1</serviceType><controlURL>/upnp/control/ConnectionManager1</controlURL></service>
   </serviceList>
 </device></root>`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r.Name != "客厅电视" || r.IP != "192.168.3.18" ||
-		r.ControlURL != "http://192.168.3.18:9197/upnp/control/AVTransport1" {
+		r.ControlURL != "http://192.168.3.18:9197/upnp/control/AVTransport1" ||
+		r.ConnectionManagerURL != "http://192.168.3.18:9197/upnp/control/ConnectionManager1" {
 		t.Errorf("解析结果 = %+v", r)
 	}
 
