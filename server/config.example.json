@@ -1,6 +1,6 @@
 {
   "root": "/opt/stickbox",
   "cert_dir": "/etc/letsencrypt/live/your.host",
-  "http_addr": ":9443",
+  "http_addr": "127.0.0.1:9443",
   "mqtt_addr": ":8883"
 }

@@ -11,9 +11,9 @@ services:
     image: stickboxd:${STICKBOX_TAG:-latest}
     container_name: stickboxd
     restart: unless-stopped
-    ports:
-      - "8883:8883"              # MQTT over TLS（设备直连）
-      - "127.0.0.1:9443:9443"    # HTTPS API 只给本机 nginx 反代，不对外
+    # 宿主机网络：nginx 从 127.0.0.1 转发过来时容器看到的就是回环地址，
+    # stickboxd 才能放心采用 X-Forwarded-For。9443 由 config.json 绑定在 127.0.0.1。
+    network_mode: host
     volumes:
       - ./config.json:/etc/stickbox/config.json:ro
       - ./data:/data
