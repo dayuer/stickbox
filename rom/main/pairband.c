@@ -11,12 +11,14 @@
 
 static const char *TAG = "pairband";
 
-#define X0   764
-#define Y0   736
-#define W     52
-#define H     80
-#define T     10
-#define GAP   16
+/* 56px 高、36px 宽：1080p 上够看清，且最坏码 888888 编码约 10.3KB，
+ * 在 12KB 缓冲内。80px 的旧版面 888888 会超 12KB，随机码里迟早会撞上。 */
+#define X0   822
+#define Y0   752
+#define W     36
+#define H     56
+#define T      7
+#define GAP   12
 #define NDIG   6
 #define BG   0x1E3A8A     /* 与预置页第 1 页背景一致 */
 #define FG   0xFFFFFF
