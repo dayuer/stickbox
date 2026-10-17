@@ -222,15 +222,28 @@ static void sntp_start(void)
     esp_sntp_init();
 }
 
+#if CONFIG_STICKBOX_OTA_SUICIDE
+static void suicide_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(10000));
+    ESP_LOGE(TAG, "OTA 回滚测试固件：现在 abort()");
+    abort();
+}
+#endif
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "=== StickBox 电视看板 ===");
     ota_boot_check();     /* 尽早：要先知道本次是不是 OTA 后的试运行 */
 #if CONFIG_STICKBOX_OTA_SUICIDE
-    /* 只为验证 OTA 回滚而存在的测试版本。放在 ota_boot_check() 之后，
-     * 日志里能看到它跑在哪个槽位上。 */
-    ESP_LOGE(TAG, "OTA 回滚测试固件：立即 abort()");
-    abort();
+    /* 只为验证 OTA 回滚而存在的测试版本。
+     *
+     * 延迟崩溃而不是立刻 abort()：abort() 是 noreturn，编译器会把它之后的
+     * 整个 app_main 当死代码消掉，固件从 2MB 缩到 214KB——那样既测不到真实
+     * 大小的 OTA 下载，也测不到「启动正常、随后崩溃」这个更常见的故障形态。
+     * 10 秒远小于健康检查的 180 秒窗口，所以这一版永远不会被标记为可用。 */
+    xTaskCreate(suicide_task, "suicide", 2048, NULL, 1, NULL);
 #endif
     ESP_LOGI(TAG, "堆@启动=%u", (unsigned)esp_get_free_heap_size());
     lcd_ui_init();

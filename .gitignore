@@ -12,3 +12,4 @@ nvs.csv
 .DS_Store
 __pycache__/
 server/config.json
+build-m0*/
