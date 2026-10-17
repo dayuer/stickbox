@@ -269,6 +269,80 @@ func (e *env) tryConnectDevice(dev, key string) (*fakeDevice, error) {
 	return fd, nil
 }
 
+// legacyDevice 模拟旧固件：MQTT_EVENT_CONNECTED 时无条件订阅 usage+pair，
+// 断线后自动重连并重订。用来验证服务端踢连接后旧固件能恢复。
+type legacyDevice struct {
+	t          *testing.T
+	c          paho.Client
+	dev        string
+	usage      chan []byte
+	subscribed chan struct{}
+}
+
+func (e *env) connectLegacyDevice(dev, key string) (*legacyDevice, error) {
+	d := &legacyDevice{t: e.t, dev: dev,
+		usage: make(chan []byte, 8), subscribed: make(chan struct{}, 8)}
+	opts := paho.NewClientOptions().
+		AddBroker("ssl://" + e.mqttAddr).
+		SetClientID(dev).
+		SetUsername(dev).
+		SetPassword(key).
+		SetTLSConfig(&tls.Config{InsecureSkipVerify: true}).
+		SetConnectTimeout(5 * time.Second).
+		SetAutoReconnect(true).
+		SetConnectRetry(true).
+		SetMaxReconnectInterval(time.Second).
+		SetCleanSession(true)
+	opts.SetDefaultPublishHandler(func(_ paho.Client, m paho.Message) {
+		if !strings.HasSuffix(m.Topic(), "/usage") {
+			return
+		}
+		select {
+		case d.usage <- append([]byte(nil), m.Payload()...):
+		default:
+		}
+	})
+	opts.SetOnConnectHandler(func(c paho.Client) {
+		c.Subscribe("printer/"+dev+"/pair", 1, nil)
+		tok := c.Subscribe("printer/"+dev+"/usage", 1, nil)
+		go func() {
+			if !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
+				return
+			}
+			if st, ok := tok.(*paho.SubscribeToken); ok {
+				for _, code := range st.Result() {
+					if code >= 0x80 {
+						return // 还没配对，usage 被拒
+					}
+				}
+			}
+			select {
+			case d.subscribed <- struct{}{}:
+			default:
+			}
+		}()
+	})
+	c := paho.NewClient(opts)
+	tok := c.Connect()
+	if !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
+		return nil, fmt.Errorf("连接失败：%v", tok.Error())
+	}
+	d.c = c
+	e.t.Cleanup(func() { c.Disconnect(100) })
+	return d, nil
+}
+
+func (d *legacyDevice) waitUsage(timeout time.Duration) []byte {
+	d.t.Helper()
+	select {
+	case b := <-d.usage:
+		return b
+	case <-time.After(timeout):
+		d.t.Fatal("旧固件没有收到用量")
+		return nil
+	}
+}
+
 // subscribe 必须检查 SUBACK 的返回码：broker 拒绝订阅时回 0x80，
 // 而 paho 的 token.Error() 是 nil。
 func (d *fakeDevice) subscribe(topic string) error {

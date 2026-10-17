@@ -84,11 +84,13 @@ func (h *Hook) OnACLCheck(cl *mqtt.Client, topic string, write bool) bool {
 // 才能立刻有数，否则得等到 agent 下一次上报（最长 10 分钟）。
 // 在 goroutine 里发：hook 回调里同步 Publish 会和 broker 内部的订阅流程抢锁。
 func (h *Hook) OnSubscribed(cl *mqtt.Client, pk packets.Packet, reasonCodes []byte) {
-	if h.usage == nil {
-		return
-	}
 	id, ok := h.ids.get(cl)
 	if !ok || id.Role != auth.RoleDevice {
+		return
+	}
+	// 待配对密钥只能收 retained 的 pair；ACL 已经拒绝它订阅 usage，
+	// 这里再挡一层，避免将来 ACL 回归时把用量补发出去。
+	if id.Pending {
 		return
 	}
 	want := "printer/" + id.Dev + "/usage"
@@ -96,7 +98,9 @@ func (h *Hook) OnSubscribed(cl *mqtt.Client, pk packets.Packet, reasonCodes []by
 		if f.Filter != want || i >= len(reasonCodes) || reasonCodes[i] >= 0x80 {
 			continue
 		}
-		go h.usage.Resend(id.Dev)
+		if h.usage != nil {
+			go h.usage.Resend(id.Dev)
+		}
 	}
 }
 

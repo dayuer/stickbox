@@ -142,6 +142,10 @@ func (a *API) handleAgentPair(w http.ResponseWriter, r *http.Request) {
 	// 避免上一轮配对 retain 的消息被下一轮注册误读。
 	pairMsg := fmt.Sprintf(`{"paired":true,"key_id":"%s"}`, pc.KeyID)
 	a.pub.PublishPair(pc.Dev, []byte(pairMsg))
+	// retained 的 pair 已存进 broker。现在踢掉旧连接：旧固件只在
+	// MQTT_EVENT_CONNECTED 时订阅 usage，而这条连接的身份还是 pending。
+	// 重连后身份是 active，usage 订阅就能通过，也能收到 retained 的 paired=true。
+	a.pub.KickDevice(pc.Dev)
 	// 配对成功立即补发最新用量；设备这时才第一次拿到主人的数据。
 	a.usage.Resend(pc.Dev)
 
@@ -179,6 +183,12 @@ func (a *API) handleAgentUnpair(w http.ResponseWriter, r *http.Request, id auth.
 		"paired": false, "key_ids": revoked,
 	})
 	a.pub.PublishPair(in.Dev, msg)
+	// 解绑后旧密钥已失效，连接不应该继续挂着。先让 pair=false 送达
+	// （设备要清掉密钥并重新注册），再踢；直接踢会丢掉这条通知。
+	go func(dev string) {
+		time.Sleep(300 * time.Millisecond)
+		a.pub.KickDevice(dev)
+	}(in.Dev)
 	writeJSON(w, 200, map[string]int{"ok": 1})
 }
 

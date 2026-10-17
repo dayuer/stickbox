@@ -19,10 +19,11 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/usage"
 )
 
-// Publisher 是 httpapi 对 MQTT 的窄依赖：推用量、通知配对状态。
+// Publisher 是 httpapi 对 MQTT 的窄依赖：推用量、通知配对状态、踢连接。
 type Publisher interface {
 	PublishUsage(dev string, payload []byte) error
 	PublishPair(dev string, payload []byte) error
+	KickDevice(dev string)
 }
 
 type API struct {
