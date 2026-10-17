@@ -3,11 +3,14 @@ package httpapi
 import (
 	"sync"
 	"time"
+
+	"github.com/dayuer/stickbox/server/go/internal/metrics"
 )
 
 // rateLimiter 是进程内滑动窗口计数。服务端重启会清零——对防穷举足够，
 // 配对码本身 10 分钟就过期。
 type rateLimiter struct {
+	name   string
 	mu     sync.Mutex
 	limit  int
 	window time.Duration
@@ -15,9 +18,9 @@ type rateLimiter struct {
 	now    func() time.Time
 }
 
-func newRateLimiter(limit int, window time.Duration) *rateLimiter {
+func newRateLimiter(name string, limit int, window time.Duration) *rateLimiter {
 	return &rateLimiter{
-		limit: limit, window: window,
+		name: name, limit: limit, window: window,
 		hits: map[string][]time.Time{}, now: time.Now,
 	}
 }
@@ -27,7 +30,11 @@ func (l *rateLimiter) exceeded(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	hs := l.prune(key)
-	return len(hs) >= l.limit
+	if len(hs) >= l.limit {
+		metrics.IncRateLimited(l.name)
+		return true
+	}
+	return false
 }
 
 // hit 记一次。调用方先判定要不要计数（例如只对配对失败计数）。
@@ -44,6 +51,7 @@ func (l *rateLimiter) allow(key string) bool {
 	hs := l.prune(key)
 	if len(hs) >= l.limit {
 		l.hits[key] = hs
+		metrics.IncRateLimited(l.name)
 		return false
 	}
 	l.hits[key] = append(hs, l.now())

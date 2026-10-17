@@ -77,9 +77,16 @@ agent 不能连 MQTT；设备不能调 agent 的 HTTP 端点。
 | GET | `/api/agent/usage` | agent | 读取本用户最新用量 |
 | POST | `/api/usage` | agent | 上报一次用量 |
 | POST | `/api/agent/logout` | agent | 注销当前 agent 令牌 |
+| GET | `/healthz` | 无 | 健康检查，只返回 200/503 |
 <!-- endpoints:end -->
 
 ---
+
+### 1.1 `GET /healthz`
+
+不鉴权，只返回 `200`（`ok`）或 `503`（`unavailable`）。检查 sqlite 可读与
+内嵌 MQTT broker 是否在监听；失败时不返回任何内部信息。容器 healthcheck
+和外部监控都用它。指标在另一个只监听回环的端口，见 `docs/OPS.md`。
 
 ## 2. 设备
 

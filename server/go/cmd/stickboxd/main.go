@@ -18,6 +18,7 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/config"
 	"github.com/dayuer/stickbox/server/go/internal/frames"
 	"github.com/dayuer/stickbox/server/go/internal/httpapi"
+	"github.com/dayuer/stickbox/server/go/internal/metrics"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
 	"github.com/dayuer/stickbox/server/go/internal/render"
 	"github.com/dayuer/stickbox/server/go/internal/store"
@@ -77,6 +78,8 @@ func serve(cfg *config.Config) error {
 	}
 
 	api := httpapi.New(cfg, st, v, reg, br)
+	// /healthz 用它检查 broker 是否还在监听。
+	api.SetHealth(br)
 	// 设备订阅 usage 时补发最新一份；usage.Service 要用 broker 发消息，
 	// 所以只能在两边都构造完之后接上。
 	br.SetUsageResender(api.Usage())
@@ -115,6 +118,18 @@ func serve(cfg *config.Config) error {
 		return err
 	}
 	slog.Info("MQTT/TLS 监听", "addr", cfg.MQTTAddr)
+
+	// 指标只监听回环地址，不经过 nginx。online / mqtt 连接数在 scrape 时现查。
+	if cfg.MetricsAddr != "" {
+		metrics.Default.SetGaugeProviders(reg.OnlineCount, br.ClientCount)
+		msrv, err := metrics.Default.Serve(cfg.MetricsAddr)
+		if err != nil {
+			br.Close()
+			return err
+		}
+		defer msrv.Close()
+		slog.Info("metrics 监听", "addr", cfg.MetricsAddr)
+	}
 
 	errc := make(chan error, 1)
 	go func() {

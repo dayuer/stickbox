@@ -34,6 +34,7 @@
 - [`docs/HANDOFF-tv-startup.md`](docs/HANDOFF-tv-startup.md) — 电视起播延迟实验与推流参数
 - [`docs/HANDOFF-usb-tv-probe.md`](docs/HANDOFF-usb-tv-probe.md) — 电视接入的实验记录（U 盘方案为何放弃、三星电视能力）
 - [`server/DEPLOY.md`](server/DEPLOY.md) — 服务端部署
+- [`docs/OPS.md`](docs/OPS.md) — 运维：升级/回滚、证书、备份、指标与告警
 - [`docs/experiments/tvstart/`](docs/experiments/tvstart/) — DLNA 推流/起播实验脚本
 
 ## 快速上手

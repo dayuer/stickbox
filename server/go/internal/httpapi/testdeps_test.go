@@ -49,6 +49,10 @@ type testDeps struct {
 }
 
 func newTestAPI(t *testing.T) (http.Handler, *testDeps) {
+	return newTestAPIWithHealth(t, nil)
+}
+
+func newTestAPIWithHealth(t *testing.T, h HealthChecker) (http.Handler, *testDeps) {
 	t.Helper()
 	dir := t.TempDir()
 	st, err := store.Open(filepath.Join(dir, "test.db"))
@@ -63,8 +67,10 @@ func newTestAPI(t *testing.T) (http.Handler, *testDeps) {
 	dep.reg = reg
 	dep.v = auth.NewVerifier(st)
 	dep.cfg = &config.Config{Root: dir}
-	dep.api = New(dep.cfg, st, dep.v, reg, dep.pub)
-	return dep.api.Handler(), dep
+	api := New(dep.cfg, st, dep.v, reg, dep.pub)
+	api.SetHealth(h)
+	dep.api = api
+	return api.Handler(), dep
 }
 
 // —— 请求辅助 ——

@@ -16,7 +16,8 @@ type Config struct {
 	HTTPAddr string `json:"http_addr"`
 	MQTTAddr string `json:"mqtt_addr"`
 	// DefaultTZ 是 agent 没上报时区时的兜底（IANA 名，如 Asia/Bangkok）。
-	DefaultTZ string `json:"default_tz"`
+	DefaultTZ   string `json:"default_tz"`
+	MetricsAddr string `json:"metrics_addr"`
 }
 
 func Load(path string) (*Config, error) {
@@ -42,6 +43,10 @@ func Load(path string) (*Config, error) {
 	}
 	if c.DefaultTZ == "" {
 		c.DefaultTZ = "UTC"
+	}
+	if c.MetricsAddr == "" {
+		// 只监听回环：指标不经过 nginx，也不对公网开放。
+		c.MetricsAddr = "127.0.0.1:9090"
 	}
 	return &c, nil
 }

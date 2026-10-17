@@ -19,7 +19,7 @@ import (
 var routeRe = regexp.MustCompile(`mux\.Handle(?:Func)?\(\s*"([A-Z]+) ([^"]+)"`)
 
 // 端点表的一行：| POST | `/api/device/register` | 无 | ... |
-var rowRe = regexp.MustCompile("^\\|\\s*(GET|POST)\\s*\\|\\s*`(/api/[^`]+)`\\s*\\|")
+var rowRe = regexp.MustCompile("^\\|\\s*(GET|POST)\\s*\\|\\s*`(/(?:api|healthz)[^`]*)`\\s*\\|")
 
 const (
 	startMarker = "<!-- endpoints:start -->"

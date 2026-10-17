@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/image/font/opentype"
 
+	"github.com/dayuer/stickbox/server/go/internal/metrics"
 	"github.com/dayuer/stickbox/server/go/internal/source"
 )
 
@@ -60,7 +61,10 @@ func New() (*Renderer, error) {
 // Render 出一帧 JPEG。质量从 90 起逐级下降，直到不超过 TargetFrameBytes；
 // 最低质量仍超过 HardMaxFrameBytes 时返回错误——宁可不出帧，也不能写爆槽位。
 func (rr *Renderer) Render(s source.Snapshot) ([]byte, error) {
-	return encodeJPEG(rr.FullImage(s))
+	start := time.Now()
+	b, err := encodeJPEG(rr.FullImage(s))
+	metrics.ObserveRender(time.Since(start), err == nil)
+	return b, err
 }
 
 // FullImage 是带当前时钟数字的完整画面（预览、对照、非局部刷新路径用）。

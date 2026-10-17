@@ -16,6 +16,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/dayuer/stickbox/server/go/internal/metrics"
 )
 
 // Window 是一个限额窗口，字段名沿用 Claude Code statusline 的 rate_limits。
@@ -130,6 +132,7 @@ func (s *Service) Ingest(userID string, r Report) (int, error) {
 	if err := s.st.PutUsage(userID, body, now.Unix()); err != nil {
 		return 0, err
 	}
+	metrics.IncUsageReport()
 	devs, err := s.st.DevicesOfUser(userID)
 	if err != nil {
 		return 0, err

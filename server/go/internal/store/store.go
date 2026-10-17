@@ -4,8 +4,12 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -140,3 +144,28 @@ func hasColumn(db *sql.DB, table, column string) (bool, error) {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+// Health 只做一次最小的读，确认数据库文件可读。健康检查用，不暴露细节。
+func (s *Store) Health(ctx context.Context) error {
+	var one int
+	return s.db.QueryRowContext(ctx, "SELECT 1").Scan(&one)
+}
+
+// Backup 用 SQLite 的 VACUUM INTO 做在线一致性备份。
+//
+// WAL 模式下直接 cp jobs.db 会漏掉 -wal 里的数据；VACUUM INTO 由 SQLite
+// 自己生成一份完整快照，服务运行中也可以跑。目标文件必须不存在。
+func (s *Store) Backup(ctx context.Context, path string) error {
+	if path == "" {
+		return fmt.Errorf("store: 备份路径为空")
+	}
+	if _, err := os.Stat(path); err == nil {
+		return fmt.Errorf("store: 备份文件已存在: %s", path)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	quoted := strings.ReplaceAll(path, "'", "''")
+	_, err := s.db.ExecContext(ctx, "VACUUM INTO '"+quoted+"'")
+	return err
+}

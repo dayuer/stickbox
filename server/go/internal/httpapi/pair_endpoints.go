@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
+	"github.com/dayuer/stickbox/server/go/internal/metrics"
 )
 
 // handleAgentPair：POST /api/agent/pair {code, name}
@@ -43,6 +44,7 @@ func (a *API) handleAgentPair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	failPair := func() {
+		metrics.IncPairFail()
 		a.pairFailIP.hit(ip)
 		a.pairFailWorld.hit("global")
 	}
@@ -152,6 +154,7 @@ func (a *API) handleAgentPair(w http.ResponseWriter, r *http.Request) {
 	// （没有用量就是「等待上报」帧）。
 	a.markFramesDirty(userID)
 
+	metrics.IncPairOK()
 	writeJSON(w, 200, map[string]any{
 		"dev": pc.Dev, "user_id": userID, "token": newToken,
 	})

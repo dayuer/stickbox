@@ -8,7 +8,7 @@ import (
 
 func TestRateLimiterPrunesEmptyKeys(t *testing.T) {
 	now := time.Unix(1000, 0)
-	l := newRateLimiter(2, time.Minute)
+	l := newRateLimiter("test", 2, time.Minute)
 	l.now = func() time.Time { return now }
 
 	l.hit("a")

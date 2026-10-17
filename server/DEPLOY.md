@@ -2,7 +2,8 @@
 
 StickBox 服务端的部署说明。项目方向见
 [`docs/PLAN.md`](../docs/PLAN.md)；HTTP / MQTT 接口约定见
-[`docs/API.md`](../docs/API.md)。
+[`docs/API.md`](../docs/API.md)；日常运维（指标、回滚、告警）见
+[`docs/OPS.md`](../docs/OPS.md)。
 
 **部署物只有两样：一个 Go 二进制和一个 sqlite 文件。**
 没有手机号、短信服务商和 App；设备靠配对码绑定到 agent。
@@ -67,13 +68,18 @@ sudo touch /etc/letsencrypt/live/mqtt.stickbox.ai/fullchain.pem && sudo journalc
 
 ```json
 {
-  "root": "/opt/stickbox",
+  "root": "/data",
   "cert_dir": "/etc/letsencrypt/live/mqtt.stickbox.ai",
   "http_addr": "127.0.0.1:9443",
   "mqtt_addr": ":8883",
-  "default_tz": "UTC"
+  "default_tz": "UTC",
+  "metrics_addr": "127.0.0.1:9090"
 }
 ```
+
+`root` 必须指向容器里可写的 `/data`（宿主机 `/opt/stickbox/data`）。
+容器根文件系统是只读的，写成 `/opt/stickbox` 会报
+`attempt to write a readonly database`。
 
 `default_tz` 只在 agent 没上报 IANA 时区时兜底。看板按用户本地时间
 渲染日期与跨天重建；如果用户的 agent 拿不到时区（例如 macOS 的
@@ -87,7 +93,17 @@ sudo cp server/deploy/compose.yml /opt/stickbox/
 sudo cp server/config.example.json /opt/stickbox/config.json   # 改成上面的值
 sudo chmod 600 /opt/stickbox/config.json
 cd /opt/stickbox && sudo docker compose up -d
+docker inspect --format '{{.State.Health.Status}}' stickboxd   # 期望 healthy
 ```
+
+### 健康检查与指标
+
+- `GET /healthz`（主 HTTPS 端口，不鉴权）只返回 200/503；检查 sqlite
+  可读和 MQTT broker 在监听。compose 的 healthcheck 用
+  `/stickboxd -conf /etc/stickbox/config.json healthcheck`（distroless
+  没有 curl；`-conf` 必须在子命令之前）。
+- `GET /metrics` 只监听 `127.0.0.1:9090`，不经过 nginx：
+  `curl -s http://127.0.0.1:9090/metrics`。不要把 9090 暴露到公网。
 
 宿主机 nginx 在 443 终止 TLS，再反代到本机 9443（反代本身也走 TLS）。
 站点文件 `/etc/nginx/sites-available/mqtt.stickbox.ai`：
@@ -104,6 +120,16 @@ server {
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
     client_max_body_size 32k;
+
+    # 健康检查不鉴权，只回答 200/503；可以给外部 uptime 监控用。
+    location = /healthz {
+        proxy_pass https://127.0.0.1:9443;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 5s;
+    }
 
     location /api/ {
         proxy_pass https://127.0.0.1:9443;
@@ -139,9 +165,53 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ## 5. 备份
 
-**`jobs.db` 含设备密钥、配对关系与用量。** 备份文件必须加密且限权，
-不能随手 `scp` 到本地。文件名虽旧，里面没有作业数据——打印表在启动时
-会一次性清掉。
+**`jobs.db` 含设备密钥、配对关系与用量。** 备份必须加密；明文不能留在
+服务器上，也不能随手 `scp`。
+
+### 自动备份
+
+`server/deploy/backup.sh` 每天：
+
+1. 在容器里跑 `stickboxd backup`（`VACUUM INTO`，在线一致性快照；
+   镜像里没有 sqlite3）；
+2. 用 `age` 公钥加密到 `/opt/stickbox/backups/jobs-<UTC时间>.db.age`；
+3. 只保留最近 **14** 份；有锁，cron 重叠会跳过。
+
+安装：
+
+```bash
+sudo cp server/deploy/backup.sh /opt/stickbox/backup.sh
+sudo cp server/deploy/age.pub   /opt/stickbox/age.pub
+sudo chmod 700 /opt/stickbox/backup.sh
+sudo apt install age            # 或发行版对应包
+# cron（避开整点）
+echo '17 3 * * * /opt/stickbox/backup.sh >> /var/log/stickbox-backup.log 2>&1' | sudo tee /etc/cron.d/stickbox-backup
+```
+
+`server/deploy/age.pub` 是仓库里的公钥；**私钥不在服务器上**。生成/轮换：
+
+```bash
+age-keygen -o ~/stickbox-age.key           # 私钥离线保管，绝不入库
+age-keygen -y ~/stickbox-age.key > server/deploy/age.pub
+```
+
+### 恢复
+
+```bash
+cd /opt/stickbox
+sudo docker compose stop stickboxd
+
+# 解密（私钥可以在另一台机器上执行，把明文安全传回）
+age -d -i ~/stickbox-age.key -o /tmp/jobs.db backups/jobs-YYYYMMDDTHHMMSSZ.db.age
+sudo mv /tmp/jobs.db data/jobs.db
+sudo rm -f data/jobs.db-wal data/jobs.db-shm
+
+sudo docker compose up -d stickboxd
+docker inspect --format '{{.State.Health.Status}}' stickboxd
+```
+
+恢复后跑一次 `docker exec stickboxd /stickboxd -conf /etc/stickbox/config.json device list`
+确认库能读。
 
 ## 5b. ⚠ 别用 root 试跑二进制
 
@@ -231,11 +301,14 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST https://mqtt.stickbox.ai/api/de
 ## 9. 运维子命令
 
 ```bash
-sudo -u stickbox /opt/stickbox/bin/stickboxd -conf /opt/stickbox/config.json device list
+docker exec stickboxd /stickboxd -conf /etc/stickbox/config.json device list
+# 非 Docker 部署：sudo -u stickbox /opt/stickbox/bin/stickboxd -conf ... device list
 ```
 
 | 命令 | 用途 |
 |---|---|
+| `healthcheck` | 打一次 `/healthz`，容器 healthcheck 用 |
+| `backup -out <file>` | 在线导出 sqlite 快照，`backup.sh` 用 |
 | `device add <dev> [name]` | 手工签发 device 密钥（调试用；正常走设备注册） |
 | `device list` | 列出全部密钥（含「待配对」状态） |
 | `device revoke <key_id>` | 吊销一把 |

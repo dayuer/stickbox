@@ -13,8 +13,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/dayuer/stickbox/server/go/internal/jpegrestart"
+	"github.com/dayuer/stickbox/server/go/internal/metrics"
 	"github.com/dayuer/stickbox/server/go/internal/render"
 	"github.com/dayuer/stickbox/server/go/internal/source"
 )
@@ -99,7 +101,20 @@ type Bundle struct {
 }
 
 // Build 渲染底帧、编码字形图集并生成索引。
+// 指标在包装层观测：耗时与失败、帧包总字节数。
 func Build(r *render.Renderer, s source.Snapshot) (*Bundle, error) {
+	start := time.Now()
+	b, err := build(r, s)
+	metrics.ObserveRender(time.Since(start), err == nil)
+	if err == nil {
+		if meta, mErr := b.MetaJSON(); mErr == nil {
+			metrics.ObserveFrameBytes(len(b.Base) + len(b.Atlas) + len(meta))
+		}
+	}
+	return b, err
+}
+
+func build(r *render.Renderer, s source.Snapshot) (*Bundle, error) {
 	baseJPEG, err := jpegrestart.Encode(r.BaseImage(s), jpegrestart.Options{
 		Quality: Quality, RestartInterval: DRI,
 	})

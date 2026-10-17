@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	mqtt "github.com/mochi-mqtt/server/v2"
@@ -75,8 +76,9 @@ func (t *idTable) drop(cl *mqtt.Client) {
 }
 
 type Broker struct {
-	srv  *mqtt.Server
-	hook *Hook
+	srv     *mqtt.Server
+	hook    *Hook
+	healthy atomic.Bool
 }
 
 func New(addr string, tlsCfg *tls.Config, v *auth.Verifier, r Router) (*Broker, error) {
@@ -105,8 +107,32 @@ func New(addr string, tlsCfg *tls.Config, v *auth.Verifier, r Router) (*Broker, 
 	return &Broker{srv: srv, hook: h}, nil
 }
 
-func (b *Broker) Serve() error { return b.srv.Serve() }
-func (b *Broker) Close() error { return b.srv.Close() }
+func (b *Broker) Serve() error {
+	err := b.srv.Serve()
+	if err == nil {
+		b.healthy.Store(true)
+	}
+	return err
+}
+
+func (b *Broker) Close() error {
+	b.healthy.Store(false)
+	return b.srv.Close()
+}
+
+// Healthy 供 /healthz 用：监听已经起来且还没关闭。
+func (b *Broker) Healthy() bool { return b.healthy.Load() }
+
+// ClientCount 是当前 MQTT 连接数（排除服务端内联客户端）。
+func (b *Broker) ClientCount() int {
+	n := 0
+	for _, cl := range b.srv.Clients.GetAll() {
+		if !cl.Net.Inline {
+			n++
+		}
+	}
+	return n
+}
 
 // PublishUsage 推 Claude 用量。retain=0：payload 里的 now 是现场盖的，
 // 留着会过期；设备重连时由 OnSubscribed 触发补发一份新的（见 usage 包）。

@@ -4,6 +4,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -37,6 +38,9 @@ type API struct {
 	// frames 在 main 里构造后注入；测试里可以为 nil。
 	frames *frames.Service
 
+	// health 由 main 接上（broker 是否在监听）；测试里可以为 nil。
+	health HealthChecker
+
 	// 内存限流：注册、换配对码、配对失败。
 	regDev        *rateLimiter
 	regIP         *rateLimiter
@@ -51,11 +55,11 @@ func New(cfg *config.Config, st *store.Store, v *auth.Verifier,
 		cfg: cfg, store: st, v: v, reg: reg, pub: pub,
 		usage: usage.NewService(st, pub, time.Now),
 
-		regDev:        newRateLimiter(5, 10*time.Minute),
-		regIP:         newRateLimiter(20, 10*time.Minute),
-		pairCodeDev:   newRateLimiter(10, 10*time.Minute),
-		pairFailIP:    newRateLimiter(10, 10*time.Minute),
-		pairFailWorld: newRateLimiter(100, time.Minute),
+		regDev:        newRateLimiter("reg_dev", 5, 10*time.Minute),
+		regIP:         newRateLimiter("reg_ip", 20, 10*time.Minute),
+		pairCodeDev:   newRateLimiter("pair_code_dev", 10, 10*time.Minute),
+		pairFailIP:    newRateLimiter("pair_fail_ip", 10, 10*time.Minute),
+		pairFailWorld: newRateLimiter("pair_fail_world", 100, time.Minute),
 	}
 }
 
@@ -65,8 +69,16 @@ func (a *API) Usage() *usage.Service { return a.usage }
 // SetFrames 注入帧服务。构造 API 时还没有渲染器，所以用 setter。
 func (a *API) SetFrames(f *frames.Service) { a.frames = f }
 
+// HealthChecker 是 /healthz 对 broker 的窄依赖。
+type HealthChecker interface{ Healthy() bool }
+
+func (a *API) SetHealth(h HealthChecker) { a.health = h }
+
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
+
+	// 不鉴权、不暴露内部信息，只回答 200/503。
+	mux.HandleFunc("GET /healthz", a.handleHealthz)
 
 	// 设备注册不鉴权：设备还没有密钥，这正是它来领密钥的入口。
 	mux.HandleFunc("POST /api/device/register", a.handleDeviceRegister)
@@ -82,6 +94,28 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/agent/logout", a.requireAgent(a.handleAgentLogout))
 
 	return drainBody(mux)
+}
+
+// handleHealthz 检查两件事：sqlite 能读、MQTT broker 还在监听。
+// 失败时不返回任何内部错误文本，避免把文件路径/连接地址暴露出去。
+func (a *API) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := a.store.Health(ctx); err != nil {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte("unavailable\n"))
+		return
+	}
+	if a.health != nil && !a.health.Healthy() {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte("unavailable\n"))
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("ok\n"))
 }
 
 // 单次最多排掉多少请求体。设备自己的请求都 <4KB，1MB 已经很宽松。

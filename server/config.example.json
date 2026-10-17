@@ -1,7 +1,8 @@
 {
-  "root": "/opt/stickbox",
+  "root": "/data",
   "cert_dir": "/etc/letsencrypt/live/your.host",
   "http_addr": "127.0.0.1:9443",
   "mqtt_addr": ":8883",
-  "default_tz": "UTC"
+  "default_tz": "UTC",
+  "metrics_addr": "127.0.0.1:9090"
 }
