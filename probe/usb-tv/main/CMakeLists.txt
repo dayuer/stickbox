@@ -1,7 +1,7 @@
 idf_component_register(
     SRCS "main.c" "vdisk.c" "usbdev.c" "httpd.c"
     INCLUDE_DIRS "."
-    REQUIRES driver esp_timer esp_wifi nvs_flash esp_netif esp_http_server
+    REQUIRES driver usb esp_timer esp_wifi nvs_flash esp_netif esp_http_server
     EMBED_FILES "../assets/slide1.jpg" "../assets/slide2.jpg" "../assets/slide3.jpg"
 )
 

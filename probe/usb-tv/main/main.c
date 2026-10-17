@@ -120,6 +120,7 @@ static void blink_task(void *arg)
 
 void app_main(void)
 {
+    vTaskDelay(pdMS_TO_TICKS(4000)); /* DIAG */
     ESP_LOGI(TAG, "=== 虚拟 U 盘探针 ===");
     ESP_LOGI(TAG, "堆@启动=%u", (unsigned)esp_get_free_heap_size());
 

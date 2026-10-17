@@ -265,14 +265,19 @@ void usbdev_start(void)
         .otg_mode   = USB_OTG_MODE_DEVICE,
         .otg_speed  = USB_PHY_SPEED_UNDEFINED,
     };
-    ESP_ERROR_CHECK(usb_new_phy(&pc, &s_phy));
+    ESP_LOGW(TAG, "DIAG: usb_new_phy ...");
+    esp_err_t pe = usb_new_phy(&pc, &s_phy);
+    ESP_LOGW(TAG, "DIAG: usb_new_phy -> %s", esp_err_to_name(pe));
+    ESP_ERROR_CHECK(pe);
 
     /* 用 tud_init(0) 而不是 tusb_init()：后者的签名在 TinyUSB 0.17
      * 前后变过（无参 → (rhport, init_cfg)），tud_init 一直是稳定的。 */
+    ESP_LOGW(TAG, "DIAG: tud_init ...");
     if (!tud_init(0)) {
         ESP_LOGE(TAG, "tud_init 失败");
         return;
     }
+    ESP_LOGW(TAG, "DIAG: tud_init ok");
     xTaskCreate(tusb_task, "tusb", 4096, NULL, 5, NULL);
     ESP_LOGI(TAG, "MSC 就绪：%u 扇区 / %u MiB，只读",
              (unsigned)vd_sector_count(),

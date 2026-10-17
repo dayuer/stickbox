@@ -1,0 +1,51 @@
+menu "DLNA 电视推流探针"
+
+config PROBE_WIFI_SSID
+    string "Wi-Fi SSID"
+    default ""
+    help
+      一次性诊断工具，凭据走 Kconfig——别把填好的 sdkconfig 提交进 git。
+
+config PROBE_WIFI_PASS
+    string "Wi-Fi 密码"
+    default ""
+
+config DLNA_TV_IP
+    string "电视 IP（留空 = SSDP 自动发现）"
+    default ""
+    help
+      填了就跳过发现，直接用 http://<IP>:9197/upnp/control/AVTransport1（三星的固定路径）。
+
+config DLNA_FPS
+    int "MJPEG 帧率"
+    range 1 10
+    default 2
+    help
+      内容是静态的，帧率只决定换页延迟和码率。1080p 帧约 120KB，2fps ≈ 240KB/s。
+      太低电视会因为 6 秒内凑不够数据而判定启动失败（实测 4K MJPEG 就是 6 秒被踢）。
+
+config DLNA_CYCLE_S
+    int "自动换页间隔（秒，0 = 不自动换）"
+    default 10
+
+config DLNA_REPUSH_IDLE_S
+    int "流空闲多久后重新发现并重推（秒）"
+    default 20
+    help
+      电视关机 / 切走信号源后流会断。空闲超过这个时间就重新 SSDP 发现并推送，
+      失败后按 2 倍退避，最长 5 分钟。
+
+config DLNA_CLOCK_LEAD_MS
+    int "时钟提前量（毫秒）"
+    default 3000
+    help
+      电视播放器先缓冲几秒再播，画面比板子发出时晚。时钟编码「现在 + 提前量」，
+      让电视上显示的时间刚好对。用手机对表调这个值。
+
+config DLNA_LCD_ROTATE_180
+    bool "屏幕旋转 180°"
+    default n
+    help
+      主工程里板子是倒插的所以默认翻转；探针平放在桌上，默认不翻。
+
+endmenu
