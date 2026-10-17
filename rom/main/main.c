@@ -34,12 +34,8 @@
 
 static const char *TAG = "stickbox";
 
-extern const uint8_t f1_start[] asm("_binary_page1_jpg_start");
-extern const uint8_t f1_end[] asm("_binary_page1_jpg_end");
-extern const uint8_t f2_start[] asm("_binary_page2_jpg_start");
-extern const uint8_t f2_end[] asm("_binary_page2_jpg_end");
-extern const uint8_t f3_start[] asm("_binary_page3_jpg_start");
-extern const uint8_t f3_end[] asm("_binary_page3_jpg_end");
+extern const uint8_t blank_start[] asm("_binary_blank_jpg_start");
+extern const uint8_t blank_end[]   asm("_binary_blank_jpg_end");
 
 static EventGroupHandle_t s_evt;
 #define EVT_GOT_IP BIT0
@@ -154,26 +150,6 @@ static void supervisor_task(void *arg)
     }
 }
 
-static void cycle_task(void *arg)
-{
-    (void)arg;
-    int elapsed = 0;
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        if (!cloud_paired()) {
-            /* 还没配对：停在第 1 页，配对码条带要一直留在画面上。 */
-            if (stream_current() != 0) stream_set(0);
-            elapsed = 0;
-            continue;
-        }
-        if (++elapsed >= CONFIG_STICKBOX_DLNA_CYCLE_S) {
-            elapsed = 0;
-            stream_set(stream_current() + 1);
-            ESP_LOGI(TAG, "换到第 %d 页", stream_current() + 1);
-        }
-    }
-}
-
 static void sntp_start(void)
 {
     setenv("TZ", "CST-8", 1);
@@ -246,21 +222,18 @@ void app_main(void)
     ESP_LOGI(TAG, "连接 Wi-Fi \"%s\"…", s_ssid);
     lcd_ui_wifi(s_ssid);
 
-    static frame_t frames[3];
-    frames[0] = (frame_t){ f1_start, f1_end - f1_start };
-    frames[1] = (frame_t){ f2_start, f2_end - f2_start };
-    frames[2] = (frame_t){ f3_start, f3_end - f3_start };
+    /* 固件里只带一张**纯色底图**，没有任何演示数据。电视上要么是真实看板
+     * （帧包到手之后），要么是功能性画面（配对码 / 连接中），不会出现任何
+     * 看起来像数据却不是数据的东西。 */
+    static frame_t frames[1];
+    frames[0] = (frame_t){ blank_start, blank_end - blank_start };
     /* 配对码条带占 MCU 行 46..51；未配对时停在第 1 页显示它。 */
-    stream_start(frames, 3, CONFIG_STICKBOX_DLNA_FPS, PAIR_ROW0, PAIR_ROWS);
+    stream_start(frames, 1, CONFIG_STICKBOX_DLNA_FPS, PAIR_ROW0, PAIR_ROWS);
 
     sntp_start();
     xTaskCreate(services_task, "svc", 8192, NULL, 4, NULL);
     /* T8：实测栈余量 3.0KB，4096 仍留约 1KB。 */
     xTaskCreate(supervisor_task, "dlna_sup", 4096, NULL, 4, NULL);
-    if (CONFIG_STICKBOX_DLNA_CYCLE_S > 0)
-        /* 4096：cycle_task 每 10 秒打一条 ESP_LOGI，而 netlog 装上的
-         * vprintf 钩子会在调用任务栈上再拼一次日志——2048 实测会爆栈。 */
-        xTaskCreate(cycle_task, "cycle", 4096, NULL, 3, NULL);
 
     EventBits_t bits = xEventGroupWaitBits(s_evt, EVT_GOT_IP, pdFALSE, pdFALSE,
                                            pdMS_TO_TICKS(30000));

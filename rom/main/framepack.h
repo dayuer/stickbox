@@ -47,7 +47,7 @@ typedef struct {
 } fp_run_t;
 
 /* 帧包索引：meta.json 解析后的结果。只留设备拼接真正用得到的字段。 */
-typedef struct {
+typedef struct fp_index {
     /* 每个 MCU 行的时钟列区间（MCU 列 72..112），off 相对底帧起点。 */
     fp_run_t row_runs[FP_BAND_ROWS];
     /* 四个卡片槽在底帧里的位置，off 相对底帧起点。 */
@@ -139,3 +139,26 @@ void fp_write_abort(fp_writer_t *w);
  * 推流时要用它把行段和底帧的连接段交替发出去。 */
 void fp_band_layout(const fp_index_t *ix, uint32_t out_off[FP_BAND_ROWS],
                     uint32_t out_len[FP_BAND_ROWS], int hh, int mm);
+
+/* 推流要发的一段连续字节。指针可能指向 flash 映射区或 RAM 缓冲。 */
+typedef struct {
+    const uint8_t *p;
+    size_t         n;
+} fp_seg_t;
+
+/* 一帧最多 12×2+1 = 25 段。 */
+#define FP_MAX_SEGS (FP_BAND_ROWS * 2 + 1)
+
+/* 把底帧和拼好的时钟带编排成推流的段序列：
+ * 底帧[0, 行0) 行0 底帧[行0后, 行1) 行1 … 行11 底帧[行11后, 结尾)
+ *
+ * 整帧从不在 RAM 里拼起来——底帧那些段直接指向 flash 映射地址。
+ *
+ * 返回段数，0 表示索引不合法。*total 回填这一帧的总字节数（AVI 块头要用）。
+ * 这个编排和 stream.c 的发送循环共用，主机侧测试验的就是它。 */
+int fp_frame_segments(const fp_index_t *ix,
+                      const uint8_t *base, size_t base_len,
+                      const uint8_t *band,
+                      const uint32_t out_off[FP_BAND_ROWS],
+                      const uint32_t out_len[FP_BAND_ROWS],
+                      fp_seg_t *segs, int max_segs, size_t *total);

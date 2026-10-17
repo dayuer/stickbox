@@ -4,5 +4,5 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES esp_wifi esp_event nvs_flash esp_netif esp_http_server esp_http_client
              mqtt json lwip esp_timer esp-tls driver
-    EMBED_FILES "assets/page1.jpg" "assets/page2.jpg" "assets/page3.jpg"
+    EMBED_FILES "assets/blank.jpg"
 )

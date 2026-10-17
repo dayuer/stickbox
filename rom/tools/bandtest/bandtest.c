@@ -81,5 +81,25 @@ int main(int argc, char **argv)
     }
     if (bad) return 1;
     printf("✓ 12 行与 T13a 的 spliced.jpg 逐字节一致\n");
+
+    /* 整帧校验：按推流真正要发的段序列拼起来，和黄金整帧比。
+     * 这一步验的是段偏移的编排——差一错误就藏在这里，只比 12 行看不出来。 */
+    fp_seg_t segs[FP_MAX_SEGS];
+    size_t total = 0;
+    int ns = fp_frame_segments(&ix, base, blen, out, off, len, segs, FP_MAX_SEGS, &total);
+    if (!ns) { printf("✗ 段编排失败\n"); return 1; }
+    if (total != slen) {
+        printf("✗ 整帧 %zu 字节，黄金 %zu 字节\n", total, slen);
+        return 1;
+    }
+    size_t at = 0;
+    for (int i = 0; i < ns; i++) {
+        if (memcmp(segs[i].p, spliced + at, segs[i].n) != 0) {
+            printf("✗ 第 %d/%d 段不一致（偏移 %zu，%zu 字节）\n", i + 1, ns, at, segs[i].n);
+            return 1;
+        }
+        at += segs[i].n;
+    }
+    printf("✓ 整帧 %d 段、%zu 字节与黄金完全一致\n", ns, total);
     return 0;
 }

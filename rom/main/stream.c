@@ -8,6 +8,7 @@
  * AVI 头把帧数和 movi 长度都写成「很大」，没有 idx1——播放器当它是一段很长的视频。
  * 用原始 socket 而不是 esp_http_server：后者是单任务，一个长连接会把控制面板堵死。
  */
+#include "framepack.h"
 #include "stream.h"
 
 #include <stdlib.h>
@@ -35,6 +36,16 @@ static SemaphoreHandle_t s_mx;
 static uint8_t *s_band[2];
 static size_t s_band_len[2];
 static int s_band_page[2] = { -1, -1 };
+
+/* 帧包模式（T13b）。底帧来自 framepack 的 flash 映射地址，推流时直接从
+ * 那里发，整帧从不在 RAM 里拼起来。 */
+static bool             s_fp_mode;
+static const fp_index_t *s_fp_ix;
+static const uint8_t    *s_fp_base;
+static size_t            s_fp_base_len;
+/* 双缓冲里每一块的行布局，和 s_band[] 一一对应。 */
+static uint32_t s_row_off[2][FP_BAND_ROWS];
+static uint32_t s_row_len[2][FP_BAND_ROWS];
 static int s_front = -1;
 static int s_busy[2];
 static volatile int s_cur;
@@ -60,6 +71,51 @@ uint8_t *stream_band_begin(void)
 }
 
 size_t stream_band_cap(void) { return BAND_CAP; }
+
+void stream_use_framepack(const struct fp_index *ix, const uint8_t *base, size_t base_len)
+{
+    xSemaphoreTake(s_mx, portMAX_DELAY);
+    s_fp_ix = ix; s_fp_base = base; s_fp_base_len = base_len;
+    s_fp_mode = true;
+    /* 旧的带是给预置页拼的，在帧包模式下毫无意义。不作废的话，第一帧
+     * 会拿预置页的带去配底帧，发出去是花屏。 */
+    s_front = -1;
+    s_band_page[0] = s_band_page[1] = -1;
+    xSemaphoreGive(s_mx);
+    ESP_LOGI(TAG, "切到帧包模式，底帧 %u 字节", (unsigned)base_len);
+}
+
+void stream_use_presets(void)
+{
+    xSemaphoreTake(s_mx, portMAX_DELAY);
+    bool was = s_fp_mode;
+    s_fp_mode = false;
+    s_fp_ix = NULL; s_fp_base = NULL; s_fp_base_len = 0;
+    s_front = -1;
+    s_band_page[0] = s_band_page[1] = -1;
+    xSemaphoreGive(s_mx);
+    if (was) ESP_LOGW(TAG, "退回预置页");
+}
+
+bool stream_band_publish_rows(uint8_t *buf, size_t len,
+                              const uint32_t row_off[FP_BAND_ROWS],
+                              const uint32_t row_len[FP_BAND_ROWS])
+{
+    if (len > BAND_CAP) {
+        ESP_LOGE(TAG, "带长度 %u 超过 BAND_CAP %u，拒绝发布（画面保持上一帧）",
+                 (unsigned)len, (unsigned)BAND_CAP);
+        return false;
+    }
+    int i = buf == s_band[0] ? 0 : 1;
+    xSemaphoreTake(s_mx, portMAX_DELAY);
+    memcpy(s_row_off[i], row_off, sizeof s_row_off[i]);
+    memcpy(s_row_len[i], row_len, sizeof s_row_len[i]);
+    s_band_len[i] = len;
+    s_band_page[i] = 0;       /* 帧包模式只有一页 */
+    s_front = i;
+    xSemaphoreGive(s_mx);
+    return true;
+}
 
 bool stream_band_publish(uint8_t *buf, size_t len, int page)
 {

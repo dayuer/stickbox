@@ -109,3 +109,44 @@ size_t fp_build_band(const fp_index_t *ix,
     }
     return w;
 }
+
+int fp_frame_segments(const fp_index_t *ix,
+                      const uint8_t *base, size_t base_len,
+                      const uint8_t *band,
+                      const uint32_t out_off[FP_BAND_ROWS],
+                      const uint32_t out_len[FP_BAND_ROWS],
+                      fp_seg_t *segs, int max_segs, size_t *total)
+{
+    if (!ix || !base || !band || !segs || max_segs < FP_MAX_SEGS) return 0;
+
+    int n = 0;
+    size_t sum = 0;
+    uint32_t cursor = 0;   /* 底帧里已经编排到哪儿 */
+
+    for (int row = 0; row < FP_BAND_ROWS; row++) {
+        const fp_run_t *rr = &ix->row_runs[row];
+        /* 行段必须在底帧内，且按偏移升序——乱序会让 cursor 倒退，
+         * 发出去的就是一堆错位的字节。 */
+        if (rr->off < cursor || (size_t)rr->off + rr->len > base_len) return 0;
+
+        if (rr->off > cursor) {
+            segs[n].p = base + cursor;
+            segs[n].n = rr->off - cursor;
+            sum += segs[n].n;
+            n++;
+        }
+        segs[n].p = band + out_off[row];
+        segs[n].n = out_len[row];
+        sum += segs[n].n;
+        n++;
+        cursor = rr->off + rr->len;
+    }
+    if (cursor < base_len) {
+        segs[n].p = base + cursor;
+        segs[n].n = base_len - cursor;
+        sum += segs[n].n;
+        n++;
+    }
+    if (total) *total = sum;
+    return n;
+}
