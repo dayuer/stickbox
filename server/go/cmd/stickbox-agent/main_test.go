@@ -1,0 +1,293 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+)
+
+func fixture(t *testing.T, name string) *os.File {
+	t.Helper()
+	f, err := os.Open(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
+// 真实 claude 输出的脱敏样例：session → five_hour，weekly_all → seven_day。
+func TestParseUsageStreamMapsSessionAndWeekly(t *testing.T) {
+	rep, skip, err := parseUsageStream(fixture(t, "usage-stream.jsonl"))
+	if err != nil {
+		t.Fatalf("解析失败：%v", err)
+	}
+	if skip != "" {
+		t.Fatalf("不该跳过：%s", skip)
+	}
+	if rep.FiveHour == nil || rep.SevenDay == nil {
+		t.Fatalf("窗口缺失：%+v", rep)
+	}
+	if rep.FiveHour.UsedPercentage != 2 {
+		t.Errorf("five_hour = %v，期望 2", rep.FiveHour.UsedPercentage)
+	}
+	if rep.SevenDay.UsedPercentage != 34 {
+		t.Errorf("seven_day = %v，期望 34", rep.SevenDay.UsedPercentage)
+	}
+	// 小数秒和 +00:00 都要能解析。
+	want := time.Date(2026, 10, 17, 18, 40, 0, 123456000, time.UTC).Unix()
+	if rep.FiveHour.ResetsAt != want {
+		t.Errorf("five_hour.resets_at = %d，期望 %d", rep.FiveHour.ResetsAt, want)
+	}
+	want7 := time.Date(2026, 10, 22, 9, 20, 0, 0, time.UTC).Unix()
+	if rep.SevenDay.ResetsAt != want7 {
+		t.Errorf("seven_day.resets_at = %d，期望 %d", rep.SevenDay.ResetsAt, want7)
+	}
+	// 原始 limits 要原样带上（服务端存下来给 App 看）。
+	var rows []map[string]any
+	if err := json.Unmarshal(rep.Limits, &rows); err != nil {
+		t.Fatalf("原始 limits 不是数组：%v", err)
+	}
+	if len(rows) != 2 || rows[0]["kind"] != "session" || rows[1]["kind"] != "weekly_all" {
+		t.Errorf("原始 limits = %s", rep.Limits)
+	}
+}
+
+// 429 冷却期内 rate_limits 为 null：跳过本轮，不报错。
+func TestParseUsageStreamSkipsCooling(t *testing.T) {
+	rep, skip, err := parseUsageStream(fixture(t, "usage-cooling.jsonl"))
+	if err != nil {
+		t.Fatalf("冷却不该报错：%v", err)
+	}
+	if skip == "" {
+		t.Fatal("rate_limits 为 null 时应该跳过")
+	}
+	if rep.FiveHour != nil || rep.SevenDay != nil {
+		t.Errorf("冷却期不该有窗口：%+v", rep)
+	}
+}
+
+// limits 为 null（服务端没回行）同样跳过。
+func TestParseUsageStreamSkipsNullLimits(t *testing.T) {
+	_, skip, err := parseUsageStream(fixture(t, "usage-no-limits.jsonl"))
+	if err != nil {
+		t.Fatalf("limits 为 null 不该报错：%v", err)
+	}
+	if skip == "" {
+		t.Fatal("limits 为 null 时应该跳过")
+	}
+}
+
+// 没有 usage_report 说明输出格式变了，必须报错而不是静默。
+func TestParseUsageStreamErrorsWithoutReport(t *testing.T) {
+	_, _, err := parseUsageStream(fixture(t, "usage-no-report.jsonl"))
+	if err == nil {
+		t.Fatal("缺少 usage_report 时应报错")
+	}
+}
+
+func TestParseUsageStreamIgnoresUnknownRows(t *testing.T) {
+	in := strings.NewReader(`{"type":"assistant","usage_report":{"rate_limits":{"limits":[` +
+		`{"kind":"weekly_scoped","group":"weekly","percent":5,"resets_at":"2026-10-22T09:20:00Z","severity":"normal","is_active":false},` +
+		`{"kind":"session","group":"session","percent":10,"resets_at":"2026-10-17T18:40:00Z","severity":"normal","is_active":true}]}}}`)
+	rep, skip, err := parseUsageStream(in)
+	if err != nil || skip != "" {
+		t.Fatalf("err=%v skip=%q", err, skip)
+	}
+	if rep.FiveHour == nil || rep.FiveHour.UsedPercentage != 10 {
+		t.Errorf("five_hour = %+v", rep.FiveHour)
+	}
+	if rep.SevenDay != nil {
+		t.Errorf("weekly_scoped 不该映射到 seven_day：%+v", rep.SevenDay)
+	}
+}
+
+func TestParseResetsAt(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int64
+		bad  bool
+	}{
+		{"2026-10-17T18:40:00.123456+00:00", time.Date(2026, 10, 17, 18, 40, 0, 123456000, time.UTC).Unix(), false},
+		{"2026-10-22T09:20:00Z", time.Date(2026, 10, 22, 9, 20, 0, 0, time.UTC).Unix(), false},
+		{"2026-10-22T09:20:00+08:00", time.Date(2026, 10, 22, 1, 20, 0, 0, time.UTC).Unix(), false},
+		{"not-a-time", 0, true},
+		{"", 0, true},
+	}
+	for _, c := range cases {
+		got, err := parseResetsAt(c.in)
+		if c.bad {
+			if err == nil {
+				t.Errorf("%q 应该报错", c.in)
+			}
+			continue
+		}
+		if err != nil || got != c.want {
+			t.Errorf("%q = %d, %v；期望 %d", c.in, got, err, c.want)
+		}
+	}
+}
+
+// 宿主环境里的 ANTHROPIC_* / CLAUDE_* 会污染子进程，必须滤掉。
+func TestFilterEnvStripsAnthropicAndClaude(t *testing.T) {
+	in := []string{
+		"PATH=/usr/bin",
+		"ANTHROPIC_AUTH_TOKEN=x",
+		"ANTHROPIC_BASE_URL=https://example",
+		"CLAUDE_CODE_ENTRYPOINT=cli",
+		"CLAUDECODE=1",
+		"HOME=/Users/example",
+	}
+	got := filterEnv(in)
+	want := []string{"PATH=/usr/bin", "HOME=/Users/example"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("filterEnv = %v，期望 %v", got, want)
+	}
+}
+
+func TestConfigSaveLoadAndPerms(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("STICKBOX_CONFIG_DIR", dir)
+
+	want := &agentConfig{
+		Server:     "https://stickbox.example",
+		Token:      "abc.def",
+		ClaudePath: "/usr/local/bin/claude",
+		Name:       "mac",
+		PairedAt:   1792177433,
+	}
+	if err := saveConfig(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *got != *want {
+		t.Errorf("读回 = %+v，期望 %+v", got, want)
+	}
+	if runtime.GOOS != "windows" {
+		path, _ := configPath()
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != 0o600 {
+			t.Errorf("配置文件权限 = %o，期望 600", fi.Mode().Perm())
+		}
+		if di, _ := os.Stat(filepath.Dir(path)); di.Mode().Perm() != 0o700 {
+			t.Errorf("配置目录权限 = %o，期望 700", di.Mode().Perm())
+		}
+	}
+}
+
+func TestLoadConfigMissingIsEmpty(t *testing.T) {
+	t.Setenv("STICKBOX_CONFIG_DIR", t.TempDir())
+	c, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Token != "" || c.Server != "" {
+		t.Errorf("缺失文件应返回空配置：%+v", c)
+	}
+}
+
+func TestPostUsage(t *testing.T) {
+	var gotAuth, gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("请求体不是 JSON：%v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":1,"devices":2}`))
+	}))
+	defer srv.Close()
+
+	cfg := &agentConfig{Server: srv.URL, Token: "tok"}
+	n, err := postUsage(cfg, usagePayload{
+		FiveHour: &usageWindow{UsedPercentage: 2, ResetsAt: 1792192800},
+		Limits:   json.RawMessage(`[{"kind":"session"}]`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("devices = %d，期望 2", n)
+	}
+	if gotPath != "/api/usage" {
+		t.Errorf("路径 = %q", gotPath)
+	}
+	if gotAuth != "Bearer tok" {
+		t.Errorf("Authorization = %q", gotAuth)
+	}
+	if gotBody["five_hour"] == nil || gotBody["limits"] == nil {
+		t.Errorf("请求体 = %v", gotBody)
+	}
+	if _, ok := gotBody["seven_day"]; ok {
+		t.Errorf("seven_day 为空时不该出现：%v", gotBody)
+	}
+}
+
+// pair：没令牌时不带 Authorization；有令牌时带上，把新屏并入同一用户。
+func TestPairDeviceSendsExistingToken(t *testing.T) {
+	var gotAuth string
+	var gotBody map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Write([]byte(`{"dev":"f412fa87c9e0","user_id":"u1","token":"newtok"}`))
+	}))
+	defer srv.Close()
+
+	dev, token, err := pairDevice(&agentConfig{Server: srv.URL}, "123456", "mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dev != "f412fa87c9e0" || token != "newtok" {
+		t.Errorf("dev=%q token=%q", dev, token)
+	}
+	if gotAuth != "" {
+		t.Errorf("首次配对不该带令牌，拿到 %q", gotAuth)
+	}
+	if gotBody["code"] != "123456" || gotBody["name"] != "mac" {
+		t.Errorf("请求体 = %v", gotBody)
+	}
+
+	_, _, err = pairDevice(&agentConfig{Server: srv.URL, Token: "old"}, "654321", "mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer old" {
+		t.Errorf("已有令牌时应带上，拿到 %q", gotAuth)
+	}
+}
+
+func TestLaunchdPlistUsesAbsolutePaths(t *testing.T) {
+	p := launchdPlist("/opt/stickbox/agent", "/Users/x/Library/Logs/stickbox-agent.log")
+	for _, want := range []string{
+		"<string>ai.stickbox.agent</string>",
+		"<string>/opt/stickbox/agent</string>",
+		"<string>run</string>",
+		"<string>/Users/x/Library/Logs/stickbox-agent.log</string>",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("plist 缺少 %q：\n%s", want, p)
+		}
+	}
+}
+
+func TestSystemdUnitUsesAbsolutePath(t *testing.T) {
+	u := systemdUnit("/opt/stickbox/agent")
+	if !strings.Contains(u, "ExecStart=/opt/stickbox/agent run") {
+		t.Errorf("unit 缺少绝对路径 ExecStart：\n%s", u)
+	}
+}
