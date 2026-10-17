@@ -13,6 +13,7 @@ import (
 	"time"
 	_ "time/tzdata" // 镜像里没有 tzdata；按用户 IANA 时区渲染需要内嵌一份
 
+	"github.com/dayuer/stickbox/server/go/internal/admin"
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/broker"
 	"github.com/dayuer/stickbox/server/go/internal/command"
@@ -157,6 +158,16 @@ func serve(cfg *config.Config) error {
 		slog.Info("metrics 监听", "addr", cfg.MetricsAddr)
 	}
 
+	// 设备诊断只监听回环，stickboxd device show 在服务器本机调用它。
+	adminSrv, err := admin.Serve(cfg.AdminAddr, admin.NewHandler(st, api.Usage(), fs,
+		adminRuntime{br: br, cmd: cmdTracker, api: api}))
+	if err != nil {
+		br.Close()
+		return err
+	}
+	defer adminSrv.Close()
+	slog.Info("admin 诊断监听", "addr", cfg.AdminAddr)
+
 	errc := make(chan error, 1)
 	go func() {
 		slog.Info("HTTPS 监听", "addr", cfg.HTTPAddr, "version", version.String())
@@ -181,6 +192,24 @@ func serve(cfg *config.Config) error {
 		br.Close()
 		return nil
 	}
+}
+
+// adminRuntime 把 broker/tracker/API 的易失状态接到只读诊断接口。
+type adminRuntime struct {
+	br  *broker.Broker
+	cmd *command.Tracker
+	api *httpapi.API
+}
+
+func (a adminRuntime) RecentAuth(dev string, n int) []broker.AuthEvent {
+	return a.br.RecentAuth(dev, n)
+}
+func (a adminRuntime) ConnectedKeys(dev string) []string { return a.br.ConnectedKeys(dev) }
+func (a adminRuntime) Pending(dev string) []command.PendingInfo {
+	return a.cmd.PendingDetail(dev)
+}
+func (a adminRuntime) RegisterQuota(dev string) (int, int, time.Time) {
+	return a.api.RegisterQuota(dev)
 }
 
 func envOr(k, def string) string {

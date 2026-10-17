@@ -527,12 +527,26 @@ func TestEndToEndUsageAckClearsPending(t *testing.T) {
 	}
 
 	e.reportUsage(agentTok, usageReport(time.Now(), 12.5))
-	cid := cidOf(t, dev.waitUsage(5*time.Second))
-	if e.cmd.Pending("f412fa87c9e0") == 0 {
-		t.Error("下行之后应当有待确认的指令")
-	}
+	dev.waitUsage(5 * time.Second) // 确认消息确实投到了设备
+	// 订阅补发和本次上报可能各带一个 cid，取当前真正待确认的那条。
+	cid := waitPendingTopic(t, e, "f412fa87c9e0", "printer/f412fa87c9e0/usage")
 	dev.ack(cid, true, "")
-	waitPendingZero(t, e, "f412fa87c9e0")
+	waitPendingGone(t, e, "f412fa87c9e0", cid)
+}
+
+func waitPendingTopic(t *testing.T, e *env, dev, topic string) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, p := range e.cmd.PendingDetail(dev) {
+			if p.Topic == topic {
+				return p.CID
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("%s 没有待确认的 %s", dev, topic)
+	return ""
 }
 
 // 设备回 ok=0（刻意不应用）是永久失败，立即结案不再重投。
@@ -621,6 +635,28 @@ func TestEndToEndPendingKeyCannotForgeAck(t *testing.T) {
 	// 真正的设备仍能正常确认。
 	dev.ack(cid, true, "")
 	waitPendingZero(t, e, "f412fa87c9e0")
+}
+
+// 上报用量也可能触发 frame 通知（另一个 cid），所以只等这一条 cid 结案。
+func waitPendingGone(t *testing.T, e *env, dev, cid string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if !pendingContains(e, dev, cid) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("%s 的 cid %s 仍未结案", dev, cid)
+}
+
+func pendingContains(e *env, dev, cid string) bool {
+	for _, p := range e.cmd.PendingDetail(dev) {
+		if p.CID == cid {
+			return true
+		}
+	}
+	return false
 }
 
 func waitPendingZero(t *testing.T, e *env, dev string) {

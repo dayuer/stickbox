@@ -551,3 +551,25 @@ func TestCancelDeviceStopsRetries(t *testing.T) {
 		t.Errorf("结局 = %+v ok=%v，期望 unpaired", o, ok)
 	}
 }
+
+func TestPendingDetail(t *testing.T) {
+	tr, _, pres, _, _ := newTracker(t)
+	pres.set("d", true)
+	cid1, _ := tr.Send("d", "printer/d/usage", []byte(`{"now":1}`), false)
+	cid2, _ := tr.Send("d", "printer/d/frame", []byte(`{"ver":2}`), false)
+	tr.Send("other", "printer/other/usage", []byte(`{"now":1}`), false)
+
+	list := tr.PendingDetail("d")
+	if len(list) != 2 {
+		t.Fatalf("明细 = %+v", list)
+	}
+	seen := map[string]bool{list[0].CID: true, list[1].CID: true}
+	if !seen[cid1] || !seen[cid2] {
+		t.Errorf("明细 cid = %+v", list)
+	}
+	tr.Ack("d", cid1, true, "")
+	list = tr.PendingDetail("d")
+	if len(list) != 1 || list[0].CID != cid2 || list[0].Tries == 0 {
+		t.Errorf("确认后明细 = %+v", list)
+	}
+}

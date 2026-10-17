@@ -84,3 +84,23 @@ func TestLoadReportsMissingFile(t *testing.T) {
 		t.Error("配置文件不存在时应当报错")
 	}
 }
+
+func TestAdminAddrDefaultsAndLoopbackOnly(t *testing.T) {
+	c, err := Load(write(t, minimal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AdminAddr != "127.0.0.1:9091" {
+		t.Errorf("admin_addr 默认 = %q", c.AdminAddr)
+	}
+	if _, err := Load(write(t, `{"cert_dir":"/c","token_pepper":"0123456789abcdefghijklmn","admin_addr":"0.0.0.0:9091"}`)); err == nil {
+		t.Error("admin_addr 绑 0.0.0.0 应被拒绝")
+	}
+	if _, err := Load(write(t, `{"cert_dir":"/c","token_pepper":"0123456789abcdefghijklmn","admin_addr":":9091"}`)); err == nil {
+		t.Error("admin_addr 省略主机名应被拒绝")
+	}
+	c, err = Load(write(t, `{"cert_dir":"/c","token_pepper":"0123456789abcdefghijklmn","admin_addr":"127.0.0.1:9191"}`))
+	if err != nil || c.AdminAddr != "127.0.0.1:9191" {
+		t.Errorf("admin_addr = %q err=%v", c.AdminAddr, err)
+	}
+}

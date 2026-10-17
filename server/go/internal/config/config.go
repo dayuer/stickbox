@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +22,8 @@ type Config struct {
 	// DefaultTZ 是 agent 没上报时区时的兜底（IANA 名，如 Asia/Bangkok）。
 	DefaultTZ   string `json:"default_tz"`
 	MetricsAddr string `json:"metrics_addr"`
+	// AdminAddr 是设备诊断的只读 HTTP 接口，只允许回环地址。
+	AdminAddr string `json:"admin_addr"`
 
 	// TokenPepper 是令牌哈希的服务端密钥（HMAC-SHA256）。必填：
 	// 缺了就不启动，避免退回无 pepper 的哈希。
@@ -90,6 +94,12 @@ func Load(path string) (*Config, error) {
 		// 只监听回环：指标不经过 nginx，也不对公网开放。
 		c.MetricsAddr = "127.0.0.1:9090"
 	}
+	if c.AdminAddr == "" {
+		c.AdminAddr = "127.0.0.1:9091"
+	}
+	if err := checkLoopbackAddr("admin_addr", c.AdminAddr); err != nil {
+		return nil, err
+	}
 	c.TokenPepper = strings.TrimSpace(c.TokenPepper)
 	if err := checkPepper(c.TokenPepper); err != nil {
 		return nil, err
@@ -116,6 +126,26 @@ func Load(path string) (*Config, error) {
 		c.BackfillPerSec = 2
 	}
 	return &c, nil
+}
+
+// checkLoopbackAddr 只允许诊断接口绑定回环地址。设备诊断包含用户/密钥
+// 元数据，绝对不能因为配置写错而暴露到公网。
+func checkLoopbackAddr(name, addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("config: %s 不合法：%w", name, err)
+	}
+	if host == "" {
+		return fmt.Errorf("config: %s 必须显式绑定回环地址（如 127.0.0.1:9091）", name)
+	}
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("config: %s 只允许回环地址，当前 %q", name, addr)
+	}
+	return nil
 }
 
 // checkPepper 拒绝空值、示例占位符和熵不足的 pepper。

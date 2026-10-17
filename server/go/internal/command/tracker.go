@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -252,6 +253,33 @@ func (t *Tracker) finish(cid string, p *pending, ok bool, errMsg string) {
 		Tries: p.tries, Finished: t.now(),
 	}
 	t.mu.Unlock()
+}
+
+// PendingInfo 是一条未确认指令的诊断快照。
+type PendingInfo struct {
+	CID      string    `json:"cid"`
+	Topic    string    `json:"topic"`
+	Tries    int       `json:"tries"`
+	NextAt   time.Time `json:"next_at"`
+	Deadline time.Time `json:"deadline"`
+}
+
+// PendingDetail 返回某设备未确认指令的明细，按下次重投时间排序。
+func (t *Tracker) PendingDetail(dev string) []PendingInfo {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := []PendingInfo{}
+	for cid, p := range t.pend {
+		if p.dev != dev {
+			continue
+		}
+		out = append(out, PendingInfo{
+			CID: cid, Topic: p.topic, Tries: p.tries,
+			NextAt: p.next, Deadline: p.deadline,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].NextAt.Before(out[j].NextAt) })
+	return out
 }
 
 // Pending 返回某设备还有多少条指令没被确认。0 表示两端状态一致。

@@ -185,6 +185,7 @@ func New(addr string, tlsCfg *tls.Config, v *auth.Verifier, r Router, opt Option
 		srv: srv, v: v, router: r, ids: newIDTable(),
 		pending: newPendingLimiter(6, time.Minute),
 		admit:   newAdmission(opt.AdmitPerSec),
+		auth:    newAuthLog(200),
 	}
 	if err := srv.AddHook(h, nil); err != nil {
 		return nil, err
@@ -265,6 +266,22 @@ func (b *Broker) send(dev, topic string, payload []byte, retain bool) error {
 func (b *Broker) SetCommandTracker(c CommandTracker) {
 	b.cmd = c
 	b.hook.cmd = c
+}
+
+// RecentAuth 返回某设备最近的 CONNECT 结果（新的在前），设备诊断用。
+func (b *Broker) RecentAuth(dev string, n int) []AuthEvent {
+	if b.hook == nil || b.hook.auth == nil {
+		return nil
+	}
+	return b.hook.auth.recent(dev, n)
+}
+
+// ConnectedKeys 返回该设备当前在线连接使用的 key_id。
+func (b *Broker) ConnectedKeys(dev string) []string {
+	if b.hook == nil {
+		return nil
+	}
+	return b.hook.connectedKeys(dev)
 }
 
 // CancelDevice 结案该设备所有未确认的指令。换密钥/吊销/解绑之后，旧

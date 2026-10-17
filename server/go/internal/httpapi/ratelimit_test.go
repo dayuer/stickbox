@@ -77,3 +77,28 @@ func TestClientIPTrustsXFFOnlyFromLoopback(t *testing.T) {
 		t.Errorf("XFF IPv6 限流键 = %q", got)
 	}
 }
+
+func TestRateLimiterRemaining(t *testing.T) {
+	l := newRateLimiter("test", 2, time.Minute)
+	now := time.Unix(1000, 0)
+	l.now = func() time.Time { return now }
+
+	left, limit, reset := l.remaining("d")
+	if left != 2 || limit != 2 || !reset.IsZero() {
+		t.Fatalf("空桶 = %d/%d reset=%v", left, limit, reset)
+	}
+	l.hit("d")
+	now = now.Add(10 * time.Second)
+	l.hit("d")
+	left, _, reset = l.remaining("d")
+	if left != 0 {
+		t.Fatalf("两次命中后剩余 = %d，期望 0", left)
+	}
+	if want := time.Unix(1060, 0); !reset.Equal(want) {
+		t.Errorf("reset = %v，期望 %v（最早命中 + 窗口）", reset, want)
+	}
+	now = now.Add(51 * time.Second)
+	if left, _, _ = l.remaining("d"); left != 1 {
+		t.Errorf("窗口滑过一个名额后剩余 = %d，期望 1", left)
+	}
+}
