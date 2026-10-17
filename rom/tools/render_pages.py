@@ -4,13 +4,13 @@
 y = 800..959（MCU 行 50..59）是时钟带：这里只留纯背景色，板子每秒重新编码这 10 行
 再拼回去。背景色必须和固件 main.c 里 PAGE_BG 表一致。
 
-    python3 -I tools/render_pages.py      # 输出 assets/page{1,2,3}.jpg
+    cd rom && python3 -I tools/render_pages.py   # 输出 main/assets/page{1,2,3}.jpg
 """
 import os
 from PIL import Image, ImageDraw, ImageFont
 
 FONT = "/System/Library/Fonts/Hiragino Sans GB.ttc"
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets")
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "main", "assets")
 BAND_Y0, BAND_Y1 = 800, 960  # 必须 16 对齐；改了要同步固件 CLOCK_ROW0 / CLOCK_ROWS
 
 PAGES = [

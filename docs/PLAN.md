@@ -36,7 +36,7 @@
 | T3 | 固件：删除打印，接入 DLNA 推流引擎与 MQTT 用量 | esp | T0 | 完成 |
 | T4 | 固件：按设计稿渲染 1080p 看板（多页轮播） | esp | T3 | **取消**：T13 定为服务端渲染 |
 | T5 | 端到端联调、上板与电视验收 | 整合 | T1–T4 | 待办 |
-| T6 | 文档收尾：接口文档重写、删除 `probe/`、交接文档 | esp + 整合 | T5 | 进行中：接口文档（T6a）完成，余下待 T5 |
+| T6 | 文档收尾：接口文档重写、删除 `probe/`、交接文档 | esp + 整合 | T5 | 完成（T6a 接口文档 + T6b 清理） |
 | T7 | 配对码绑定（无手机号）：设备自注册出码，agent 输码配对；删除短信与 App 角色 | esp | T1、T3 | 完成 |
 | T8 | 固件内存压缩（T4 动态条带的前提） | esp | T7 | 完成 |
 | T9 | OTA 双槽与签名升级通道 | esp（M0 会话） | T7 | 进行中 |
@@ -110,7 +110,7 @@ T9–T16 属产品化里程碑 M0–M5，背景与取舍见 [`PRODUCT.md`](PRODU
   USB host 切换（`board_usb_host_power`）
 - **保留**：热点配网门户 `provision.*`、设备密钥、MQTT 长连接（心跳照发，判在线用）、
   LCD（`lcd_ui.*`，180° 翻转）、netlog
-- **接入**：从 `probe/dlna-tv/` 搬入 `dlna.*`、`stream.*`、`jband.*`、SNTP 对时；
+- **接入**：从验证工程搬入 `dlna.*`、`stream.*`、`jband.*`、SNTP 对时（验证工程已在 T6b 删除）；
   订阅 `printer/{dev}/usage`，解析为 `usage_report_t`（payload 格式见 `server/go/internal/usage`）
 - 板载 LCD 改为状态屏：Wi-Fi / 电视 / 推流 / 云端 / 最近一次用量时间
 
@@ -149,8 +149,10 @@ agent 配对 / 解绑 / 设备 / 用量、错误与限流、部署拓扑；打�
 `server/go/internal/apidoc/apidoc_test.go` 在 `go test` 中比对文档端点表与
 `server/go/internal/httpapi/api.go` 的路由表，防止文档漂移。
 
-**其余部分（随 T5）**：`docs/HANDOFF-usb-tv-probe.md` 补 DLNA 结论；删除 `probe/`；
-`rom/README.md` 写烧录与调试要点。
+**其余部分（T6b，完成）**：删除整个 `probe/`（推流引擎已在 `rom/main`；
+实验脚本在 `docs/experiments/tvstart/`；`render_pages.py` 移到 `rom/tools/`）；
+`docs/HANDOFF-usb-tv-probe.md` 补 DLNA 结论并引用 `docs/HANDOFF-tv-startup.md`；
+`rom/README.md` 补编译、烧录、串口、配网、配对与故障排查。
 
 ### T7 配对码绑定（无手机号、无短信）
 
