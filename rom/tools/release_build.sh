@@ -56,6 +56,11 @@ idf.py -B build-release \
     -DPROJECT_VER="$TAG" \
     build
 
+# 防呆：编进去的服务器地址必须是官方主机。cloud_creds.h 是 gitignore 的
+# 本地文件，开发机指向旧服务器时构建照样成功，设备上板才 DNS 失败。
+EXPECTED_HOST="${STICKBOX_EXPECTED_HOST:-mqtt.stickbox.ai}"
+python3 tools/check_embedded_hosts.py build-release/stickbox.bin "$EXPECTED_HOST"
+
 # 防呆：签名开关必须真的落到这个独立 sdkconfig 里。
 grep -q '^CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y$' build-release/sdkconfig || {
     echo "build-release/sdkconfig 没有 CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y" >&2
