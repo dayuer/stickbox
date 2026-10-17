@@ -392,23 +392,100 @@ func TestStartupRendersExistingUsers(t *testing.T) {
 	waitPub("d4")
 }
 
-// 持续每 2 秒上报时，防抖不能无限重置；maxWait 到点必须渲染。
+// fakeClock 让防抖测试完全由测试推进时间，不靠 sleep 卡时间窗口。
+type fakeClock struct {
+	mu         sync.Mutex
+	now        time.Time
+	timers     []fakeTimer
+	registered chan struct{}
+}
+
+type fakeTimer struct {
+	at time.Time
+	ch chan time.Time
+}
+
+func newFakeClock() *fakeClock {
+	return &fakeClock{
+		now:        time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC),
+		registered: make(chan struct{}, 32),
+	}
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) After(d time.Duration) <-chan time.Time {
+	c.mu.Lock()
+	t := fakeTimer{at: c.now.Add(d), ch: make(chan time.Time, 1)}
+	c.timers = append(c.timers, t)
+	c.mu.Unlock()
+	select {
+	case c.registered <- struct{}{}:
+	default:
+	}
+	return t.ch
+}
+
+// waitTimer 等 worker 注册下一个计时器；真实时间只做兜底，不参与断言。
+func (c *fakeClock) waitTimer(t *testing.T) {
+	t.Helper()
+	select {
+	case <-c.registered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("防抖 worker 没有注册计时器")
+	}
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	now := c.now
+	var fire []chan time.Time
+	keep := c.timers[:0]
+	for _, tm := range c.timers {
+		if !tm.at.After(now) {
+			fire = append(fire, tm.ch)
+		} else {
+			keep = append(keep, tm)
+		}
+	}
+	c.timers = keep
+	c.mu.Unlock()
+	for _, ch := range fire {
+		select {
+		case ch <- now:
+		default:
+		}
+	}
+}
+
+// 持续上报时，防抖不能无限重置；maxWait 到点必须渲染。
+// 用假时钟推进，不依赖真实时间窗口。
 func TestDebounceMaxWait(t *testing.T) {
 	f := newFixture(t)
+	clock := newFakeClock()
+	f.svc.opt.Now = clock.Now
+	f.svc.opt.After = clock.After
 	f.svc.opt.Debounce = 200 * time.Millisecond
 	f.svc.opt.MaxWait = 30 * time.Millisecond
 
-	start := time.Now()
-	go func() {
-		for i := 0; i < 20; i++ {
-			f.svc.MarkDirty("u1")
-			time.Sleep(5 * time.Millisecond)
-		}
-	}()
-	f.waitVersion("u1", 1, 1*time.Second)
-	if elapsed := time.Since(start); elapsed > 150*time.Millisecond {
-		t.Errorf("maxWait 没生效，渲染等了 %v", elapsed)
+	f.svc.MarkDirty("u1")
+	clock.waitTimer(t) // 首次等待 30ms（被 MaxWait 截断）
+
+	clock.Advance(10 * time.Millisecond)
+	f.svc.MarkDirty("u1") // 防抖想重置到 200ms，但只剩 20ms
+	clock.waitTimer(t)
+
+	clock.Advance(19 * time.Millisecond) // 累计 29ms，还没到上限
+	if _, ver, ok := f.svc.Current("u1"); ok {
+		t.Fatalf("maxWait 之前就渲染了 v%d", ver)
 	}
+	clock.Advance(1 * time.Millisecond) // 累计 30ms，必须渲染
+	f.waitVersion("u1", 1, time.Second)
 }
 
 func TestOlderSnapshotDiscarded(t *testing.T) {
