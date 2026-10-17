@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const avtService = "urn:schemas-upnp-org:service:AVTransport:1"
+const AVTService = "urn:schemas-upnp-org:service:AVTransport:1"
 
 // stopSettle 是 Stop 之后等电视真的进入 STOPPED 的时间。
 // 三星从 PLAYING 切到 STOPPED 要 200–500ms，不等就 SetAVTransportURI 会 701。
@@ -158,9 +158,11 @@ func fetchAVControl(ctx context.Context, hc *http.Client, loc string) (control, 
 	return "", d.Device.FriendlyName, fmt.Errorf("sim: 设备没有 AVTransport 服务")
 }
 
-// soapEnvelope 拼 SOAP 请求体。参数值由调用方转义后原样放入（和
-// dlna_push.py 一致）——DIDL 本身已经转义过一遍。
-func soapEnvelope(action string, args [][2]string) string {
+// soapEnvelope 拼 SOAP 请求体。serviceType 必须和 action 所属服务一致：
+// AVTransport 的动作发到 AVTransport:1，ConnectionManager 的
+// GetProtocolInfo 必须用 ConnectionManager:1，否则三星回 500。
+// 参数值由调用方转义后原样放入（和 dlna_push.py 一致）——DIDL 本身已经转义过一遍。
+func soapEnvelope(serviceType, action string, args [][2]string) string {
 	var body strings.Builder
 	for _, kv := range args {
 		fmt.Fprintf(&body, "<%s>%s</%s>", kv[0], kv[1], kv[0])
@@ -168,7 +170,7 @@ func soapEnvelope(action string, args [][2]string) string {
 	return `<?xml version="1.0" encoding="utf-8"?>` +
 		`<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" ` +
 		`s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body>` +
-		`<u:` + action + ` xmlns:u="` + avtService + `">` + body.String() +
+		`<u:` + action + ` xmlns:u="` + serviceType + `">` + body.String() +
 		`</u:` + action + `></s:Body></s:Envelope>`
 }
 
@@ -179,16 +181,18 @@ func soapCall(ctx context.Context, controlURL, action string, args [][2]string) 
 
 // SoapCallRaw 发 SOAP 请求，原样返回 HTTP 状态码和响应体。
 //
+// serviceType 决定信封里的 xmlns:u 和 SOAPACTION：AVTransport 的动作用
+// AVTService，GetProtocolInfo 用 ConnectionManager 的 serviceType。
 // 兼容性工具（cmd/stickbox-tvcheck）要记录电视回来的真实状态码，所以
 // 这里不做 701 特判；模拟器自己的 soapDo 在其上保留原来的语义。
-func SoapCallRaw(ctx context.Context, controlURL, action string, args [][2]string) (int, []byte, error) {
-	env := soapEnvelope(action, args)
+func SoapCallRaw(ctx context.Context, controlURL, serviceType, action string, args [][2]string) (int, []byte, error) {
+	env := soapEnvelope(serviceType, action, args)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, controlURL, strings.NewReader(env))
 	if err != nil {
 		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", `text/xml; charset="utf-8"`)
-	req.Header.Set("SOAPACTION", `"`+avtService+`#`+action+`"`)
+	req.Header.Set("SOAPACTION", `"`+serviceType+`#`+action+`"`)
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
 		return 0, nil, err
@@ -200,7 +204,7 @@ func SoapCallRaw(ctx context.Context, controlURL, action string, args [][2]strin
 
 // soapDo 发 SOAP 请求并返回响应体。
 func soapDo(ctx context.Context, controlURL, action string, args [][2]string) ([]byte, error) {
-	status, raw, err := SoapCallRaw(ctx, controlURL, action, args)
+	status, raw, err := SoapCallRaw(ctx, controlURL, AVTService, action, args)
 	if err != nil {
 		return nil, err
 	}
