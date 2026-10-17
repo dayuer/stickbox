@@ -29,12 +29,12 @@
 |---|---|---|---|---|
 | T0 | 工程重组：固件移入 `rom/`、删除过时目录、README 与本计划 | 整合 | — | 完成 |
 | T1 | 服务端：删除打印功能，补完用量链路 | esp | T0 | 完成 |
-| T2 | 电脑端 `stickbox-agent` | esp | T1 | 待办 |
+| T2 | 电脑端 `stickbox-agent` | esp | T7 | 待办 |
 | T3 | 固件：删除打印，接入 DLNA 推流引擎与 MQTT 用量 | esp | T0 | 待办 |
 | T4 | 固件：按设计稿渲染 1080p 看板（多页轮播） | esp | T3 | 待办 |
 | T5 | 端到端联调、上板与电视验收 | 整合 | T1–T4 | 待办 |
 | T6 | 文档收尾：接口文档重写、删除 `probe/`、交接文档 | esp + 整合 | T5 | 待办 |
-| T7 | 配网网页里用手机号登录并绑定设备（替代已删的 App） | esp | T1、T3 | 待办 |
+| T7 | 配对码绑定（无手机号）：设备自注册出码，agent 输码配对；删除短信与 App 角色 | esp | T1、T3 | 待办 |
 
 ---
 
@@ -62,7 +62,8 @@
 ### T2 电脑端 `stickbox-agent`
 
 放在 `server/go/cmd/stickbox-agent`，Go 单文件程序，macOS / Linux / Windows：
-- `login`：手机号 + 短信验证码 → `POST /api/agent/login` → 令牌存用户配置目录（0600）
+- `pair <配对码>`：`POST /api/agent/pair`（已有令牌就带上，把新屏并入同一用户）→ 令牌存用户配置目录（0600）；
+  `unpair <dev>`、`devices` 列出名下屏（见 T7）
 - `run`：常驻，每 10 分钟执行
   `claude -p /usage --setting-sources project --no-session-persistence --output-format stream-json --verbose`，
   解析 `usage_report.rate_limits.limits`（`session` → five_hour，`weekly_all` → seven_day，原始 limits 一并上报），
@@ -78,7 +79,7 @@
 - `resets_at` 是 ISO 8601（可能带小数秒和 `+00:00`）
 
 **验收**：解析逻辑有单测（用 `rom/tools/fixtures/usage-2026-10-17.json` 一类的脱敏样例）；
-在本机对测试服务端跑通 login → run 一轮 → 服务端 `GET /api/usage` 能读到。
+在本机对测试服务端跑通 pair → run 一轮 → 服务端 `GET /api/agent/usage` 能读到。
 
 ### T3 固件：删除打印，接入推流引擎与 MQTT 用量
 
@@ -120,30 +121,44 @@ agent 上报 → 服务端 → MQTT → 板子 → 电视，全链路；断网 /
 `docs/API-cloud-print.md` 改写为只含账号、设备、MQTT、用量与 agent 的接口文档（改名）；
 `docs/HANDOFF-usb-tv-probe.md` 补 DLNA 结论；删除 `probe/`；`rom/README.md` 写烧录与调试要点。
 
-### T7 配网网页绑定设备
+### T7 配对码绑定（无手机号、无短信）
 
-App 删除后没有绑定入口。改为在设备自己的配网网页里完成：**连 Wi-Fi → 手机号 + 短信验证码 → 绑定**，一个流程走完。
-门户本来就是 APSTA，设备连上家里 Wi-Fi 后热点不断，手机留在热点上；所有访问服务端的请求都由**设备代发**
-（手机在热点上没有外网）。
+配网页**只配 Wi-Fi**。账号与设备的关联靠电视 / LCD 上显示的配对码，在电脑上输入：
+
+```
+设备联网 → POST /api/device/register {dev} → 拿到设备密钥 + 6 位配对码 → 电视和 LCD 显示配对码
+用户电脑 stickbox-agent pair 123456 → POST /api/agent/pair → 设备归属该 agent 的用户，设备收到「已配对」切到看板
+```
 
 **服务端**
-- 发码复用 `POST /api/auth/sms`（不鉴权、已有限流）
-- 新增 `POST /api/device/pair` `{phone, code, dev, name}`（不鉴权，短信验证码就是凭据）：
-  校验验证码 → 找到或新建用户（与 `/api/auth/verify` 同一套逻辑，抽公共函数）→ 走 enroll 的带 `dev` 路径
-  （已绑别人返回 409，自己的则吊销旧密钥后重签）→ 返回 `{token, user_id, phone_tail}`
-- 限流：同一 `dev` 与同一来源 IP 都要限，验证码错误次数沿用短信模块的锁定
-- agent 登录 403 文案改为「先在设备配网页里绑定」
-- 单测：新用户、老用户、抢绑 409、重绑吊销旧密钥、错码、限流
+- `POST /api/device/register {dev}`（不鉴权）：
+  - MAC 未注册：建设备记录，签发设备密钥，生成配对码，返回 `{token, code, expires_at}`
+  - MAC 已绑定（设备被擦了 NVS 重来）：**不吊销**旧密钥；新密钥处于「待配对」，只有原主人的 agent 输码配对才转正
+    （同时吊销旧密钥），其他人输码返回 409。否则知道 MAC 就能把别人的屏顶掉
+  - 按 dev 与来源 IP 限流
+- `POST /api/device/pair-code`（设备鉴权）：码过期后设备换新码
+- 配对码：6 位数字、10 分钟有效、一次性；`/api/agent/pair` 按来源 IP 限失败次数（如 10 分钟 10 次），
+  并有全局失败速率上限，防穷举
+- `POST /api/agent/pair {code, name}`：
+  - 不带令牌：新建一个无手机号的用户，设备归它，签发 agent 令牌，返回 `{token, dev}`
+  - 带 agent 令牌：设备并入该用户（一个 agent 管多台屏）
+- 配对成功后经 MQTT 通知设备（主题自定，ACL 只许设备读自己的），并立即补发一份最新用量
+- 解绑：`POST /api/agent/unpair {dev}`（agent 鉴权，只能解自己名下的）；解绑后设备回到出码状态
+- **删除**（没有 App、没有手机号，就没有使用者了）：短信模块与 `/api/auth/sms`、`/api/auth/verify`、
+  `/api/agent/login`、app 角色及其全部端点（`/api/devices`、enroll / unbind / 待认领密钥、`GET /api/usage`、
+  `GET /api/agents`、吊销端点）、`phone_*` 配置与用户表里的手机号字段；需要的查询改成 agent 鉴权
+  （`GET /api/agent/devices`、`GET /api/agent/usage`）
+- 单测：注册、出码、配对新用户、配对并入已有用户、过期码、一次性、穷举限流、已绑 MAC 重注册（原主人转正 / 他人 409）、
+  解绑、ACL；integration：注册 → 配对 → 设备经 MQTT 收到已配对和用量
 
-**固件**（`rom/main/provision.c` + 门户页面）
-- `/connect` 成功后页面进入绑定步骤：输入手机号 → 设备代发 `/api/auth/sms` → 输入验证码 → 设备代发 `/api/device/pair`
-  → 密钥写入 NVS（devkey）→ 页面显示「已绑定 尾号 XXXX」→ 关热点、正常启动
-- 已有有效密钥时只改 Wi-Fi，绑定步骤可跳过（页面给「换绑」入口）
-- 门户上新增的端点同样只在配网模式开放；手机号与验证码只在内存里转发，不落盘、不打日志
-- 页面要在没有外网的手机浏览器里能用（无外部 CSS/JS/字体）
+**固件**
+- 配网页只保留 Wi-Fi；门户里与 enroll 密钥相关的字段（`k`）删除
+- 联网后没有密钥就 register，密钥写 NVS；未配对时 LCD 与电视显示配对码和一句说明
+  （电视用 T3 的预置页即可，T4 再按设计稿做配对页），码过期自动换
+- 收到已配对后切到看板；收到解绑回到出码
 
-**验收**：服务端 `go test ./...` 全绿；上板用真手机走完：清配置 → 连热点 → 配 Wi-Fi → 收短信 → 绑定成功 →
-设备连上 MQTT 并在 `GET /api/devices` 出现；重配 Wi-Fi 不丢绑定。
+**验收**：`go test ./...` 全绿；上板：清配置 → 配 Wi-Fi → 电视和 LCD 出码 → 本机 `curl` 调 `/api/agent/pair` 配对 →
+设备切看板并收到用量；擦 NVS 重来时原主人能转正、换一个 agent 配对被拒。
 
 ## 已知风险
 
