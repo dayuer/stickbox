@@ -20,14 +20,20 @@ type UsageResender interface {
 	Resend(dev string)
 }
 
+// FrameResender 在设备订阅 printer/{dev}/frame 时补发当前帧版本。
+type FrameResender interface {
+	Resend(dev string)
+}
+
 type Hook struct {
 	mqtt.HookBase
 	v      *auth.Verifier
 	router Router
 	// ids 记录每个连接校验通过的身份，ACL 判定时直接取，不重复跑 argon2。
 	ids *idTable
-	// usage 为 nil 时不补发（测试里、或还没接上的时候）。
+	// usage / frame 为 nil 时不补发（测试里、或还没接上的时候）。
 	usage UsageResender
+	frame FrameResender
 }
 
 func (h *Hook) ID() string { return "stickbox-auth" }
@@ -78,28 +84,34 @@ func (h *Hook) OnACLCheck(cl *mqtt.Client, topic string, write bool) bool {
 	return auth.ACLAllowed(id, topic, write)
 }
 
-// OnSubscribed：设备订阅自己的 usage 主题时，补发一份最新用量。
+// OnSubscribed：设备订阅自己的 usage / frame 主题时，补发当前值。
 //
-// usage 不用 retain（payload 里的 now 会过期），所以设备重连后要靠这里
-// 才能立刻有数，否则得等到 agent 下一次上报（最长 10 分钟）。
+// 两者都不用 retain（用量里的 now 会过期、帧版本也会变），设备重连后
+// 要靠这里立刻拿到状态，否则得等下一次上报或重建。
 // 在 goroutine 里发：hook 回调里同步 Publish 会和 broker 内部的订阅流程抢锁。
 func (h *Hook) OnSubscribed(cl *mqtt.Client, pk packets.Packet, reasonCodes []byte) {
 	id, ok := h.ids.get(cl)
 	if !ok || id.Role != auth.RoleDevice {
 		return
 	}
-	// 待配对密钥只能收 retained 的 pair；ACL 已经拒绝它订阅 usage，
-	// 这里再挡一层，避免将来 ACL 回归时把用量补发出去。
+	// 待配对密钥只能收 retained 的 pair；ACL 已经拒绝它订阅 usage/frame，
+	// 这里再挡一层，避免将来 ACL 回归时把数据补发出去。
 	if id.Pending {
 		return
 	}
-	want := "printer/" + id.Dev + "/usage"
 	for i, f := range pk.Filters {
-		if f.Filter != want || i >= len(reasonCodes) || reasonCodes[i] >= 0x80 {
+		if i >= len(reasonCodes) || reasonCodes[i] >= 0x80 {
 			continue
 		}
-		if h.usage != nil {
-			go h.usage.Resend(id.Dev)
+		switch f.Filter {
+		case "printer/" + id.Dev + "/usage":
+			if h.usage != nil {
+				go h.usage.Resend(id.Dev)
+			}
+		case "printer/" + id.Dev + "/frame":
+			if h.frame != nil {
+				go h.frame.Resend(id.Dev)
+			}
 		}
 	}
 }

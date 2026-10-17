@@ -14,6 +14,7 @@ import (
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/config"
+	"github.com/dayuer/stickbox/server/go/internal/frames"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
 	"github.com/dayuer/stickbox/server/go/internal/store"
 	"github.com/dayuer/stickbox/server/go/internal/usage"
@@ -33,6 +34,8 @@ type API struct {
 	reg   *registry.Registry
 	pub   Publisher
 	usage *usage.Service
+	// frames 在 main 里构造后注入；测试里可以为 nil。
+	frames *frames.Service
 
 	// 内存限流：注册、换配对码、配对失败。
 	regDev        *rateLimiter
@@ -59,12 +62,16 @@ func New(cfg *config.Config, st *store.Store, v *auth.Verifier,
 // Usage 暴露用量服务，main 拿它接到 broker 上（设备订阅时补发）。
 func (a *API) Usage() *usage.Service { return a.usage }
 
+// SetFrames 注入帧服务。构造 API 时还没有渲染器，所以用 setter。
+func (a *API) SetFrames(f *frames.Service) { a.frames = f }
+
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// 设备注册不鉴权：设备还没有密钥，这正是它来领密钥的入口。
 	mux.HandleFunc("POST /api/device/register", a.handleDeviceRegister)
 	mux.Handle("POST /api/device/pair-code", a.requireDevice(a.handleDevicePairCode))
+	mux.Handle("GET /api/device/frame", a.requireDevice(a.handleDeviceFrame))
 
 	// agent：pair 可选令牌（新用户不带，已有用户带着把新屏并入）。
 	mux.HandleFunc("POST /api/agent/pair", a.handleAgentPair)

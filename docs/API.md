@@ -70,6 +70,7 @@ agent 不能连 MQTT；设备不能调 agent 的 HTTP 端点。
 |---|---|---|---|
 | POST | `/api/device/register` | 无 | 设备注册，领 device 令牌和配对码 |
 | POST | `/api/device/pair-code` | device | 配对码过期后换一个新码 |
+| GET | `/api/device/frame` | device | 取当前帧包（ETag/304） |
 | POST | `/api/agent/pair` | 可选 agent | 输码配对；新用户或并入已有用户 |
 | POST | `/api/agent/unpair` | agent | 解绑自己名下的屏 |
 | GET | `/api/agent/devices` | agent | 列出名下设备与在线状态 |
@@ -153,7 +154,28 @@ device 鉴权。电视/LCD 上的码过期后，用当前待配对密钥换一�
 - 错误：`400 bad dev`、`400 bad request`、`409 already paired`、
   `429 rate limited`、`500 server error`。
 
-### 2.3 MQTT 连接
+### 2.3 `GET /api/device/frame`
+
+device 鉴权，且密钥必须已配对（pending 密钥返回 `403`）。
+
+成功 `200`，`Content-Type: application/octet-stream`，body 是帧包：
+
+```
+"SBF1" | baseLen uint32 | atlasLen uint32 | metaLen uint32 | base | atlas | meta
+```
+
+三个长度都是大端。`base` / `atlas` 是 `FRAME.md` 约定的 DRI=8 JPEG 底帧与
+字形图集；`meta` 是 `FRAME.md` 的 JSON 索引。
+
+- `ETag` 是帧版本号（形如 `"7"`），同时返回 `X-Frame-Version`。
+- 带 `If-None-Match` 且版本没变时返回 `304`，无 body。
+- 还没出过帧时返回 `404 frame not ready`，带 `Retry-After: 30`。
+- 未配对返回 `403 forbidden`。
+
+帧版本变化时服务端往 MQTT `printer/{dev}/frame` 发 `{"ver":N}`（QoS 1，
+不 retain）。设备重连订阅该主题时服务端补发当前版本。
+
+### 2.4 MQTT 连接
 
 ```
 mqtts://mqtt.stickbox.ai:8883
@@ -182,6 +204,7 @@ mqtts://mqtt.stickbox.ai:8883
 
 - `printer/{dev}/usage`（QoS 1）
 - `printer/{dev}/pair`（QoS 1）
+- `printer/{dev}/frame`（QoS 1；payload `{"ver":N}`，收到后 GET `/api/device/frame`）
 
 并每 30 秒发布一次心跳：
 

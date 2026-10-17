@@ -123,6 +123,15 @@ func (b *Broker) KickDevice(dev string) {
 	}
 }
 
+// PublishFrame 通知设备有新帧。retain=0：版本是现场值，
+// 设备重连时由 OnSubscribed 补发当前版本（见 frames.Service.Resend）。
+func (b *Broker) PublishFrame(dev string, payload []byte) error {
+	return b.srv.Publish(fmt.Sprintf("printer/%s/frame", dev), payload, false, 1)
+}
+
 // SetUsageResender 接上「设备订阅 usage 时补发」的回调。
 // 用 setter 而不是构造参数：usage.Service 要用 broker 发消息，构造时还没有 broker。
 func (b *Broker) SetUsageResender(r UsageResender) { b.hook.usage = r }
+
+// SetFrameResender 接上「设备订阅 frame 时补发版本」的回调。
+func (b *Broker) SetFrameResender(r FrameResender) { b.hook.frame = r }

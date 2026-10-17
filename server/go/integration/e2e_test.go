@@ -1,9 +1,13 @@
 package integration
 
 import (
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
+
+	"github.com/dayuer/stickbox/server/go/internal/frame"
 )
 
 type deviceUsage struct {
@@ -225,6 +229,7 @@ func TestEndToEndACLBlocksCrossDevice(t *testing.T) {
 	for _, topic := range []string{
 		"printer/aabbccddeeff/usage",
 		"printer/aabbccddeeff/pair",
+		"printer/aabbccddeeff/frame",
 	} {
 		if err := dev.subscribe(topic); err == nil {
 			t.Errorf("设备订阅了 %s——ACL 没生效", topic)
@@ -327,5 +332,63 @@ func TestEndToEndPairKicksLegacyDevice(t *testing.T) {
 	got := parseUsage(t, legacy.waitUsage(5*time.Second))
 	if got.FiveHour == nil || got.FiveHour.UsedPercentage != 23 {
 		t.Errorf("旧固件收到 = %+v", got.FiveHour)
+	}
+}
+
+// 帧分发全链路：配对出帧 → 设备订阅收到版本 → 上报用量后版本前进 →
+// GET 拿到帧包（meta 可解析） → ETag/304 → 重连订阅补发当前版本。
+func TestEndToEndFrameDistribution(t *testing.T) {
+	e := startServer(t)
+	devKey, code := e.register("f412fa87c9e0")
+	agentTok, _, _ := e.pair(code, "")
+
+	dev := e.connectDevice("f412fa87c9e0", devKey)
+	if err := dev.subscribeFrame(); err != nil {
+		t.Fatalf("订阅 frame = %v", err)
+	}
+	ver1 := dev.waitFrameVer(10 * time.Second)
+
+	e.reportUsage(agentTok, usageReport(time.Now(), 21.5))
+	ver2 := dev.waitFrameVer(10 * time.Second)
+	if ver2 <= ver1 {
+		t.Fatalf("上报用量后版本没有前进：%d → %d", ver1, ver2)
+	}
+
+	st, body, etag := e.getFrame(devKey, "")
+	if st != 200 {
+		t.Fatalf("GET frame = %d %s", st, body)
+	}
+	if want := fmt.Sprintf(`"%d"`, ver2); etag != want {
+		t.Errorf("ETag = %q，期望 %q", etag, want)
+	}
+	if len(body) < 16 || string(body[:4]) != "SBF1" {
+		t.Fatalf("帧包头部不对：%d 字节，%.4s", len(body), body)
+	}
+	bl := int(binary.BigEndian.Uint32(body[4:8]))
+	al := int(binary.BigEndian.Uint32(body[8:12]))
+	if 16+bl+al > len(body) {
+		t.Fatalf("帧包长度非法：base=%d atlas=%d total=%d", bl, al, len(body))
+	}
+	meta, err := frame.ParseMeta(body[16+bl+al:])
+	if err != nil {
+		t.Fatalf("ParseMeta: %v", err)
+	}
+	if meta.V != frame.Version || meta.Band.MaxBandBytes == 0 {
+		t.Errorf("meta = v%d max_band=%d", meta.V, meta.Band.MaxBandBytes)
+	}
+
+	st, body304, _ := e.getFrame(devKey, etag)
+	if st != 304 || len(body304) != 0 {
+		t.Errorf("If-None-Match = %d，body %d 字节", st, len(body304))
+	}
+
+	// 重连后订阅 frame，应补发当前版本（不依赖重新上报）。
+	dev.disconnect()
+	dev2 := e.connectDevice("f412fa87c9e0", devKey)
+	if err := dev2.subscribeFrame(); err != nil {
+		t.Fatalf("重连订阅 frame = %v", err)
+	}
+	if got := dev2.waitFrameVer(10 * time.Second); got != ver2 {
+		t.Errorf("重连补发版本 = %d，期望 %d", got, ver2)
 	}
 }

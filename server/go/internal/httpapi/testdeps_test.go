@@ -45,6 +45,7 @@ type testDeps struct {
 	v     *auth.Verifier
 	cfg   *config.Config
 	pub   *recPub
+	api   *API // 用于在 New 之后注入帧服务
 }
 
 func newTestAPI(t *testing.T) (http.Handler, *testDeps) {
@@ -62,7 +63,8 @@ func newTestAPI(t *testing.T) (http.Handler, *testDeps) {
 	dep.reg = reg
 	dep.v = auth.NewVerifier(st)
 	dep.cfg = &config.Config{Root: dir}
-	return New(dep.cfg, st, dep.v, reg, dep.pub).Handler(), dep
+	dep.api = New(dep.cfg, st, dep.v, reg, dep.pub)
+	return dep.api.Handler(), dep
 }
 
 // —— 请求辅助 ——

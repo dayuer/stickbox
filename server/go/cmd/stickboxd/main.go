@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -14,8 +15,10 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/broker"
 	"github.com/dayuer/stickbox/server/go/internal/config"
+	"github.com/dayuer/stickbox/server/go/internal/frames"
 	"github.com/dayuer/stickbox/server/go/internal/httpapi"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
+	"github.com/dayuer/stickbox/server/go/internal/render"
 	"github.com/dayuer/stickbox/server/go/internal/store"
 	"github.com/dayuer/stickbox/server/go/internal/tlsx"
 	"github.com/dayuer/stickbox/server/go/internal/version"
@@ -76,6 +79,21 @@ func serve(cfg *config.Config) error {
 	// 设备订阅 usage 时补发最新一份；usage.Service 要用 broker 发消息，
 	// 所以只能在两边都构造完之后接上。
 	br.SetUsageResender(api.Usage())
+
+	// 帧服务：渲染器加载内嵌字体；帧包落盘到 root/frames，重启直接加载。
+	rr, err := render.New()
+	if err != nil {
+		return fmt.Errorf("初始化渲染器：%w", err)
+	}
+	fs, err := frames.New(cfg.Root, st, api.Usage(), br, frames.RenderBuilder{R: rr}, time.Now)
+	if err != nil {
+		return fmt.Errorf("初始化帧服务：%w", err)
+	}
+	api.SetFrames(fs)
+	br.SetFrameResender(fs)
+	dailyCtx, dailyStop := context.WithCancel(context.Background())
+	defer dailyStop()
+	go fs.RunDaily(dailyCtx)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,

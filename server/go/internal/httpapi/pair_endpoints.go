@@ -148,6 +148,8 @@ func (a *API) handleAgentPair(w http.ResponseWriter, r *http.Request) {
 	a.pub.KickDevice(pc.Dev)
 	// 配对成功立即补发最新用量；设备这时才第一次拿到主人的数据。
 	a.usage.Resend(pc.Dev)
+	// 新屏可能马上就要取帧：立刻出一份（没有用量就是「等待上报」帧）。
+	a.rebuildFrames(userID)
 
 	writeJSON(w, 200, map[string]any{
 		"dev": pc.Dev, "user_id": userID, "token": newToken,
@@ -189,6 +191,8 @@ func (a *API) handleAgentUnpair(w http.ResponseWriter, r *http.Request, id auth.
 		time.Sleep(300 * time.Millisecond)
 		a.pub.KickDevice(dev)
 	}(in.Dev)
+	// 名下设备变了：重渲染并通知剩下的屏（版本加一）。
+	a.rebuildFrames(id.UserID)
 	writeJSON(w, 200, map[string]int{"ok": 1})
 }
 

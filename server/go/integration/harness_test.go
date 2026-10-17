@@ -25,8 +25,10 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/broker"
 	"github.com/dayuer/stickbox/server/go/internal/config"
+	"github.com/dayuer/stickbox/server/go/internal/frames"
 	"github.com/dayuer/stickbox/server/go/internal/httpapi"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
+	"github.com/dayuer/stickbox/server/go/internal/render"
 	"github.com/dayuer/stickbox/server/go/internal/store"
 	"github.com/dayuer/stickbox/server/go/internal/tlsx"
 )
@@ -77,6 +79,17 @@ func startServer(t *testing.T) *env {
 
 	api := httpapi.New(cfg, st, v, reg, br)
 	br.SetUsageResender(api.Usage())
+	rr, err := render.New()
+	if err != nil {
+		t.Fatalf("初始化渲染器：%v", err)
+	}
+	fs, err := frames.New(cfg.Root, st, api.Usage(), br, frames.RenderBuilder{R: rr}, time.Now)
+	if err != nil {
+		t.Fatalf("初始化帧服务：%v", err)
+	}
+	api.SetFrames(fs)
+	br.SetFrameResender(fs)
+
 	ln, err := tls.Listen("tcp", freeAddr(t), reloader.Config())
 	if err != nil {
 		t.Fatal(err)
@@ -133,6 +146,12 @@ func writeSelfSigned(t *testing.T, dir string) {
 
 func (e *env) req(method, path, body string, hdr map[string]string) (int, []byte) {
 	e.t.Helper()
+	st, b, _ := e.reqHeaders(method, path, body, hdr)
+	return st, b
+}
+
+func (e *env) reqHeaders(method, path, body string, hdr map[string]string) (int, []byte, http.Header) {
+	e.t.Helper()
 	var r io.Reader
 	if body != "" {
 		r = strings.NewReader(body)
@@ -150,7 +169,7 @@ func (e *env) req(method, path, body string, hdr map[string]string) (int, []byte
 	}
 	defer resp.Body.Close()
 	out, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, out
+	return resp.StatusCode, out, resp.Header
 }
 
 func (e *env) register(dev string) (token, code string) {
@@ -203,6 +222,16 @@ func (e *env) reportUsage(agentToken string, body []byte) {
 	}
 }
 
+func (e *env) getFrame(devKey, ifNoneMatch string) (int, []byte, string) {
+	e.t.Helper()
+	hdr := map[string]string{"Authorization": "Bearer " + devKey}
+	if ifNoneMatch != "" {
+		hdr["If-None-Match"] = ifNoneMatch
+	}
+	st, b, h := e.reqHeaders("GET", "/api/device/frame", "", hdr)
+	return st, b, h.Get("ETag")
+}
+
 func (e *env) unpair(agentToken, dev string) {
 	e.t.Helper()
 	st, b := e.req("POST", "/api/agent/unpair", `{"dev":"`+dev+`"}`,
@@ -221,6 +250,7 @@ type fakeDevice struct {
 	dev   string
 	usage chan []byte
 	pair  chan []byte
+	frame chan []byte
 }
 
 func (e *env) connectDevice(dev, key string) *fakeDevice {
@@ -243,7 +273,8 @@ func (e *env) tryConnectDevice(dev, key string) (*fakeDevice, error) {
 		SetAutoReconnect(false)
 
 	fd := &fakeDevice{t: e.t, dev: dev,
-		usage: make(chan []byte, 8), pair: make(chan []byte, 8)}
+		usage: make(chan []byte, 8), pair: make(chan []byte, 8),
+		frame: make(chan []byte, 8)}
 	opts.SetDefaultPublishHandler(func(_ paho.Client, m paho.Message) {
 		payload := append([]byte(nil), m.Payload()...)
 		switch {
@@ -255,6 +286,11 @@ func (e *env) tryConnectDevice(dev, key string) (*fakeDevice, error) {
 		case strings.HasSuffix(m.Topic(), "/pair"):
 			select {
 			case fd.pair <- payload:
+			default:
+			}
+		case strings.HasSuffix(m.Topic(), "/frame"):
+			select {
+			case fd.frame <- payload:
 			default:
 			}
 		}
@@ -371,6 +407,9 @@ func (d *fakeDevice) subscribeUsage() error {
 func (d *fakeDevice) subscribePair() error {
 	return d.subscribe("printer/" + d.dev + "/pair")
 }
+func (d *fakeDevice) subscribeFrame() error {
+	return d.subscribe("printer/" + d.dev + "/frame")
+}
 
 func (d *fakeDevice) heartbeat() {
 	d.t.Helper()
@@ -402,5 +441,22 @@ func (d *fakeDevice) waitPair(timeout time.Duration) []byte {
 	case <-time.After(timeout):
 		d.t.Fatal("没有收到配对通知")
 		return nil
+	}
+}
+
+func (d *fakeDevice) waitFrameVer(timeout time.Duration) uint64 {
+	d.t.Helper()
+	select {
+	case b := <-d.frame:
+		var p struct {
+			Ver uint64 `json:"ver"`
+		}
+		if err := json.Unmarshal(b, &p); err != nil || p.Ver == 0 {
+			d.t.Fatalf("帧版本通知 = %s", b)
+		}
+		return p.Ver
+	case <-time.After(timeout):
+		d.t.Fatal("没有收到帧版本通知")
+		return 0
 	}
 }

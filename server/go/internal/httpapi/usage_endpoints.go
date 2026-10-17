@@ -27,6 +27,8 @@ func (a *API) handleUsagePost(w http.ResponseWriter, r *http.Request, id auth.Id
 		return
 	}
 	a.store.TouchKey(id.KeyID) // status 里显示「这台电脑最后一次上报」
+	// 用量变了就重渲染；失败只记日志，上报本身仍算成功。
+	a.rebuildFrames(id.UserID)
 	writeJSON(w, 200, map[string]any{"ok": 1, "devices": n})
 }
 
