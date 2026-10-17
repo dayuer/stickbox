@@ -91,6 +91,50 @@ bool fp_parse_meta(const char *json, size_t len, fp_index_t *ix);
 bool fp_index_valid(const fp_index_t *ix, size_t base_len, size_t atlas_len,
                     size_t band_cap, const char **why);
 
+/* ---- 设备侧：帧包的存取（依赖 ESP-IDF）---- */
+
+/* 找 frames 分区、扫槽、挑 seq 最大的有效槽并激活。
+ * 分区不存在（旧分区表）或没有有效槽时返回 false——调用方退回预置页。 */
+bool framepack_init(void);
+
+/* 当前激活的帧包。没有激活帧时返回 false。
+ * base/atlas 是 flash 映射地址，只读，生命周期跟着激活帧走。 */
+bool framepack_active(const fp_index_t **ix,
+                      const uint8_t **base, size_t *base_len,
+                      const uint8_t **atlas, size_t *atlas_len);
+
+/* 当前激活帧包的版本串（T13c 的 ver）。没有则返回空串。
+ * 收到 frame 通知时拿它比对，一样就不用重新拉。 */
+const char *framepack_version(void);
+
+/* ---- 流式写入 ----
+ *
+ * 帧包约 218KB 而设备稳态空闲堆才 140KB，**装不下**。所以必须边收边写，
+ * 不能先收进内存再落盘。 */
+typedef struct {
+    const void *part;      /* const esp_partition_t * */
+    int      slot;         /* 正在写第几个槽 */
+    uint32_t seq;          /* 这一帧的序号 */
+    uint32_t pack_len;     /* 声明的帧包长度 */
+    uint32_t written;      /* 已写入字节 */
+    uint32_t crc;          /* 增量 CRC32 */
+    bool     ok;           /* 中途出过错就一直是 false */
+    char     ver[32];      /* 这一帧的版本串 */
+} fp_writer_t;
+
+/* 开始写一帧。pack_len 必须 ≤ FP_MAX_PACK；会擦掉目标槽。 */
+bool fp_write_begin(fp_writer_t *w, uint32_t pack_len, const char *ver);
+
+/* 写一段。返回 false 表示这一帧已经废了，调用方应当 abort。 */
+bool fp_write_chunk(fp_writer_t *w, const void *data, size_t n);
+
+/* 收尾：校验长度、解析并校验 meta、最后写槽头部并激活。
+ * 任何一步不过就整帧丢弃，当前激活帧不受影响。 */
+bool fp_write_finish(fp_writer_t *w);
+
+/* 放弃这一帧。当前激活帧不受影响。 */
+void fp_write_abort(fp_writer_t *w);
+
 /* 拼接后各行段在输出缓冲里的偏移，和 fp_build_band 的写入顺序一致。
  * 推流时要用它把行段和底帧的连接段交替发出去。 */
 void fp_band_layout(const fp_index_t *ix, uint32_t out_off[FP_BAND_ROWS],
