@@ -15,6 +15,7 @@ cc $CC_ARGS -o packtest packtest.c ../../main/framepack_band.c ../../main/framep
 # 状态页走设备上真正跑的那条路：同一份掩码、同一个 jb_encode_rows、
 # 同一个着色器。esp_log.h 用 hoststub 里的桩顶掉。
 cc -I../../main -Ihoststub -O1 -Wall -o pagetest pagetest.c ../../main/jband.c ../../main/statusmask.c
+cc -I../../main -Ihoststub -O1 -Wall -o pairtest pairtest.c ../../main/pairband.c ../../main/jband.c ../../main/statusmask.c
 
 # 帧包和黄金帧都由 server/go/cmd/packgen 现生成，不依赖任何别人的 worktree
 # ——那些目录会被收敛掉，测试不该因此失效。
@@ -42,4 +43,7 @@ mkdir -p /tmp/pages
 for f in /tmp/pages/page-*.jpg; do
     djpeg -outfile /dev/null "$f" 2>/dev/null || { echo "✗ $f 解码失败"; exit 1; }
 done
-echo "   五张都通过 djpeg 解码"
+echo "   六张都通过 djpeg 解码"
+
+echo "== 5. 配对页最坏码 + 提示文字 =="
+./pairtest ../../main/assets/blank.jpg

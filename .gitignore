@@ -18,5 +18,7 @@ docs/design/preview/
 rom/build-m0a/
 rom/build-m0b/
 rom/build-diag/
+rom/build-rel/
+rom/build-v095/
 "rom/ build-m0a/"
 "rom/ build-m0b/"

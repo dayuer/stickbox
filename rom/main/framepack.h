@@ -107,6 +107,10 @@ bool framepack_active(const fp_index_t **ix,
  * 收到 frame 通知时拿它比对，一样就不用重新拉。 */
 const char *framepack_version(void);
 
+/* 作废所有帧槽并切回预置页。解绑/重新注册时调用：否则新主人会先用
+ * flash 里上一个主人的帧起播。 */
+void framepack_invalidate(void);
+
 /* ---- 流式写入 ----
  *
  * 帧包约 218KB 而设备稳态空闲堆才 140KB，**装不下**。所以必须边收边写，

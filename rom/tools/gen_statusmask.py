@@ -20,18 +20,20 @@ FONT = "/System/Library/Fonts/STHeiti Medium.ttc"
 SIZE = 64          # 1080p 上够看清，且掩码不至于太大
 BAND_H = 96        # MCU 行 46..51 = 96 像素
 
-# 名字 → 文案。名字会变成 C 里的枚举值。
+# 名字 → (文案, 字号)。名字会变成 C 里的枚举值。
+# 配对提示要和 6 位七段数字同屏：16px 高、单行，放在数字上方。
 TEXTS = [
-    ("CONNECTING", "正在连接…"),
-    ("FETCHING",   "正在获取数据"),
-    ("OFFLINE",    "网络已断开"),
-    ("WAIT_PAIR",  "等待配对"),
-    ("NO_SERVER",  "连不上服务器"),
+    ("CONNECTING", "正在连接…", 64),
+    ("FETCHING",   "正在获取数据", 64),
+    ("OFFLINE",    "网络已断开", 64),
+    ("WAIT_PAIR",  "等待配对", 64),
+    ("NO_SERVER",  "连不上服务器", 64),
+    ("PAIR_HINT",  "运行 stickbox-agent pair", 16),
 ]
 
 
-def render(text):
-    font = ImageFont.truetype(FONT, SIZE)
+def render(text, size):
+    font = ImageFont.truetype(FONT, size)
     # 先量尺寸，再按实际大小画，省得掩码里全是空白。
     probe = ImageDraw.Draw(Image.new("L", (1, 1)))
     l, t, r, b = probe.textbbox((0, 0), text, font=font)
@@ -61,8 +63,8 @@ def main():
         "",
     ]
     table = []
-    for name, text in TEXTS:
-        img, w, h = render(text)
+    for name, text, size in TEXTS:
+        img, w, h = render(text, size)
         if h > BAND_H:
             sys.exit(f"{name}: 渲染高度 {h} 超过条带的 {BAND_H} 像素")
         data, stride = pack(img, w, h)

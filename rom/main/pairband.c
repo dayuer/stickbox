@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "statusmask.h"
 #include "stream.h"
 
 static const char *TAG = "pairband";
@@ -14,19 +15,28 @@ static const char *TAG = "pairband";
 /* 56px 高、36px 宽：1080p 上够看清，且最坏码 888888 编码约 10.3KB，
  * 在 12KB 缓冲内。80px 的旧版面 888888 会超 12KB，随机码里迟早会撞上。 */
 #define X0   822
-#define Y0   752
+/* 6 位数字放在条带下半部，上方留一行 32px 提示文字。 */
+#define Y0   774
 #define W     36
 #define H     56
 #define T      7
 #define GAP   12
 #define NDIG   6
+/* 提示文字：与数字同屏，说明这串码用来干什么。 */
+#define HINT_Y0 (PAIR_ROW0 * 16)
 /* 必须和底图背景一致。原来是 0x1E3A8A（旧 page1 的蓝色背景），换成纯色
  * 底图之后忘了改，电视上就多了一道蓝带——这个现象实际报上来过。 */
 #define BG   0x1D2D3D
 #define FG   0xFFFFFF
 
+/* 生成器里 "运行 stickbox-agent pair" 是 185×15；改文案后要
+ * 同步这里（gen_statusmask.py 会打印新尺寸）。 */
+#define HINT_W 185
+#define HINT_X0 ((1920 - HINT_W) / 2)
+
 const jb_box_t PAIRBAND_BOX = {
-    X0, Y0, X0 + NDIG * W + (NDIG - 1) * GAP, Y0 + H
+    HINT_X0, HINT_Y0,
+    HINT_X0 + HINT_W, Y0 + H
 };
 
 /*  段位：A 上 B 右上 C 右下 D 下 E 左下 F 左上 G 中 */
@@ -55,6 +65,14 @@ static bool digit(unsigned char s, int x, int y)
 
 static bool pair_shade(int x, int y, void *ctx)
 {
+    /* 提示文字：查生成好的 1-bit 掩码。 */
+    const status_mask_t *hint = &STATUS_MASKS[STATUS_PAIR_HINT];
+    int hx = x - HINT_X0, hy = y - HINT_Y0;
+    if (hx >= 0 && hy >= 0 && hx < hint->w && hy < hint->h) {
+        return (hint->bits[hy * hint->stride + (hx >> 3)] >> (7 - (hx & 7))) & 1;
+    }
+
+    /* 6 位七段数字。 */
     if (x < X0 || y < Y0 || y >= Y0 + H) return false;
     const char *code = ctx;
     int i = (x - X0) / (W + GAP);

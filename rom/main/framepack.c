@@ -198,6 +198,35 @@ bool framepack_active(const fp_index_t **ix,
 
 const char *framepack_version(void) { return s_active ? s_ver : ""; }
 
+void framepack_invalidate(void)
+{
+    if (!s_part) {
+        s_active = false;
+        s_ver[0] = 0;
+        return;
+    }
+    /* 先让推流松手，再 munmap，最后擦槽头。
+     * 擦除期间 flash 映射不可用，顺序反了推流任务会读到失效地址。 */
+    stream_use_presets();
+    if (s_mapped) {
+        esp_partition_munmap(s_map);
+        s_mapped = false;
+    }
+    s_active = false;
+    s_seq = 0;
+    s_ver[0] = 0;
+
+    /* 只擦每个槽的第一个扇区（含 magic+header），整槽擦除没必要还费寿命。 */
+    for (int i = 0; i < FP_SLOT_COUNT; i++) {
+        const size_t off = (size_t)i * FP_SLOT_SIZE;
+        esp_err_t err = esp_partition_erase_range(s_part, off, 4096);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "作废槽 %d 失败：%s", i, esp_err_to_name(err));
+        }
+    }
+    ESP_LOGI(TAG, "frames 槽已作废，切回预置页");
+}
+
 /* ------------------------------------------------------------ 流式写入 */
 
 bool fp_write_begin(fp_writer_t *w, uint32_t pack_len, const char *ver)

@@ -10,6 +10,8 @@ typedef enum {
     STATUS_OFFLINE,      /* 网络已断开 */
     STATUS_WAIT_PAIR,    /* 等待配对 */
     STATUS_NO_SERVER,    /* 连不上服务器 */
+    /* 配对提示（32px），和 6 位数字同屏；不单独作为状态页。 */
+    STATUS_PAIR_HINT,    /* 在电脑上运行 stickbox-agent pair */
     STATUS_COUNT
 } status_id_t;
 

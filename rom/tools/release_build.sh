@@ -13,6 +13,9 @@ KEY="${2:?用法: release_build.sh <tag> <ota_key.pem>}"
 
 cd "$(dirname "$0")/.."   # rom/
 
+# 编译前静态检查：MQTT 重连绝不能再用 esp_mqtt_set_config（会清空 TLS 配置）。
+python3 tools/check_mqtt_config.py
+
 if [ ! -f sdkconfig.release ]; then
     echo "rom/sdkconfig.release 不存在：T9/M0 尚未合并，发布构建无法开启 OTA 签名" >&2
     exit 1

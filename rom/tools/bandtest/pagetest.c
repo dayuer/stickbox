@@ -17,6 +17,7 @@
 #include "jband.h"
 #include "pairband.h"
 #include "statusmask.h"
+#include "stream.h"
 
 #define BG 0x1D2D3D
 #define FG 0xF5F5F8
@@ -50,7 +51,7 @@ static unsigned char *slurp(const char *p, size_t *n)
 }
 
 static const char *NAMES[STATUS_COUNT] = {
-    "connecting", "fetching", "offline", "wait_pair", "no_server",
+    "connecting", "fetching", "offline", "wait_pair", "no_server", "pair_hint",
 };
 
 int main(int argc, char **argv)
@@ -80,9 +81,9 @@ int main(int argc, char **argv)
 
         const jb_box_t box = { s_x0, s_y0, s_x0 + m->w, s_y0 + m->h };
         size_t n = jb_encode_rows(&page, PAIR_ROW0, PAIR_ROW0 + PAIR_ROWS,
-                                  BG, FG, shade, NULL, &box, band, 16 * 1024);
+                                  BG, FG, shade, NULL, &box, band, BAND_CAP);
         if (!n) {
-            printf("✗ %-11s 编码失败（超出 16KB 缓冲？）\n", NAMES[id]);
+            printf("✗ %-11s 编码失败（BAND_CAP 不够？）\n", NAMES[id]);
             fails++;
             continue;
         }

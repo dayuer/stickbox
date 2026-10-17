@@ -63,7 +63,14 @@ typedef enum {
  * 各自 fp_write_begin() 到同一个槽上，把帧包写成两份交错的字节。 */
 static volatile bool s_fetching;
 static volatile bool s_again;      /* 取帧期间又收到通知 */
+/* 取帧期间收到的通知版本。同一版本只算一次；收完再和已激活版本比对，
+ * 相同就丢掉——避免开机时“取帧 + 两条 v9 通知”叠成三次 TLS。 */
+static char    s_again_ver[32];
+/* 当前这轮取帧的目标版本（通知触发时已知；开机/配对触发时为空）。 */
+static char    s_target_ver[32];
+static portMUX_TYPE s_ver_mux = portMUX_INITIALIZER_UNLOCKED;
 static int     s_retry_s = RETRY_MIN_S;
+static void    clear_target(void);
 static int64_t s_next_try_us;      /* 0 = 不用重试 */
 static int     s_last_min = -1;    /* 已发布时钟带对应的 HH*60+MM */
 static bool    s_offline_shown;
@@ -340,25 +347,71 @@ static void fetch_task(void *arg)
         break;
     }
 
+    clear_target();
+    /* 取帧期间收到过通知：只有通知的版本和刚激活的版本不同才补拉。
+     * 开机时服务端常在同一次取帧里发两条同版本通知；不比版本就会白开
+     * 第二次 TLS（历史最低堆 14KB 的主要来源之一）。 */
+    if (__atomic_exchange_n(&s_again, false, __ATOMIC_ACQUIRE)) {
+        if (strcmp(s_again_ver, framepack_version()) != 0) {
+            s_next_try_us = esp_timer_get_time();
+        } else {
+            ESP_LOGI(TAG, "取帧期间的通知版本 %s 已激活，不再补拉", s_again_ver);
+        }
+    }
     __atomic_clear(&s_fetching, __ATOMIC_SEQ_CST);
-    /* 这一轮进行当中又来了通知：排一次马上重试。条件请求命中就是一次 304，
-     * 不命中正好把那条通知兑现——比丢掉它、等下一次版本变化强。 */
-    if (__atomic_exchange_n(&s_again, false, __ATOMIC_SEQ_CST))
-        s_next_try_us = esp_timer_get_time();
     vTaskDelete(NULL);
 }
 
-void framefetch_request(const char *why)
+static void set_target(const char *ver)
 {
-    if (__atomic_test_and_set(&s_fetching, __ATOMIC_SEQ_CST)) return;
+    taskENTER_CRITICAL(&s_ver_mux);
+    strlcpy(s_target_ver, ver ? ver : "", sizeof s_target_ver);
+    taskEXIT_CRITICAL(&s_ver_mux);
+}
+
+static bool target_is(const char *ver)
+{
+    bool same;
+    taskENTER_CRITICAL(&s_ver_mux);
+    same = s_target_ver[0] && strcmp(s_target_ver, ver) == 0;
+    taskEXIT_CRITICAL(&s_ver_mux);
+    return same;
+}
+
+static void clear_target(void)
+{
+    taskENTER_CRITICAL(&s_ver_mux);
+    s_target_ver[0] = 0;
+    taskEXIT_CRITICAL(&s_ver_mux);
+}
+
+static void request_with_version(const char *why, const char *ver)
+{
+    if (__atomic_test_and_set(&s_fetching, __ATOMIC_SEQ_CST)) {
+        /* 已经有任务在跑：只记下最新通知，收完再判断要不要补一次。 */
+        if (ver && ver[0]) {
+            strlcpy(s_again_ver, ver, sizeof s_again_ver);
+            __atomic_store_n(&s_again, true, __ATOMIC_RELEASE);
+            ESP_LOGI(TAG, "正在取帧，记下版本 %s 待比对", ver);
+        }
+        return;
+    }
+    set_target(ver);
     /* 8192：一次 TLS 握手，4096 太紧（ota.c 同款）。只在取帧期间占用。 */
     if (xTaskCreate(fetch_task, "framefetch", 8192, NULL, 3, NULL) != pdPASS) {
+        clear_target();
         __atomic_clear(&s_fetching, __ATOMIC_SEQ_CST);
         /* 堆不够建任务。不打日志里的字符串拼接，留给下一轮退避重试。 */
         s_next_try_us = esp_timer_get_time() + (int64_t)RETRY_MIN_S * 1000000;
         return;
     }
-    ESP_LOGI(TAG, "开始取帧：%s", why ? why : "");
+    ESP_LOGI(TAG, "开始取帧：%s%s%s", why ? why : "",
+             (ver && ver[0]) ? "，版本 " : "", (ver && ver[0]) ? ver : "");
+}
+
+void framefetch_request(const char *why)
+{
+    request_with_version(why, NULL);
 }
 
 void framefetch_notify(const char *ver)
@@ -368,12 +421,17 @@ void framefetch_notify(const char *ver)
         ESP_LOGI(TAG, "通知的版本 %s 就是手里这张，不重拉", ver);
         return;
     }
-    if (s_fetching) {
-        __atomic_store_n(&s_again, true, __ATOMIC_SEQ_CST);
-        ESP_LOGI(TAG, "正在取上一版，收完再拉一次（版本 %s）", ver);
+    if (target_is(ver)) {
+        ESP_LOGI(TAG, "正在取的就是版本 %s，忽略重复通知", ver);
         return;
     }
-    framefetch_request("收到帧版本通知");
+    if (s_fetching) {
+        strlcpy(s_again_ver, ver, sizeof s_again_ver);
+        __atomic_store_n(&s_again, true, __ATOMIC_RELEASE);
+        ESP_LOGI(TAG, "正在取上一版，收完再比对（版本 %s）", ver);
+        return;
+    }
+    request_with_version("收到帧版本通知", ver);
 }
 
 /* 时钟任务：每分钟换一次时钟带，顺便看着取帧的退避。

@@ -26,6 +26,7 @@
 #include "cloud_client.h"
 #include "coredump.h"
 #include "framefetch.h"
+#include "framepack.h"
 #include "lcd_ui.h"
 #include "ota.h"
 #include "pairband.h"
@@ -55,6 +56,9 @@ static const char *TAG = "cloud";
 #define HEARTBEAT_S       30
 #define RX_MAX          1024
 #define PAIR_RETRY_S      30
+/* 连续多少次“明确拒绝”（0x04/0x05）才认定密钥失效。0x03（服务繁忙/
+ * 准入限流）永远只算临时错误，绝不触发清密钥。 */
+#define AUTH_FAIL_LIMIT    3
 
 /* 运行期生效的服务器地址：NVS 优先，空则用编译期默认值。
  * cloud_client_start() 里填好，之后只读。 */
@@ -76,7 +80,14 @@ static char     s_key_id[24];       /* 设备令牌里第一个 '.' 之前的部
 static char     s_pair_code[8];
 static int64_t  s_pair_expire_us;   /* 本机 uptime 截止时间 */
 static bool     s_auth_failed;
+static int      s_auth_fails;       /* 连续明确拒绝次数；连接成功后清零 */
 static uint32_t s_backoff_ms = BACKOFF_MIN_MS;
+/* 自己驱动重连。esp-mqtt 的自动重连只能靠 esp_mqtt_set_config 改间隔，
+ * 而那个 API 会拿残缺结构体整体覆盖配置（broker URI / TLS 全被清空）——
+ * 配对被踢后永远连不上。这里关掉自动重连，用一次性定时器按退避调
+ * esp_mqtt_client_reconnect()，配置文件从头到尾不再动。 */
+static esp_timer_handle_t s_reconnect_timer;
+static volatile bool s_reconnect_armed;
 
 /* MQTT DATA 可能分片。topic 只在第一片（offset==0）里有效，
  * 后续分片靠 s_rx_kind 记住「正在收什么」。 */
@@ -202,6 +213,9 @@ static bool device_register(void)
     bool ok = cJSON_IsString(tok) && tok->valuestring[0] &&
               cJSON_IsString(code) && strlen(code->valuestring) == 6;
     if (ok) {
+        /* 重新注册意味着设备身份换了：flash 里上一轮的帧不能再拿给
+         * 新主人看。配对成功后会重新拉。 */
+        framepack_invalidate();
         set_devkey(tok->valuestring);
         prov_save_devkey(s_devkey);
         set_pair(code->valuestring, expires, now);
@@ -220,6 +234,7 @@ static void pair_code_refresh(void)
         ESP_LOGE(TAG, "设备密钥被拒，清掉后重新注册");
         prov_erase_devkey();
         s_devkey[0] = 0;
+        framepack_invalidate();
         lcd_ui_cloud("密钥被拒，重新注册");
         vTaskDelay(pdMS_TO_TICKS(1500));
         esp_restart();
@@ -451,6 +466,8 @@ static void handle_pair(const char *json, int len)
          * 也是留给 MQTT 把这条 ACK 冲刷出去的时间——顺序反了服务端就永远
          * 等不到回执，会一直重投一条设备其实已经执行过的解绑。 */
         if (cid[0]) { cid_remember_pair(cid); send_ack(cid, true, NULL); }
+        /* 解绑后旧主人的帧必须立刻作废，不能等重启后还被新主人看到。 */
+        framepack_invalidate();
         vTaskDelay(pdMS_TO_TICKS(1500));
         esp_restart();
     }
@@ -554,17 +571,37 @@ static void subscribe_paired_topics(void)
              s_sub_usage_id, s_sub_frame_id);
 }
 
+static void reconnect_cb(void *arg)
+{
+    (void)arg;
+    s_reconnect_armed = false;
+    if (!s_connected && s_mqtt && !s_auth_failed) {
+        esp_mqtt_client_reconnect(s_mqtt);
+    }
+}
+
+/* 安排下一次重连。重复调用会重置定时器，保证同一时刻只有一个在跑。 */
+static void schedule_reconnect(int delay_ms)
+{
+    if (!s_reconnect_timer) return;
+    esp_timer_stop(s_reconnect_timer);
+    s_reconnect_armed = true;
+    esp_timer_start_once(s_reconnect_timer, (uint64_t)delay_ms * 1000ULL);
+}
+
 static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     esp_mqtt_event_handle_t e = data;
     switch ((esp_mqtt_event_id_t)id) {
     case MQTT_EVENT_CONNECTED:
         s_connected = true;
+        s_auth_fails = 0;      /* 连上就说明当前密钥有效 */
+        s_auth_failed = false;
+        if (s_reconnect_timer) esp_timer_stop(s_reconnect_timer);
+        s_reconnect_armed = false;
         ESP_LOGI(TAG, "已连接云端 %s", s_mqtt_uri);
         lcd_ui_cloud("已连接");
         s_backoff_ms = BACKOFF_MIN_MS;
-        esp_mqtt_set_config(s_mqtt, &(esp_mqtt_client_config_t){
-            .network.reconnect_timeout_ms = s_backoff_ms });
         /* pair 永远要订：待配对设备靠它收「已配对」。
          * usage 只有已配对才订——服务端的 ACL 不允许待配对密钥读 usage，
          * 订了也是被拒。配对成功时再补订，见 subscribe_paired_topics()。 */
@@ -594,8 +631,7 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
             int next = (int)s_backoff_ms + jitter;
             if (next < 1000) next = 1000;
             ESP_LOGW(TAG, "与云端断开，%d ms 后重连", next);
-            esp_mqtt_set_config(s_mqtt, &(esp_mqtt_client_config_t){
-                .network.reconnect_timeout_ms = next });
+            schedule_reconnect(next);
         }
         lcd_ui_cloud("重连中");
         break;
@@ -640,18 +676,31 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
 
     case MQTT_EVENT_ERROR:
         if (e->error_handle &&
-            e->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED &&
-            e->error_handle->connect_return_code ==
-                MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED) {
-            if (!s_auth_failed) {
-                s_auth_failed = true;
-                ESP_LOGE(TAG, "云端拒绝认证（密钥被吊销或服务端不认）——"
-                              "清密钥重新注册");
-                lcd_ui_cloud("密钥被拒，重新注册");
-                prov_erase_devkey();
-                s_devkey[0] = 0;
-                vTaskDelay(pdMS_TO_TICKS(1500));
-                esp_restart();
+            e->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
+            int code = e->error_handle->connect_return_code;
+            if (code == MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED ||
+                code == MQTT_CONNECTION_REFUSE_BAD_USERNAME) {
+                /* 0x04/0x05 才可能是密钥失效；单次不说明问题（服务端重启、
+                 * 旧连接未清理都可能），连续 N 次才清 NVS。 */
+                s_auth_fails++;
+                ESP_LOGW(TAG, "云端明确拒绝认证 0x%02x（%d/%d）",
+                         code, s_auth_fails, AUTH_FAIL_LIMIT);
+                if (s_auth_fails >= AUTH_FAIL_LIMIT && !s_auth_failed) {
+                    s_auth_failed = true;
+                    ESP_LOGE(TAG, "连续被拒，判定密钥失效——清密钥重新注册");
+                    lcd_ui_cloud("密钥被拒，重新注册");
+                    prov_erase_devkey();
+                    s_devkey[0] = 0;
+                    framepack_invalidate();
+                    vTaskDelay(pdMS_TO_TICKS(1500));
+                    esp_restart();
+                }
+            } else if (code == MQTT_CONNECTION_REFUSE_SERVER_UNAVAILABLE) {
+                /* 0x03：服务繁忙/连接准入限流。绝不能清密钥，退避即可。 */
+                ESP_LOGW(TAG, "服务端暂时不可用（准入限流），退避后重试");
+                lcd_ui_cloud("服务端繁忙，重试中");
+            } else {
+                ESP_LOGE(TAG, "连接被拒 0x%02x，退避重试", code);
             }
         } else {
             ESP_LOGE(TAG, "MQTT 错误 type=%d",
@@ -724,6 +773,16 @@ void cloud_client_start(const uint8_t mac[6])
     int lwtn = snprintf(lwt, sizeof lwt,
                         "{\"dev\":\"%s\",\"state\":\"offline\"}", s_devid);
 
+    /* 自己管理重连：定时器建得出来就关 esp-mqtt 的自动重连。
+     * 定时器建不出来时退回自动重连——那样没有指数退避，但至少能连上。 */
+    bool manual_reconnect = false;
+    if (!s_reconnect_timer) {
+        const esp_timer_create_args_t rt = {
+            .callback = reconnect_cb, .name = "mqtt_reconn",
+        };
+        manual_reconnect = esp_timer_create(&rt, &s_reconnect_timer) == ESP_OK;
+    }
+
     const esp_mqtt_client_config_t cfg = {
         .broker.address.uri = s_mqtt_uri,
 #ifndef STICKBOX_INSECURE_TLS
@@ -739,8 +798,11 @@ void cloud_client_start(const uint8_t mac[6])
             .qos = 1, .retain = 1,
         },
         .network.reconnect_timeout_ms = BACKOFF_MIN_MS,
-        .network.disable_auto_reconnect = false,
+        .network.disable_auto_reconnect = manual_reconnect,
     };
+    if (!manual_reconnect) {
+        ESP_LOGW(TAG, "重连定时器创建失败，退回 esp-mqtt 自动重连");
+    }
     s_mqtt = esp_mqtt_client_init(&cfg);
     esp_mqtt_client_register_event(s_mqtt, ESP_EVENT_ANY_ID, on_mqtt, NULL);
     esp_mqtt_client_start(s_mqtt);
