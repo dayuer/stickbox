@@ -2,15 +2,36 @@ package integration
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/dayuer/stickbox/server/go/internal/frame"
 	"github.com/dayuer/stickbox/server/go/internal/frames"
-	"github.com/dayuer/stickbox/server/go/internal/render"
+	"github.com/dayuer/stickbox/server/go/internal/source"
 	"github.com/dayuer/stickbox/server/go/internal/usage"
 )
+
+// tinyBuilder 让这个测试只验证「启动巡检会补帧」，不把真实渲染器的
+// 耗时（-race 下更慢，且同一 store 上还有别的服务在后台渲染）算进
+// 测试预算。渲染器本身由 frame/render 的测试和 T13c 集成测试覆盖。
+type tinyBuilder struct{}
+
+func (tinyBuilder) Build(source.Snapshot) (*frame.Bundle, error) {
+	base := []byte("base")
+	atlas := []byte("atlas")
+	b := &frame.Bundle{Base: base, Atlas: atlas}
+	b.Meta.V = frame.Version
+	bs := sha256.Sum256(base)
+	as := sha256.Sum256(atlas)
+	b.Meta.Frame = hex.EncodeToString(bs[:])
+	b.Meta.Atlas.SHA256 = hex.EncodeToString(as[:])
+	b.Meta.Atlas.Size = len(atlas)
+	return b, nil
+}
 
 type usageNoopPub struct{}
 
@@ -55,17 +76,13 @@ func TestFramesBackfillOnStartup(t *testing.T) {
 	agentTok, dev, userID := e.pair(code, "")
 	e.reportUsage(agentTok, usageReport(time.Now(), 15))
 
-	rr, err := render.New()
-	if err != nil {
-		t.Fatal(err)
-	}
 	pub := &frameRecPub{}
 	fs, err := frames.New(
 		t.TempDir(), // 全新的 frames 目录，模拟刚部署
 		e.store,
 		usage.NewService(e.store, usageNoopPub{}, time.Now),
 		pub,
-		frames.RenderBuilder{R: rr},
+		tinyBuilder{},
 		frames.Options{
 			DefaultTZ:         "UTC",
 			Debounce:          50 * time.Millisecond,
