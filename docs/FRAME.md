@@ -142,6 +142,9 @@ DRI=8 只多 **4.7KB（+2.7%）**，远低于先前 20–35KB 的估计。
   12 行卡片区替换完的最大字节数（当前 **13,089**，出现在 08:28；
   理论上界 4×最宽数字 3187 + 静态 662 = 13,410）。设备加载帧包时
   必须拿它和 `BAND_CAP` 比较，超了拒绝整包；每次拼接再做一次长度断言。
+  服务端也有一道同样的护栏：`frame.BandCap = 16KB`（必须与
+  `rom/main/stream.h` 的 `BAND_CAP` 一致），`frame.Build` 发现
+  `max_band_bytes` 超限直接返回错误，不让坏帧包出服务端。
 - `slots[].runs`：12 段，行优先；每段是底帧里该卡片该行的
   absolute `(off, len)`，正好覆盖一个 8-MCU interval（含 RST）。
 - `atlas.digits[].runs`：12 段，相对 `atlas.bin` 起点；每段也是

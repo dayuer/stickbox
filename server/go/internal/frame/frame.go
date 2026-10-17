@@ -31,6 +31,11 @@ const (
 	// Quality 是底帧与字形图集的 JPEG 质量。q=82 时底帧约 181KB、
 	// 图集约 32KB，连同索引仍在 256KB 槽位内；再高会顶到槽位上限。
 	Quality = 82
+
+	// BandCap 是设备侧逐行时钟缓冲（单块）的上限。必须与
+	// rom/main/stream.h 的 BAND_CAP 保持一致；Build 在这里先硬失败，
+	// 避免服务端出了设备装不下的帧包、到板上才拒包。
+	BandCap = 16 << 10
 )
 
 // Run 是文件/图集里的一段字节。
@@ -172,7 +177,20 @@ func Build(r *render.Renderer, s source.Snapshot) (*Bundle, error) {
 	sum = sha256.Sum256(atlas)
 	b.Meta.Atlas.SHA256 = hex.EncodeToString(sum[:])
 	b.Meta.Band.MaxBandBytes = maxBandBytes(&b.Meta)
+	if err := validateBandSize(b.Meta.Band.MaxBandBytes); err != nil {
+		return nil, err
+	}
 	return b, nil
+}
+
+// validateBandSize 是渲染器侧的护栏：max_band_bytes 一旦超过设备
+// 单块缓冲上限，构建就失败，而不是等设备加载时拒包。
+func validateBandSize(n int) error {
+	if n > BandCap {
+		return fmt.Errorf("frame: max_band_bytes %d 超过设备 BAND_CAP %d"+
+			"（需同步 rom/main/stream.h）", n, BandCap)
+	}
+	return nil
 }
 
 // maxBandBytes 遍历所有合法 HH:MM，算出 12 行卡片区替换后的最大字节数。

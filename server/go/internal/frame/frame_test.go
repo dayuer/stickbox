@@ -144,11 +144,11 @@ func TestBundleFitsSlot(t *testing.T) {
 		}
 		t.Logf("        逐行卡片区上界 %d B；遍历 1440 个时刻的实际最坏 %d B；BAND_CAP 16KB",
 			worstRows, b.Meta.Band.MaxBandBytes)
-		if worstRows > 16<<10 {
-			t.Errorf("%s: 逐行卡片区上界 %d B 超过 16KB", st.name, worstRows)
+		if worstRows > BandCap {
+			t.Errorf("%s: 逐行卡片区上界 %d B 超过 BandCap %d", st.name, worstRows, BandCap)
 		}
-		if b.Meta.Band.MaxBandBytes > 16<<10 {
-			t.Errorf("%s: max_band_bytes %d 超过 BAND_CAP 16KB", st.name, b.Meta.Band.MaxBandBytes)
+		if b.Meta.Band.MaxBandBytes > BandCap {
+			t.Errorf("%s: max_band_bytes %d 超过 BandCap %d", st.name, b.Meta.Band.MaxBandBytes, BandCap)
 		}
 		if b.Meta.Band.MaxBandBytes != 13089 {
 			t.Logf("%s: max_band_bytes = %d（08c769e 的基准是 13089，字体/质量变化时会变）",
@@ -190,6 +190,18 @@ func TestSpliceDecodesWithLibjpeg(t *testing.T) {
 		if st, err := os.Stat(out); err != nil || st.Size() == 0 {
 			t.Fatalf("%02d:%02d: djpeg 没有产出", hm[0], hm[1])
 		}
+	}
+}
+
+func TestValidateBandSize(t *testing.T) {
+	if err := validateBandSize(BandCap); err != nil {
+		t.Errorf("恰好等于上限时不应失败: %v", err)
+	}
+	if err := validateBandSize(BandCap + 1); err == nil {
+		t.Errorf("超过上限时必须失败")
+	}
+	if BandCap != 16<<10 {
+		t.Errorf("BandCap = %d，必须与 rom/main/stream.h 的 BAND_CAP=16KB 同步", BandCap)
 	}
 }
 
