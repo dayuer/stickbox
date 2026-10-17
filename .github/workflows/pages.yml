@@ -1,0 +1,106 @@
+# 把 web/flash 发布到 GitHub Pages。
+#
+# 固件参数（留空则只发布页面，烧录按钮仍然可见，但页面会提示“固件未发布”）：
+#   - 仓库变量 FIRMWARE_RELEASE_TAG：固件 Release 标签，如 v0.1.0
+#   - 仓库变量 FIRMWARE_ASSET：Release 附件名，默认 stickbox-firmware.zip
+#   - 仓库变量 FIRMWARE_REPO：Release 所在仓库，默认当前仓库（自托管/分仓时用）
+# 也可以在 Actions 页面手动触发，用 release_tag / asset_name 覆盖。
+#
+# Release 附件里需要有 idf.py build 产出的 flasher_args.json 和它引用的 bin；
+# manifest 由 rom/tools/gen_web_manifest.py 生成，偏移不手写。
+#
+# 首次使用前，在仓库 Settings → Pages 里把 Source 设为 “GitHub Actions”。
+
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "rom/tools/gen_web_manifest.py"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "固件 Release 标签（留空则只发布页面）"
+        required: false
+        default: ""
+      asset_name:
+        description: "Release 附件名（zip）"
+        required: false
+        default: "stickbox-firmware.zip"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      FW_RELEASE_TAG: ${{ github.event.inputs.release_tag || vars.FIRMWARE_RELEASE_TAG || '' }}
+      FW_ASSET: ${{ github.event.inputs.asset_name || vars.FIRMWARE_ASSET || 'stickbox-firmware.zip' }}
+      FW_REPO: ${{ vars.FIRMWARE_REPO || github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 下载并解压固件 Release
+        if: ${{ env.FW_RELEASE_TAG != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p .firmware
+          gh release download "$FW_RELEASE_TAG" \
+            --repo "$FW_REPO" \
+            --pattern "$FW_ASSET" \
+            --dir .firmware
+          cd .firmware
+          unzip -q "$FW_ASSET"
+          rm -f "$FW_ASSET"
+          FA="$(find . -name flasher_args.json -print -quit)"
+          if [ -z "$FA" ]; then
+            echo "::error::Release 附件里没有 flasher_args.json"
+            exit 1
+          fi
+          echo "FLASHER_ARGS=$PWD/${FA#./}" >> "$GITHUB_ENV"
+
+      - name: 生成 manifest.json 并复制 bin
+        if: ${{ env.FW_RELEASE_TAG != '' }}
+        run: |
+          set -euo pipefail
+          python3 rom/tools/gen_web_manifest.py \
+            --flasher-args "$FLASHER_ARGS" \
+            --out-dir web/flash \
+            --version "${FW_RELEASE_TAG#v}" \
+            --copy-bins
+
+      - name: 检查页面文件
+        run: |
+          set -euo pipefail
+          test -f web/flash/index.html
+          test -f web/flash/styles.css
+          if [ -n "${FW_RELEASE_TAG:-}" ]; then
+            test -f web/flash/manifest.json
+          fi
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/flash
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

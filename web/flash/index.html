@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1D2D3D">
+  <meta name="description" content="StickBox 浏览器烧录页：插上 ESP32-S3 板子，用 Chrome 或 Edge 一键烧录，不用安装 ESP-IDF。">
+  <title>StickBox · 浏览器烧录</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
+</head>
+<body>
+  <div class="grid-lines" aria-hidden="true"></div>
+
+  <header class="wrap masthead">
+    <div class="brand-line">
+      <a class="brand" href="https://github.com/dayuer/stickbox">
+        <span class="brand-mark" aria-hidden="true">+</span>
+        <span class="brand-name">STICKBOX</span>
+      </a>
+      <span class="brand-sub">浏览器烧录</span>
+    </div>
+    <div class="firmware" id="firmware" data-state="loading" aria-live="polite">
+      <span class="dot" aria-hidden="true"></span>
+      <span id="firmware-text">正在读取固件信息…</span>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="intro" aria-labelledby="page-title">
+      <p class="eyebrow">FIRMWARE · USB SERIAL</p>
+      <h1 id="page-title">插上板子，<br><span>点一下就能烧。</span></h1>
+      <p class="lede">不用装 ESP-IDF，也不用命令行。桌面版 Chrome 或 Edge 打开本页，接上 USB，按下面三步走。</p>
+    </section>
+
+    <section class="layout">
+      <ol class="steps" aria-label="烧录步骤">
+        <li class="step">
+          <span class="num" aria-hidden="true">01</span>
+          <div class="step-body">
+            <h2>插对 USB 口</h2>
+            <p>开发板上有两个 Type-C 时，插丝印为 <code>USB</code> 或 <code>USB-OTG</code> 的那个（原生 USB）；不要插标着 <code>UART</code> / <code>COM</code> 的口。</p>
+            <p>StickBox PCB 的 USB-A 直接插电脑，不要插在电视上。线要能传数据，纯充电线不行。</p>
+          </div>
+        </li>
+
+        <li class="step">
+          <span class="num" aria-hidden="true">02</span>
+          <div class="step-body">
+            <h2>第一次烧录：按住 BOOT 再插</h2>
+            <p>按住板上的 <code>BOOT</code> 键不放，插上 USB，等页面里出现串口后再松开。</p>
+            <p class="hint">已经烧过 StickBox 的板子通常直接插就能烧；找不到串口时再按上面的步骤来。如果还是找不到，拔掉重来，确认按的是 BOOT，不是 RST。</p>
+          </div>
+        </li>
+
+        <li class="step">
+          <span class="num" aria-hidden="true">03</span>
+          <div class="step-body">
+            <h2>烧完：配网 → 配对</h2>
+            <p>板子重启后会开一个热点 <code>StickBox-Setup-XXXX</code>，XXXX 是设备 MAC 的末四位。</p>
+            <p>连上这个热点，浏览器通常会自动打开配网页；没弹出就访问 <code>http://192.168.4.1</code>，填家里的 Wi-Fi。</p>
+            <p>配网后电视（或 LCD）会显示 6 位配对码，在电脑上运行 <code>stickbox-agent pair &lt;配对码&gt;</code> 就完成了。自托管的话，配网页里可以改服务器地址。</p>
+          </div>
+        </li>
+      </ol>
+
+      <aside class="flash-panel" aria-labelledby="flash-title">
+        <span class="corner tl" aria-hidden="true">+</span>
+        <span class="corner tr" aria-hidden="true">+</span>
+        <span class="corner bl" aria-hidden="true">+</span>
+        <span class="corner br" aria-hidden="true">+</span>
+
+        <p class="panel-eyebrow">STICKBOX FLASHER</p>
+        <h2 id="flash-title">连接板子</h2>
+        <p class="panel-copy">按步骤 02 进入下载模式，然后点下面的按钮。浏览器会请求串口权限。</p>
+
+        <div class="install">
+          <esp-web-install-button manifest="manifest.json">
+            <button slot="activate" class="install-btn" type="button">连接并烧录</button>
+            <span slot="unsupported" class="slot-msg">当前浏览器不支持 Web Serial。请用桌面版 Chrome 或 Edge 打开本页。</span>
+            <span slot="not-allowed" class="slot-msg">页面必须通过 HTTPS 或 localhost 打开，Web Serial 才可用。</span>
+          </esp-web-install-button>
+        </div>
+
+        <dl class="panel-meta">
+          <div><dt>浏览器</dt><dd>Chrome / Edge（桌面）</dd></div>
+          <div><dt>芯片</dt><dd>ESP32-S3</dd></div>
+          <div><dt>固件</dt><dd id="firmware-meta">—</dd></div>
+        </dl>
+
+        <p class="warn">烧录会擦除设备上的配置；已配网的板子烧完会回到配网状态。</p>
+      </aside>
+    </section>
+  </main>
+
+  <footer class="wrap foot">
+    <p>StickBox · 浏览器烧录页</p>
+    <p><a href="https://github.com/dayuer/stickbox">源码</a> · Apache-2.0 · 固件来自 GitHub Release</p>
+  </footer>
+
+  <noscript>
+    <p class="noscript">本页需要 JavaScript 与 Web Serial 才能烧录。请用桌面版 Chrome 或 Edge，并允许运行脚本。</p>
+  </noscript>
+
+  <script>
+    (function () {
+      var box = document.getElementById('firmware');
+      var text = document.getElementById('firmware-text');
+      var meta = document.getElementById('firmware-meta');
+
+      fetch('manifest.json', { cache: 'no-store' })
+        .then(function (res) {
+          if (!res.ok) throw new Error(String(res.status));
+          return res.json();
+        })
+        .then(function (m) {
+          var build = (m.builds && m.builds[0]) || {};
+          var parts = (build.parts && build.parts.length) || 0;
+          var version = m.version || 'dev';
+          text.textContent = '固件 ' + version + ' · ' + (build.chipFamily || 'ESP32-S3') + ' · ' + parts + ' 个镜像';
+          meta.textContent = version;
+          box.dataset.state = 'ready';
+        })
+        .catch(function () {
+          text.textContent = '本页还没有固件包，等 Release 发布后再来';
+          meta.textContent = '未发布';
+          box.dataset.state = 'missing';
+        });
+    })();
+  </script>
+</body>
+</html>
