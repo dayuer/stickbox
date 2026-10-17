@@ -6,6 +6,7 @@ import "testing"
 // agent 不连 MQTT。
 func TestACLMatrix(t *testing.T) {
 	dev := Identity{Dev: "aaa", Role: RoleDevice}
+	pending := Identity{Dev: "aaa", Role: RoleDevice, Pending: true}
 	agent := Identity{UserID: "u1", Role: RoleAgent}
 
 	cases := []struct {
@@ -25,6 +26,14 @@ func TestACLMatrix(t *testing.T) {
 		{"设备不能订阅自己的状态", dev, "printer/aaa/status", false, false},
 		{"设备不能碰别人", dev, "printer/bbb/status", true, false},
 		{"设备不能用通配符", dev, "printer/+/status", false, false},
+
+		// pending 密钥只代表「知道 MAC」，不是主人。
+		{"pending 能读配对", pending, "printer/aaa/pair", false, true},
+		{"pending 能发心跳", pending, "printer/aaa/status", true, true},
+		{"pending 不能读用量", pending, "printer/aaa/usage", false, false},
+		{"pending 不能读帧版本", pending, "printer/aaa/frame", false, false},
+		{"pending 不能伪造配对", pending, "printer/aaa/pair", true, false},
+		{"pending 不能读别人的配对", pending, "printer/bbb/pair", false, false},
 
 		{"agent 不能推用量", agent, "printer/aaa/usage", true, false},
 		{"agent 不能订阅状态", agent, "printer/aaa/status", false, false},

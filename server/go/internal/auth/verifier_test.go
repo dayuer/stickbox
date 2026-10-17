@@ -65,6 +65,49 @@ func TestVerifyUsesCacheOnSecondCall(t *testing.T) {
 	}
 }
 
+// pending 必须出现在 Identity 里，所有数据权限判定都靠它。
+func TestVerifyReportsPending(t *testing.T) {
+	v, f, token := newFixture(t)
+	keyID, _, _ := SplitToken(token)
+	k := f.keys[keyID]
+	k.Pending = true
+	f.keys[keyID] = k
+
+	id, err := v.Verify(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !id.Pending {
+		t.Errorf("pending 密钥的身份 = %+v", id)
+	}
+}
+
+// 配对转正后必须让缓存失效，否则旧缓存里的 Pending=true 还会挡一小时。
+func TestPendingCacheInvalidatedAfterActivation(t *testing.T) {
+	v, f, token := newFixture(t)
+	keyID, _, _ := SplitToken(token)
+	k := f.keys[keyID]
+	k.Pending = true
+	f.keys[keyID] = k
+
+	if id, _ := v.Verify(token); !id.Pending {
+		t.Fatal("第一次校验不是 pending")
+	}
+
+	k.Pending = false
+	k.UserID = "u1"
+	f.keys[keyID] = k
+	v.Invalidate(keyID)
+
+	id, err := v.Verify(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id.Pending || id.UserID != "u1" {
+		t.Errorf("转正后的身份 = %+v", id)
+	}
+}
+
 func TestVerifyRejects(t *testing.T) {
 	v, f, token := newFixture(t)
 	keyID, _, _ := SplitToken(token)

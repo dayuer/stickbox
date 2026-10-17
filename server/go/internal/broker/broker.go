@@ -13,6 +13,7 @@ import (
 
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/listeners"
+	"github.com/mochi-mqtt/server/v2/packets"
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 )
@@ -93,6 +94,33 @@ func (b *Broker) PublishUsage(dev string, payload []byte) error {
 // 重连后仍能拿到「已配对 / 已解绑」的当前状态。
 func (b *Broker) PublishPair(dev string, payload []byte) error {
 	return b.srv.Publish(fmt.Sprintf("printer/%s/pair", dev), payload, true, 1)
+}
+
+// KickDevice 断开这台设备的全部 MQTT 连接。
+//
+// 配对把密钥从 pending 转成 active 时，已有连接的身份表里还缓存着
+// Pending=true；旧固件又只在 MQTT_EVENT_CONNECTED 时订阅 usage，
+// 不踢的话它会一直停在配对页。断开后固件自动重连，这次用 active
+// 身份，usage 订阅就能通过。
+//
+// 调用方必须先把 Verifier 缓存里的对应 KeyID 失效，否则重连可能
+// 又拿到旧的 pending 身份。
+func (b *Broker) KickDevice(dev string) {
+	kicked := 0
+	for id, cl := range b.srv.Clients.GetAll() {
+		if cl.Net.Inline {
+			continue
+		}
+		if id != dev && string(cl.Properties.Username) != dev {
+			continue
+		}
+		if err := b.srv.DisconnectClient(cl, packets.CodeDisconnect); err == nil {
+			kicked++
+		}
+	}
+	if kicked > 0 {
+		slog.Info("已断开设备 MQTT 连接", "dev", dev, "clients", kicked)
+	}
 }
 
 // SetUsageResender 接上「设备订阅 usage 时补发」的回调。

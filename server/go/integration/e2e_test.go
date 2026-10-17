@@ -55,26 +55,41 @@ func pairPayload(t *testing.T, raw []byte) bool {
 }
 
 // 完整链路：设备注册 → 出码 → 设备连 MQTT 等配对 → agent 输码 →
-// 设备收到 paired=true → agent 上报用量 → 设备收到。
+// 设备收到 paired=true → 用新身份重连 → agent 上报用量 → 设备收到。
+//
+// 待配对密钥按 ACL 不能订阅 usage；服务端在配对成功后会踢掉旧连接，
+// 固件自动重连后用 active 身份重新订阅。这里模拟那次重连。
 func TestEndToEndRegisterPairUsage(t *testing.T) {
 	e := startServer(t)
 	devKey, code := e.register("f412fa87c9e0")
 
 	dev := e.connectDevice("f412fa87c9e0", devKey)
 	dev.heartbeat()
-	if err := dev.subscribeUsage(); err != nil {
-		t.Fatalf("订阅用量 = %v", err)
-	}
 	if err := dev.subscribePair(); err != nil {
 		t.Fatalf("订阅配对 = %v", err)
+	}
+	if err := dev.subscribeUsage(); err == nil {
+		t.Fatal("pending 密钥订阅了 usage——ACL 没生效")
 	}
 
 	agentTok, pairedDev, _ := e.pair(code, "")
 	if pairedDev != "f412fa87c9e0" {
 		t.Fatalf("配对的 dev = %q", pairedDev)
 	}
+
+	// 配对后服务端立即踢掉旧连接（旧身份还是 pending）；重连后用 active
+	// 身份订阅，retained 的 paired=true 会补发。
+	time.Sleep(500 * time.Millisecond)
+	dev.disconnect()
+	dev = e.connectDevice("f412fa87c9e0", devKey)
+	if err := dev.subscribePair(); err != nil {
+		t.Fatalf("配对后订阅配对 = %v", err)
+	}
 	if !pairPayload(t, dev.waitPair(5*time.Second)) {
 		t.Error("配对通知不是 paired=true")
+	}
+	if err := dev.subscribeUsage(); err != nil {
+		t.Fatalf("配对后订阅用量 = %v", err)
 	}
 
 	before := time.Now().Unix()
@@ -177,6 +192,13 @@ func TestEndToEndUnpair(t *testing.T) {
 	}
 
 	agentTok, pairedDev, _ := e.pair(code, "")
+	// 配对后旧连接被踢；重连拿 retained 的 paired=true。
+	time.Sleep(500 * time.Millisecond)
+	dev.disconnect()
+	dev = e.connectDevice("f412fa87c9e0", devKey)
+	if err := dev.subscribePair(); err != nil {
+		t.Fatalf("重连订阅配对 = %v", err)
+	}
 	if !pairPayload(t, dev.waitPair(5*time.Second)) {
 		t.Fatal("没收到 paired=true")
 	}
@@ -232,5 +254,78 @@ func TestEndToEndAgentCannotConnectMQTT(t *testing.T) {
 	agentTok, _, _ := e.pair(code, "")
 	if _, err := e.tryConnectDevice("f412fa87c9e0", agentTok); err == nil {
 		t.Error("agent 令牌连上了 MQTT")
+	}
+}
+
+// 知道 MAC 的人可以注册一把 pending 密钥，但它只能收配对通知：
+// 不能读 usage / frame，也不能影响原主人的密钥。
+func TestEndToEndPendingKeyCannotReadUserData(t *testing.T) {
+	e := startServer(t)
+	ownerKey, code := e.register("f412fa87c9e0")
+	agentTok, _, _ := e.pair(code, "")
+
+	// 同一 MAC 再注册：新增一把 pending 密钥，原有效密钥不受影响。
+	pendingKey, _ := e.register("f412fa87c9e0")
+	p := e.connectDevice("f412fa87c9e0", pendingKey)
+	if err := p.subscribePair(); err != nil {
+		t.Fatalf("pending 应能读配对通知：%v", err)
+	}
+	if err := p.subscribeUsage(); err == nil {
+		t.Error("pending 密钥订阅了 usage——ACL 没生效")
+	}
+	if err := p.subscribe("printer/f412fa87c9e0/frame"); err == nil {
+		t.Error("pending 密钥订阅了 frame——ACL 没生效")
+	}
+
+	// 原主人的密钥仍能正常收用量。
+	owner := e.connectDevice("f412fa87c9e0", ownerKey)
+	if err := owner.subscribeUsage(); err != nil {
+		t.Fatalf("原密钥订阅 usage：%v", err)
+	}
+	e.reportUsage(agentTok, usageReport(time.Now(), 17))
+	got := parseUsage(t, owner.waitUsage(5*time.Second))
+	if got.FiveHour == nil || got.FiveHour.UsedPercentage != 17 {
+		t.Errorf("原主人收到 = %+v", got.FiveHour)
+	}
+	select {
+	case b := <-p.usage:
+		t.Errorf("pending 密钥收到了用量：%s", b)
+	case <-time.After(500 * time.Millisecond):
+	}
+}
+
+// 旧固件只在 MQTT_EVENT_CONNECTED 时订阅 usage，配对时密钥原地转正、
+// 连接不断开就会一直停在配对页。服务端踢连接后，paho 自动重连并重订。
+func TestEndToEndPairKicksLegacyDevice(t *testing.T) {
+	e := startServer(t)
+	devKey, code := e.register("f412fa87c9e0")
+
+	legacy, err := e.connectLegacyDevice("f412fa87c9e0", devKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// pending 时 usage 订阅必须被拒，不能出现 subscribed 信号。
+	select {
+	case <-legacy.subscribed:
+		t.Fatal("pending 时 usage 订阅成功——ACL 没生效")
+	case <-time.After(700 * time.Millisecond):
+	}
+
+	agentTok, pairedDev, _ := e.pair(code, "")
+	if pairedDev != "f412fa87c9e0" {
+		t.Fatalf("配对的 dev = %q", pairedDev)
+	}
+
+	// 服务端踢连接后，旧固件自动重连，OnConnect 里重新订阅 usage。
+	select {
+	case <-legacy.subscribed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("配对后没有自动重连并重新订阅 usage")
+	}
+
+	e.reportUsage(agentTok, usageReport(time.Now(), 23))
+	got := parseUsage(t, legacy.waitUsage(5*time.Second))
+	if got.FiveHour == nil || got.FiveHour.UsedPercentage != 23 {
+		t.Errorf("旧固件收到 = %+v", got.FiveHour)
 	}
 }
