@@ -26,6 +26,13 @@ type FrameResender interface {
 	Resend(dev string)
 }
 
+// PairResender 在设备订阅 printer/{dev}/pair 时，按这条连接自己那把
+// 密钥的当前状态补发一条配对通知。retained 消息只在 broker 内存里，
+// 服务端重启后就没了，不能只依赖它。
+type PairResender interface {
+	ResendPair(dev, keyID string)
+}
+
 type Hook struct {
 	mqtt.HookBase
 	srv    *mqtt.Server
@@ -36,6 +43,7 @@ type Hook struct {
 	// usage / frame 为 nil 时不补发（测试里、或还没接上的时候）。
 	usage UsageResender
 	frame FrameResender
+	pair  PairResender
 	// pending 限制同一 dev 的 pending 连接频率。
 	pending *pendingLimiter
 }
@@ -145,32 +153,35 @@ func (h *Hook) OnACLCheck(cl *mqtt.Client, topic string, write bool) bool {
 	return auth.ACLAllowed(id, topic, write)
 }
 
-// OnSubscribed：设备订阅自己的 usage / frame 主题时，补发当前值。
+// OnSubscribed：设备订阅自己的 pair / usage / frame 主题时，补发当前值。
 //
-// 两者都不用 retain（用量里的 now 会过期、帧版本也会变），设备重连后
-// 要靠这里立刻拿到状态，否则得等下一次上报或重建。
+// usage / frame 不用 retain（用量里的 now 会过期、帧版本也会变）；pair
+// 虽然有 retained，但那只存在 broker 内存里，重启就没了，所以也要按
+// 密钥的当前状态补发，否则已配对设备会一直等不到 paired=true。
 // 在 goroutine 里发：hook 回调里同步 Publish 会和 broker 内部的订阅流程抢锁。
 func (h *Hook) OnSubscribed(cl *mqtt.Client, pk packets.Packet, reasonCodes []byte) {
 	id, ok := h.ids.get(cl)
 	if !ok || id.Role != auth.RoleDevice {
 		return
 	}
-	// 待配对密钥只能收 retained 的 pair；ACL 已经拒绝它订阅 usage/frame，
+	// 待配对密钥只能收 pair；ACL 已经拒绝它订阅 usage/frame，
 	// 这里再挡一层，避免将来 ACL 回归时把数据补发出去。
-	if id.Pending {
-		return
-	}
+	pending := id.Pending
 	for i, f := range pk.Filters {
 		if i >= len(reasonCodes) || reasonCodes[i] >= 0x80 {
 			continue
 		}
 		switch f.Filter {
+		case "printer/" + id.Dev + "/pair":
+			if h.pair != nil {
+				go h.pair.ResendPair(id.Dev, id.KeyID)
+			}
 		case "printer/" + id.Dev + "/usage":
-			if h.usage != nil {
+			if !pending && h.usage != nil {
 				go h.usage.Resend(id.Dev)
 			}
 		case "printer/" + id.Dev + "/frame":
-			if h.frame != nil {
+			if !pending && h.frame != nil {
 				go h.frame.Resend(id.Dev)
 			}
 		}

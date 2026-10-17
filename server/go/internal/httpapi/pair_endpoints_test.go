@@ -226,6 +226,63 @@ func TestPairResendsLatestUsage(t *testing.T) {
 	}
 }
 
+// 服务端重启后 retained 丢失：设备订阅 pair 时必须按自己这把密钥的
+// 当前状态补发，不能只依赖 retained。
+func TestResendPairByKeyState(t *testing.T) {
+	const dev = "f412fa87c9e0"
+	h, dep := newTestAPI(t)
+	devTok, code := register(t, h, dev)
+	keyID, _, err := auth.SplitToken(devTok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 每个阶段用一套全新的 API：模拟服务端重启后 retained 和
+	// 「本进程发过的状态」同时清空。
+	fresh := func() (*API, *recPub) {
+		pub := &recPub{}
+		return New(dep.cfg, dep.store, dep.v, dep.reg, pub), pub
+	}
+
+	// 待配对：不发。
+	api, pub := fresh()
+	api.ResendPair(dev, keyID)
+	if got, ok := pub.pair[dev]; ok {
+		t.Fatalf("pending 不应补发配对通知，得到 %s", got)
+	}
+
+	// 配对转正：按这把 key_id 发 paired=true。
+	mustPair(t, h, code, "")
+	api, pub = fresh()
+	api.ResendPair(dev, keyID)
+	var note struct {
+		Paired bool   `json:"paired"`
+		KeyID  string `json:"key_id"`
+	}
+	if err := json.Unmarshal(pub.pair[dev], &note); err != nil {
+		t.Fatalf("补发内容 = %s", pub.pair[dev])
+	}
+	if !note.Paired || note.KeyID != keyID {
+		t.Errorf("补发 = %s，期望 paired=true key_id=%s", pub.pair[dev], keyID)
+	}
+
+	// 已吊销：发 paired=false，key_ids 含自己。
+	if _, err := dep.store.DisableKeysOfDevice(dev, string(auth.RoleDevice)); err != nil {
+		t.Fatal(err)
+	}
+	api, pub = fresh()
+	api.ResendPair(dev, keyID)
+	var revoked struct {
+		Paired bool     `json:"paired"`
+		KeyIDs []string `json:"key_ids"`
+	}
+	if err := json.Unmarshal(pub.pair[dev], &revoked); err != nil {
+		t.Fatalf("吊销补发内容 = %s", pub.pair[dev])
+	}
+	if revoked.Paired || len(revoked.KeyIDs) != 1 || revoked.KeyIDs[0] != keyID {
+		t.Errorf("吊销补发 = %s", pub.pair[dev])
+	}
+}
+
 // —— 小工具 ——
 
 func itoa64(v int64) string {

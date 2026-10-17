@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
@@ -36,6 +37,13 @@ type API struct {
 	usage *usage.Service
 	// frames 在 main 里构造后注入；测试里可以为 nil。
 	frames *frames.Service
+
+	// pairSent 记录本进程已经发布过的配对状态（dev -> "true:<key_id>" /
+	// "false"）。broker 的 retained 也在本进程内存里，进程重启后两边同时
+	// 清空；有了它，订阅时只在 retained 缺失（或状态变了）才补发，避免
+	// 同一条 paired=true 发两遍、以及补发压过随后的解绑通知。
+	pairMu   sync.Mutex
+	pairSent map[string]string
 
 	// 内存限流：注册、换配对码、配对失败。
 	regDev        *rateLimiter
