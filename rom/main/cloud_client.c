@@ -76,6 +76,10 @@ static bool     s_paired;
 static volatile bool s_connected;
 static volatile bool s_got_usage;   /* 收到过用量 = 密钥已转正 */
 static int s_sub_usage_id = -1, s_sub_frame_id = -1;   /* 用来识别 SUBACK */
+/* 这条连接上是否已经发过 usage/frame 的 SUBSCRIBE。CONNECTED 里发一次，
+ * 配对成功回调里会再走同一条路径；不记状态就会每条连接订两遍，服务端把
+ * 每条用量/帧通知也投两遍。被 SUBACK 拒绝时清掉，配对转正后可以重订。 */
+static bool s_data_sub_req;
 static char     s_key_id[24];       /* 设备令牌里第一个 '.' 之前的部分 */
 static char     s_pair_code[8];
 static int64_t  s_pair_expire_us;   /* 本机 uptime 截止时间 */
@@ -565,8 +569,15 @@ static void pair_code_task(void *arg)
 static void subscribe_paired_topics(void)
 {
     if (!s_mqtt) return;
+    /* 同一条连接只订一次：CONNECTED 与“配对成功”都会调到这里。 */
+    if (s_data_sub_req) return;
+    s_data_sub_req = true;
     s_sub_usage_id = esp_mqtt_client_subscribe(s_mqtt, s_topic_usage, 1);
     s_sub_frame_id = esp_mqtt_client_subscribe(s_mqtt, s_topic_frame, 1);
+    if (s_sub_usage_id < 0 || s_sub_frame_id < 0) {
+        /* 发送失败（连接刚好断开等）：清掉状态，让下次事件还能重试。 */
+        s_data_sub_req = false;
+    }
     ESP_LOGI(TAG, "已请求订阅用量与帧通知（msg_id %d/%d）",
              s_sub_usage_id, s_sub_frame_id);
 }
@@ -619,6 +630,9 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
         ESP_LOGI(TAG, "已连接云端 %s", s_mqtt_uri);
         lcd_ui_cloud("已连接");
         s_backoff_ms = BACKOFF_MIN_MS;
+        /* 新连接（clean session），订阅不继承，必须重新发；先把本连接的
+         * 订阅状态清掉，后面配对回调才不会误判为“已经订过”。 */
+        s_data_sub_req = false;
         /* pair 永远要订：待配对设备靠它收「已配对」。
          * usage 只有已配对才订——服务端的 ACL 不允许待配对密钥读 usage，
          * 订了也是被拒。配对成功时再补订，见 subscribe_paired_topics()。 */
@@ -632,8 +646,11 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
         /* SUBACK 里 0x80 = 拒绝。走到这儿说明密钥还是 pending（配对没完成，
          * 或者服务端认为没完成）。不是错误，等 paired=true 到了再补订。 */
         if (e->data_len > 0 && (uint8_t)e->data[0] == 0x80) {
-            if (e->msg_id == s_sub_usage_id || e->msg_id == s_sub_frame_id)
+            if (e->msg_id == s_sub_usage_id || e->msg_id == s_sub_frame_id) {
+                /* 被拒说明这条连接还是 pending；配对转正后要允许重订一次。 */
+                s_data_sub_req = false;
                 ESP_LOGW(TAG, "订阅被拒（msg_id %d），密钥尚未转正，等配对通知", e->msg_id);
+            }
         }
         break;
 

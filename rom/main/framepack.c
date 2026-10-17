@@ -68,10 +68,9 @@ static bool read_slot_header(int slot, uint32_t *seq, uint32_t *len,
     *len = be32(h + 12);
     *crc = be32(h + 16);
     if (*len == 0 || *len > FP_MAX_PACK) return false;
-    /* 版本串放在保留区的前 12 字节，不带结尾 0。 */
-    size_t n = vercap - 1 < 12 ? vercap - 1 : 12;
-    memcpy(ver, h + 20, n);
-    ver[n] = 0;
+    /* 版本串放在保留区的前 12 字节。旧写入方只拷实际长度，剩余是 0xFF
+     * 擦除态——必须按定长字段解码并补 0，不能直接当 C 字符串。 */
+    fp_slot_ver(ver, vercap, h + 20);
     return true;
 }
 
@@ -294,6 +293,9 @@ bool fp_write_finish(fp_writer_t *w)
     put_be32(h + 8, w->seq);
     put_be32(h + 12, w->pack_len);
     put_be32(h + 16, w->crc);
+    /* 版本字段是定长 12 字节，必须用 0 补满；0xFF 填充会让旧读取方
+     * 把擦除态当成版本号的一部分。 */
+    memset(h + 20, 0, 12);
     memcpy(h + 20, w->ver, strnlen(w->ver, 12));
 
     /* 头部最后写：掉电时魔数写不全，这个槽自然失效。 */

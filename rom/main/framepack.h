@@ -111,6 +111,10 @@ const char *framepack_version(void);
  * flash 里上一个主人的帧起播。 */
 void framepack_invalidate(void);
 
+/* 把槽头的 12 字节版本字段解码成 C 字符串（遇到 NUL/不可打印字节截断）。
+ * 旧固件写入的字段用 0xFF 填充，不能直接 memcpy 后当 %s 用。 */
+void fp_slot_ver(char *out, size_t cap, const uint8_t *field);
+
 /* ---- 流式写入 ----
  *
  * 帧包约 218KB 而设备稳态空闲堆才 140KB，**装不下**。所以必须边收边写，
