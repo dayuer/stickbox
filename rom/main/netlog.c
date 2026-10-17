@@ -56,6 +56,10 @@ void netlog_start(void)
     /* 16 条：每条约 202 字节，64 条要 13KB。日志是诊断手段，丢几条
      * 无所谓；稳态堆优先。发送任务会持续排空，只有日志风暴时才丢。 */
     s_q = xQueueCreate(16, sizeof(logmsg_t));
+    if (s_q) {
+        ESP_LOGI("netlog", "日志队列 16×%u = %u B",
+                 (unsigned)sizeof(logmsg_t), (unsigned)(16 * sizeof(logmsg_t)));
+    }
     xTaskCreate(sender_task, "netlog", 3072, NULL, 2, NULL);
     s_prev = esp_log_set_vprintf(net_vprintf);
 }
