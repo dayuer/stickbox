@@ -131,9 +131,28 @@ void ota_boot_check(void)
      * 看出「这块板子接受任何人签的固件」的地方。 */
     ESP_LOGW(TAG, "OTA 签名校验：%s", SIGCHECK_ON ? "开" : "关（仅限开发构建）");
 
-    if (s_pending_verify)
+    if (s_pending_verify) {
         ESP_LOGW(TAG, "本次是 OTA 后试运行：%d 秒内没通过健康检查，重启将回滚",
                  HEALTH_TIMEOUT_S);
+        return;
+    }
+
+    /* 崩溃型回滚（panic/abort/看门狗）不会走 ota_rollback_now()，坏版本
+     * 就没被记下来；不补这一步，设备会每 24 小时重下 2MB、再崩一次。
+     * bootloader 回滚后会把失败槽标记为 INVALID/ABORTED，这里读它的
+     * app_desc。同一版本只写一次 NVS；已记录过就只打一条普通日志。 */
+    const esp_partition_t *badp = esp_ota_get_last_invalid_partition();
+    if (badp) {
+        esp_app_desc_t bd;
+        if (esp_ota_get_partition_description(badp, &bd) == ESP_OK && bd.version[0]) {
+            if (is_bad_version(bd.version)) {
+                ESP_LOGI(TAG, "上次回滚的坏版本 %s 已记录，跳过", bd.version);
+            } else {
+                ESP_LOGW(TAG, "检测到上次回滚：坏版本 %s", bd.version);
+                remember_bad_version(bd.version);
+            }
+        }
+    }
 }
 
 void ota_mark_healthy(void)

@@ -226,6 +226,14 @@ static void suicide_task(void *arg)
 void app_main(void)
 {
     ESP_LOGI(TAG, "=== StickBox 电视看板 ===");
+    /* NVS 先于 ota_boot_check：崩溃型回滚的“坏版本”要写进 NVS，晚初始化
+     * 会让这条记录静默失败。 */
+    esp_err_t r = nvs_flash_init();
+    if (r == ESP_ERR_NVS_NO_FREE_PAGES || r == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ESP_ERROR_CHECK(nvs_flash_init());
+    }
+    ESP_LOGI(TAG, "NVS 就绪（OTA 坏版本记录可写）");
     ota_boot_check();     /* 尽早：要先知道本次是不是 OTA 后的试运行 */
 #if CONFIG_STICKBOX_OTA_SUICIDE
     /* 只为验证 OTA 回滚而存在的测试版本。
@@ -240,11 +248,6 @@ void app_main(void)
     lcd_ui_init();
     ESP_LOGI(TAG, "堆@LCD后=%u", (unsigned)esp_get_free_heap_size());
 
-    esp_err_t r = nvs_flash_init();
-    if (r == ESP_ERR_NVS_NO_FREE_PAGES || r == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ESP_ERROR_CHECK(nvs_flash_init());
-    }
     s_evt = xEventGroupCreate();
 
     /* 开机按住 MENU 键 = 清空 Wi-Fi 配置重新配网 */
