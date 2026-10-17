@@ -1,2 +1,0 @@
-/Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-ar qc libespressif__esp32_s3_usb_otg.a CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/esp32_s3_usb_otg.c.obj CMakeFiles/__idf_espressif__esp32_s3_usb_otg.dir/esp32_s3_usb_otg_idf5.c.obj
-/Users/liyuqing/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32s3-elf-ranlib libespressif__esp32_s3_usb_otg.a

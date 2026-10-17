@@ -12,4 +12,8 @@ nvs.csv
 .DS_Store
 __pycache__/
 server/config.json
-build-m0*/
+rom/build-m0a/
+rom/build-m0b/
+rom/build-diag/
+"rom/ build-m0a/"
+"rom/ build-m0b/"

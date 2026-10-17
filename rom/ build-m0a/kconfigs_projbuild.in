@@ -1,6 +1,0 @@
-source "/Users/liyuqing/esp/esp-idf-v5.5/components/bootloader/Kconfig.projbuild"
-source "/Users/liyuqing/esp/esp-idf-v5.5/components/esp_app_format/Kconfig.projbuild"
-source "/Users/liyuqing/esp/esp-idf-v5.5/components/esp_rom/Kconfig.projbuild"
-source "/Users/liyuqing/esp/esp-idf-v5.5/components/esptool_py/Kconfig.projbuild"
-source "/Users/liyuqing/esp/esp-idf-v5.5/components/partition_table/Kconfig.projbuild"
-source "/Users/liyuqing/sproot/esp-airprint-M0/rom/main/Kconfig.projbuild"
