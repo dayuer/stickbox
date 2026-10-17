@@ -45,7 +45,7 @@ func runCLI(cfg *config.Config, args []string) error {
 		return err
 	}
 	defer st.Close()
-	v := auth.NewVerifier(st)
+	v := auth.NewVerifier(st, cfg.TokenPepper)
 
 	cmd := strings.Join(args[:min(2, len(args))], " ")
 	switch cmd {
@@ -54,7 +54,7 @@ func runCLI(cfg *config.Config, args []string) error {
 		if dev == "" {
 			return fmt.Errorf("%s", cliUsage)
 		}
-		token, _, err := auth.IssueDeviceKey(st, "", dev, arg(args, 3), false)
+		token, _, err := auth.IssueDeviceKey(v, st, "", dev, arg(args, 3), false)
 		if err != nil {
 			return err
 		}

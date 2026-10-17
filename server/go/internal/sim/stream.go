@@ -221,9 +221,9 @@ func le32(v uint32) []byte {
 	return b
 }
 
-// streamServer 是电视拉的 /live.avi。HTTP/1.0、不发 Content-Length，
+// StreamServer 是电视拉的 /live.avi。HTTP/1.0、不发 Content-Length，
 // 靠连接保持直播（T17 的结论）。
-type streamServer struct {
+type StreamServer struct {
 	addr    string
 	fps     int
 	burst   int
@@ -234,7 +234,19 @@ type streamServer struct {
 
 	mu    sync.Mutex
 	conns map[net.Conn]*streamConn
+
+	events StreamEvents
 }
+
+// StreamEvents 记录电视对 /live.avi 的访问，兼容性工具用。
+// 在 Start 之前设置；回调由调用方保证并发安全。
+type StreamEvents struct {
+	OnRequest    func(method string, header http.Header)
+	OnConnect    func(method string)
+	OnDisconnect func(method string)
+}
+
+func (s *StreamServer) SetEvents(ev StreamEvents) { s.events = ev }
 
 type streamConn struct {
 	started   time.Time
@@ -245,11 +257,11 @@ type streamConn struct {
 // 帧率 2fps，正常电视每 500ms 收一帧。
 const streamActiveWindow = 3 * time.Second
 
-func newStreamServer(addr string, fps, burst int, current func() []byte) *streamServer {
-	return &streamServer{addr: addr, fps: fps, burst: burst, current: current}
+func NewStreamServer(addr string, fps, burst int, current func() []byte) *StreamServer {
+	return &StreamServer{addr: addr, fps: fps, burst: burst, current: current}
 }
 
-func (s *streamServer) Start() error {
+func (s *StreamServer) Start() error {
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {
 		return err
@@ -263,21 +275,21 @@ func (s *streamServer) Start() error {
 	return nil
 }
 
-func (s *streamServer) Addr() string {
+func (s *StreamServer) Addr() string {
 	if s == nil {
 		return ""
 	}
 	return s.actual
 }
 
-func (s *streamServer) Close() error {
+func (s *StreamServer) Close() error {
 	if s == nil || s.srv == nil {
 		return nil
 	}
 	return s.srv.Close()
 }
 
-func (s *streamServer) track(c net.Conn) {
+func (s *StreamServer) track(c net.Conn) {
 	now := time.Now()
 	s.mu.Lock()
 	if s.conns == nil {
@@ -287,13 +299,13 @@ func (s *streamServer) track(c net.Conn) {
 	s.mu.Unlock()
 }
 
-func (s *streamServer) untrack(c net.Conn) {
+func (s *StreamServer) untrack(c net.Conn) {
 	s.mu.Lock()
 	delete(s.conns, c)
 	s.mu.Unlock()
 }
 
-func (s *streamServer) markWrite(c net.Conn) {
+func (s *StreamServer) markWrite(c net.Conn) {
 	s.mu.Lock()
 	if st := s.conns[c]; st != nil {
 		st.lastWrite = time.Now()
@@ -302,7 +314,7 @@ func (s *streamServer) markWrite(c net.Conn) {
 }
 
 // ActiveFor 返回最久的拉流连接已经持续了多久；没有连接返回 0。
-func (s *streamServer) ActiveFor() time.Duration {
+func (s *StreamServer) ActiveFor() time.Duration {
 	if s == nil {
 		return 0
 	}
@@ -319,7 +331,7 @@ func (s *streamServer) ActiveFor() time.Duration {
 }
 
 // Active 表示有连接在最近 streamActiveWindow 内成功收到过帧。
-func (s *streamServer) Active() bool {
+func (s *StreamServer) Active() bool {
 	if s == nil {
 		return false
 	}
@@ -334,7 +346,7 @@ func (s *streamServer) Active() bool {
 	return false
 }
 
-func (s *streamServer) headers() string {
+func (s *StreamServer) headers() string {
 	return "HTTP/1.0 200 OK\r\n" +
 		"Content-Type: video/avi\r\n" +
 		"transferMode.dlna.org: Streaming\r\n" +
@@ -343,10 +355,13 @@ func (s *streamServer) headers() string {
 		"Connection: close\r\n\r\n"
 }
 
-func (s *streamServer) handle(w http.ResponseWriter, r *http.Request) {
+func (s *StreamServer) handle(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/live.avi" {
 		http.NotFound(w, r)
 		return
+	}
+	if s.events.OnRequest != nil {
+		s.events.OnRequest(r.Method, r.Header.Clone())
 	}
 	hj, ok := w.(http.Hijacker)
 	if !ok {
@@ -358,8 +373,14 @@ func (s *streamServer) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.track(conn)
+	if s.events.OnConnect != nil {
+		s.events.OnConnect(r.Method)
+	}
 	defer func() {
 		s.untrack(conn)
+		if s.events.OnDisconnect != nil {
+			s.events.OnDisconnect(r.Method)
+		}
 		conn.Close()
 	}()
 
@@ -403,9 +424,9 @@ func (s *streamServer) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// localIPToward 返回「连电视时本机用的那个局域网 IP」。
+// LocalIPToward 返回「连电视时本机用的那个局域网 IP」。
 // 不能用监听地址（":8091" / "[::]:8091" 对电视不可达）。
-func localIPToward(host string) (string, error) {
+func LocalIPToward(host string) (string, error) {
 	conn, err := net.Dial("udp", net.JoinHostPort(host, "1900"))
 	if err != nil {
 		return "", err
@@ -422,9 +443,9 @@ func usableLANIP(ip net.IP) bool {
 	return ip != nil && !ip.IsUnspecified() && !ip.IsLoopback()
 }
 
-// buildStreamURL 用局域网 IP + 监听端口拼直播地址；主机名永远取
+// BuildStreamURL 用局域网 IP + 监听端口拼直播地址；主机名永远取
 // 「连电视时的本机 IP」，不从 listenAddr 里取。
-func buildStreamURL(listenAddr, tv string, ipFor func(string) (string, error)) (string, error) {
+func BuildStreamURL(listenAddr, tv string, ipFor func(string) (string, error)) (string, error) {
 	ipStr, err := ipFor(tv)
 	if err != nil {
 		return "", err

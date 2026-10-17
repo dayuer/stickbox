@@ -18,8 +18,8 @@ func newStore(t *testing.T) *store.Store {
 
 func TestIssueAgentKeyThenVerify(t *testing.T) {
 	st := newStore(t)
-	v := NewVerifier(st)
-	token, err := IssueAgentKey(st, "u1", "mac")
+	v := NewVerifier(st, testPepper)
+	token, err := IssueAgentKey(v, st, "u1", "mac")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,8 +35,8 @@ func TestIssueAgentKeyThenVerify(t *testing.T) {
 // 设备注册签发的是一把待配对密钥：dev 已绑定，但 user_id 为空。
 func TestIssueDeviceKeyPendingThenActivate(t *testing.T) {
 	st := newStore(t)
-	v := NewVerifier(st)
-	token, keyID, err := IssueDeviceKey(st, "", "f412fa87c9e0", "", true)
+	v := NewVerifier(st, testPepper)
+	token, keyID, err := IssueDeviceKey(v, st, "", "f412fa87c9e0", "", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,9 +68,9 @@ func TestIssueDeviceKeyPendingThenActivate(t *testing.T) {
 // 配对转正时旧主人的密钥必须立刻失效。
 func TestRevokeDeviceKeysExcept(t *testing.T) {
 	st := newStore(t)
-	v := NewVerifier(st)
-	old, _, _ := IssueDeviceKey(st, "u1", "dev1", "", false)
-	freshToken, freshID, _ := IssueDeviceKey(st, "", "dev1", "", true)
+	v := NewVerifier(st, testPepper)
+	old, _, _ := IssueDeviceKey(v, st, "u1", "dev1", "", false)
+	freshToken, freshID, _ := IssueDeviceKey(v, st, "", "dev1", "", true)
 	v.Verify(old)
 	v.Verify(freshToken)
 

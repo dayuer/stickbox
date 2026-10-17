@@ -57,6 +57,9 @@ type Registry struct {
 	rateLimited  map[string]uint64
 
 	pendingTakeoverRejected uint64
+	mqttPublishDropped      uint64
+	mqttQosDropped          uint64
+	frameCacheEvictions     uint64
 
 	onlineDevices func() int
 	mqttClients   func() int
@@ -124,6 +127,16 @@ func (m *Registry) IncRateLimited(limiter string) {
 	m.mu.Unlock()
 }
 
+func (m *Registry) IncMQTTPublishDropped() { m.mu.Lock(); m.mqttPublishDropped++; m.mu.Unlock() }
+func (m *Registry) IncMQTTQosDropped()     { m.mu.Lock(); m.mqttQosDropped++; m.mu.Unlock() }
+
+// IncFrameCacheEviction 记录磁盘帧缓存按 LRU 淘汰的用户数。
+func (m *Registry) IncFrameCacheEviction(n int) {
+	m.mu.Lock()
+	m.frameCacheEvictions += uint64(n)
+	m.mu.Unlock()
+}
+
 // 包级快捷方式，业务代码不用到处传 Registry。
 func IncUsageReport()                        { Default.IncUsageReport() }
 func ObserveRender(d time.Duration, ok bool) { Default.ObserveRender(d, ok) }
@@ -132,6 +145,9 @@ func IncPairOK()                             { Default.IncPairOK() }
 func IncPairFail()                           { Default.IncPairFail() }
 func IncRateLimited(limiter string)          { Default.IncRateLimited(limiter) }
 func IncPendingTakeoverRejected()            { Default.IncPendingTakeoverRejected() }
+func IncMQTTPublishDropped()                 { Default.IncMQTTPublishDropped() }
+func IncMQTTQosDropped()                     { Default.IncMQTTQosDropped() }
+func IncFrameCacheEviction(n int)            { Default.IncFrameCacheEviction(n) }
 
 // Handler 输出 Prometheus 文本格式。
 func (m *Registry) Handler() http.Handler {
@@ -171,6 +187,12 @@ func (m *Registry) renderText() []byte {
 	writeCounter(&b, "stickbox_render_failures_total", "看板渲染失败次数", m.renderFails)
 	writeCounter(&b, "stickbox_pending_takeover_rejected_total",
 		"pending 密钥试图顶掉在线 active 设备被拒的次数", m.pendingTakeoverRejected)
+	writeCounter(&b, "stickbox_mqtt_publish_dropped_total",
+		"mochi 丢弃的下行消息数", m.mqttPublishDropped)
+	writeCounter(&b, "stickbox_mqtt_qos_dropped_total",
+		"mochi 丢弃的 QoS 消息数", m.mqttQosDropped)
+	writeCounter(&b, "stickbox_frame_cache_evictions_total",
+		"帧缓存按 LRU 淘汰的用户数", m.frameCacheEvictions)
 	writeHistogram(&b, "stickbox_render_seconds", "一次看板渲染的耗时", m.render)
 	writeHistogram(&b, "stickbox_frame_package_bytes", "一次帧包（底帧+图集+索引）的字节数", m.frames)
 

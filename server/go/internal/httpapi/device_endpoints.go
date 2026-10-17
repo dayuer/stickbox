@@ -73,7 +73,7 @@ func (a *API) handleDeviceRegister(w http.ResponseWriter, r *http.Request) {
 	a.regDev.hit(in.Dev)
 	a.regIP.hit(ip)
 
-	token, keyID, err := auth.IssueDeviceKey(a.store, "", in.Dev, "", true)
+	token, keyID, err := auth.IssueDeviceKey(a.v, a.store, "", in.Dev, "", true)
 	if err != nil {
 		fail(w, 500, "server error", "")
 		return

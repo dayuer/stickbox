@@ -82,6 +82,7 @@ func seed(args []string) {
 	deviceDir := fs.String("device-states", "/tmp/t21/devices", "每台设备的 sim 状态目录")
 	server := fs.String("server", "https://127.0.0.1:19443", "服务端 URL")
 	mqttAddr := fs.String("mqtt", "127.0.0.1:18883", "MQTT host:port")
+	pepper := fs.String("pepper", "", "必须与服务端 config.json 的 token_pepper 相同")
 	fs.Parse(args)
 
 	if *devices <= 0 {
@@ -102,6 +103,10 @@ func seed(args []string) {
 		fatal("打开数据库: " + err.Error())
 	}
 	defer st.Close()
+	if *pepper == "" {
+		fatal("必须给 -pepper（与服务端 config.json 的 token_pepper 一致）")
+	}
+	v := auth.NewVerifier(st, *pepper)
 
 	out := loadState{
 		Server: *server, MQTTAddr: *mqttAddr, DeviceStatesDir: *deviceDir,
@@ -112,7 +117,7 @@ func seed(args []string) {
 		if err != nil {
 			fatal("建用户: " + err.Error())
 		}
-		tok, err := auth.IssueAgentKey(st, u.ID, fmt.Sprintf("load-agent-%d", i))
+		tok, err := auth.IssueAgentKey(v, st, u.ID, fmt.Sprintf("load-agent-%d", i))
 		if err != nil {
 			fatal("签发 agent 令牌: " + err.Error())
 		}
@@ -122,7 +127,7 @@ func seed(args []string) {
 	for d := 0; d < *devices; d++ {
 		ai := d % m
 		dev := fmt.Sprintf("%012x", d+1)
-		tok, _, err := auth.IssueDeviceKey(st, out.Agents[ai].UserID, dev, "", false)
+		tok, _, err := auth.IssueDeviceKey(v, st, out.Agents[ai].UserID, dev, "", false)
 		if err != nil {
 			fatal("签发设备密钥: " + err.Error())
 		}
@@ -388,15 +393,34 @@ func run(args []string) {
 	printSummary(res)
 }
 
+// waitIdle 等启动补帧真正停下来。
+//
+// 懒加载下，渲染要等设备连上并订阅后才开始；只看「某一刻 pending==0」
+// 会在订阅风暴之前就误判。先给 15s 观察窗，等看到忙碌，再要求连续 6s
+// 空闲才返回。
 func waitIdle(ctx context.Context, metricsURL string, max time.Duration) time.Duration {
 	start := time.Now()
+	seenBusy := false
+	var idleSince time.Time
 	for time.Since(start) < max {
 		select {
 		case <-ctx.Done():
 			return time.Since(start)
 		case <-time.After(2 * time.Second):
 		}
-		if fetchSample(metricsURL).Pending == 0 {
+		if fetchSample(metricsURL).Pending > 0 {
+			seenBusy = true
+			idleSince = time.Time{}
+			continue
+		}
+		if !seenBusy && time.Since(start) < 15*time.Second {
+			continue
+		}
+		if idleSince.IsZero() {
+			idleSince = time.Now()
+			continue
+		}
+		if time.Since(idleSince) >= 6*time.Second {
 			return time.Since(start)
 		}
 	}

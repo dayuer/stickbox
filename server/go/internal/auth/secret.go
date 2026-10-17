@@ -2,7 +2,9 @@
 package auth
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
@@ -13,14 +15,20 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-// argon2id 参数。刻意选得慢——这是防爆破的全部意义。
-// 热路径不受影响：校验结果有缓存，且并发数有信号量限制，见 verifier.go。
+// 令牌 secret 是 24 字节 crypto/rand，不是低熵密码：离线爆破不可行。
+// 因此线上格式用 HMAC-SHA256(pepper, secret)，既快又不给重连风暴
+// 制造 64MB 的内存峰值。
+//
+// argon2id 只保留用于校验旧记录：成功校验一次后就地迁移成 HMAC。
 const (
 	argonTime    = 1
 	argonMemory  = 64 * 1024 // 64 MB
 	argonThreads = 4
 	argonKeyLen  = 32
 	saltLen      = 16
+
+	hmacScheme = "hmac-sha256"
+	hmacVer    = "v=1"
 )
 
 var ErrBadToken = errors.New("auth: 令牌格式非法")
@@ -29,7 +37,7 @@ var ErrBadToken = errors.New("auth: 令牌格式非法")
 // 明文只在签发时出现一次，不落盘。
 //
 // 令牌格式 {key_id}.{secret}：校验时按 key_id 直接定位到唯一一行，
-// 不遍历该设备的所有密钥逐个 argon2——那会让开销随密钥数线性增长。
+// 不遍历该设备的所有密钥逐个校验——那会让开销随密钥数线性增长。
 func NewToken() (keyID, secret, token string) {
 	idb := make([]byte, 6)
 	sb := make([]byte, 24)
@@ -56,7 +64,48 @@ func SplitToken(token string) (keyID, secret string, err error) {
 	return keyID, secret, nil
 }
 
-func HashSecret(secret string) (string, error) {
+// HashSecret 生成服务端存储的令牌哈希：HMAC-SHA256(pepper, secret)。
+//
+// 不需要 salt：secret 本身是 24 字节随机数，彩虹表和预计算无从下手。
+// pepper 让数据库单独泄露时哈希不可离线验证。
+func HashSecret(pepper, keyID, secret string) (string, error) {
+	if pepper == "" {
+		return "", errors.New("auth: 缺少 token pepper")
+	}
+	mac := hmac.New(sha256.New, []byte(pepper))
+	// 域分离：把 key_id 也绑进 MAC 输入，同一 secret 出现在别的 key_id
+	// 下不会产生相同哈希，哈希也不能被挪到别的记录上复用。
+	mac.Write([]byte("stickbox-token-v1|" + keyID + "|" + secret))
+	sum := mac.Sum(nil)
+	return "$" + hmacScheme + "$" + hmacVer + "$" +
+		base64.RawStdEncoding.EncodeToString(sum), nil
+}
+
+// VerifySecret 校验 secret 与存储的哈希。legacy 为 true 表示命中的是
+// 旧的 argon2id 记录，调用方可就地迁移成 HMAC。
+func VerifySecret(pepper, keyID, secret, encoded string) (ok, legacy bool) {
+	if pepper == "" {
+		return false, false
+	}
+	parts := strings.Split(encoded, "$")
+	switch {
+	case len(parts) == 4 && parts[1] == hmacScheme && parts[2] == hmacVer:
+		want, err := base64.RawStdEncoding.DecodeString(parts[3])
+		if err != nil {
+			return false, false
+		}
+		mac := hmac.New(sha256.New, []byte(pepper))
+		mac.Write([]byte("stickbox-token-v1|" + keyID + "|" + secret))
+		return subtle.ConstantTimeCompare(mac.Sum(nil), want) == 1, false
+	case len(parts) == 6 && parts[1] == "argon2id":
+		return verifyArgon2(secret, encoded), true
+	default:
+		return false, false
+	}
+}
+
+// hashArgon2 只用于测试旧记录迁移路径；生产签发不再走 argon2。
+func hashArgon2(secret string) (string, error) {
 	salt := make([]byte, saltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
@@ -68,7 +117,8 @@ func HashSecret(secret string) (string, error) {
 		base64.RawStdEncoding.EncodeToString(sum)), nil
 }
 
-func VerifySecret(secret, encoded string) bool {
+// verifyArgon2 只用于旧记录。参数来自记录本身，迁移后不再使用。
+func verifyArgon2(secret, encoded string) bool {
 	parts := strings.Split(encoded, "$")
 	// ["", "argon2id", "v=19", "m=..,t=..,p=..", salt, hash]
 	if len(parts) != 6 || parts[1] != "argon2id" {

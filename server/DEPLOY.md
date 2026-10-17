@@ -73,9 +73,24 @@ sudo touch /etc/letsencrypt/live/mqtt.stickbox.ai/fullchain.pem && sudo journalc
   "http_addr": "127.0.0.1:9443",
   "mqtt_addr": ":8883",
   "default_tz": "UTC",
-  "metrics_addr": "127.0.0.1:9090"
+  "metrics_addr": "127.0.0.1:9090",
+  "token_pepper": "<openssl rand -base64 32>",
+  "mqtt_max_writes_pending": 64,
+  "mqtt_max_inflight": 32,
+  "mqtt_receive_maximum": 32,
+  "mqtt_admit_per_sec": 50,
+  "frame_cache_max_bytes": 268435456,
+  "frame_memory_max_bytes": 67108864,
+  "backfill_users_per_sec": 2
 }
 ```
+
+`token_pepper` **必填**（至少 16 字符），缺失时服务端拒绝启动。生成后
+只能保存在 `config.json`（`600`），不要进仓库、不要打印到日志。它用于
+令牌的 HMAC-SHA256；丢失/更换会让所有已签发令牌失效，设备需要重新配网。
+升级已有部署时**先**把这一行加进 config，再切新镜像。详见
+[`docs/SECURITY.md`](../docs/SECURITY.md)。其余容量参数可以省略，使用
+上面的默认值。
 
 `root` 必须指向容器里可写的 `/data`（宿主机 `/opt/stickbox/data`）。
 容器根文件系统是只读的，写成 `/opt/stickbox` 会报
@@ -254,6 +269,11 @@ sudo systemctl disable mosquitto.service
 
 回滚到打印版不再受支持——打印代码和数据库表都已删除。如果只是升级
 stickboxd 本身出了问题，换回上一版二进制并恢复 `jobs.db` 备份即可。
+
+**HMAC 迁移后不能只回滚二进制。** 新版本在设备/agent 成功校验一次后就会
+把旧 `$argon2id$...` 记录改写成 `$hmac-sha256$...`；旧二进制不认识这种
+格式，会把那些设备全部拒绝。回到旧版本必须连同升级前的 `jobs.db` 备份
+（或升级前的 age 备份）一起恢复，不能只切镜像标签。
 
 ## 8. 上线验证清单
 
