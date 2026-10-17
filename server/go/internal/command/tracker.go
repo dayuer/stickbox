@@ -40,6 +40,10 @@ const (
 	// 「设备状态未确认」。注意只有设备在线时才会消耗次数——离线时不投，
 	// 所以这 4 次都是真的发出去过的。
 	maxTries = 4
+	// 绝对过期时间。离线设备不消耗重投次数，光靠 maxTries 这条记录永远
+	// 不会结案；而 usage.Ingest 每 10 分钟推一次给名下所有设备，一块屏关
+	// 几周就能攒出几千条。到期一律结案为 expired。
+	pendingTTL = 24 * time.Hour
 )
 
 // ErrPayloadNotObject：payload 必须是 JSON 对象，才能塞得进 cid。
@@ -52,6 +56,8 @@ type pending struct {
 	retain  bool
 	tries   int
 	next    time.Time
+	// deadline 是绝对过期时间，和 tries 无关——离线设备不消耗 tries。
+	deadline time.Time
 }
 
 // Outcome 是一条指令的最终结局，给运维看。
@@ -69,9 +75,14 @@ type Tracker struct {
 	presence Presence
 	now      func() time.Time
 
-	mu      sync.Mutex
-	pend    map[string]*pending // cid -> 未确认的指令
-	last    map[string]Outcome  // dev -> 最近一条的结局
+	mu   sync.Mutex
+	pend map[string]*pending // cid -> 未确认的指令
+	last map[string]Outcome  // dev -> 最近一条的结局
+	// noAck 记下「这台设备不回 ACK」。旧固件没有 T18 的回执逻辑，每条下行
+	// 都会被投 4 次、每次放弃时打一条 ERROR——流量翻两番，真正的告警会被
+	// 淹掉。某台设备第一次放弃之后就不再跟踪它，只发一次。
+	// 放内存即可：重启后重新学一遍，代价是每台旧设备多浪费一轮。
+	noAck   map[string]bool
 	stopped bool
 	wake    chan struct{}
 }
@@ -79,9 +90,10 @@ type Tracker struct {
 func New(pub Publisher, presence Presence) *Tracker {
 	return &Tracker{
 		pub: pub, presence: presence, now: time.Now,
-		pend: map[string]*pending{},
-		last: map[string]Outcome{},
-		wake: make(chan struct{}, 1),
+		pend:  map[string]*pending{},
+		last:  map[string]Outcome{},
+		noAck: map[string]bool{},
+		wake:  make(chan struct{}, 1),
 	}
 }
 
@@ -104,10 +116,35 @@ func (t *Tracker) Send(dev, topic string, payload []byte, retain bool) (string, 
 		return "", err
 	}
 
+	now := t.now()
 	t.mu.Lock()
+	if t.noAck[dev] {
+		// 已知这台不回 ACK：带上 cid 照常发（新固件刷上去之后下一条就能
+		// 恢复跟踪），但不记待确认、不重投、不打放弃日志。
+		t.mu.Unlock()
+		if err := t.pub.PublishRaw(topic, withCID, retain); err != nil {
+			return "", err
+		}
+		return cid, nil
+	}
+	// 同一 (dev, topic) 上还没确认的旧指令，就此作废。
+	//
+	// usage 和 pair 都是「只要最新状态」的语义，而旧记录如果继续重投，就会
+	// 和新记录并行投递，map 遍历顺序又是随机的——设备离线时先 pair 再
+	// unpair，上线后两条一起重投，设备最终应用的可能是 paired:true。用来
+	// 防分叉的机制自己制造分叉，那就本末倒置了。
+	for oldCID, p := range t.pend {
+		if p.dev == dev && p.topic == topic {
+			delete(t.pend, oldCID)
+			t.last[dev] = Outcome{
+				CID: oldCID, Topic: p.topic, OK: false, Err: "superseded",
+				Tries: p.tries, Finished: now,
+			}
+		}
+	}
 	t.pend[cid] = &pending{
 		dev: dev, topic: topic, payload: withCID, retain: retain,
-		tries: 1, next: t.now().Add(retryBase),
+		tries: 1, next: now.Add(retryBase), deadline: now.Add(pendingTTL),
 	}
 	t.mu.Unlock()
 
@@ -126,18 +163,39 @@ func (t *Tracker) Send(dev, topic string, payload []byte, retain bool) (string, 
 func (t *Tracker) Ack(dev, cid string, ok bool, errMsg string) {
 	t.mu.Lock()
 	p, found := t.pend[cid]
-	if found {
+	// cid 必须确实是发给这台设备的。xid 是「时间戳 + 机器 + pid + 计数器」，
+	// 可以被预测：恶意设备 A 从自己收到的 cid 推出相邻的 cid，往
+	// printer/A/ack 一发，就能把设备 B 的 unpair 或 usage 提前结案——B 永远
+	// 收不到那条指令，而服务端以为成功了。这正是 T18 要防的分叉，不能自己
+	// 开个后门。
+	mine := found && p.dev == dev
+	if mine {
 		delete(t.pend, cid)
 	}
 	t.mu.Unlock()
 
+	// 收到任何回执都说明这台设备认得 ACK。它之前可能被标成「不回 ACK」
+	// （旧固件），刷了新固件之后要能自己恢复跟踪——否则这个标记一旦打上
+	// 就永远不会摘掉，设备升级了也白搭。
+	t.mu.Lock()
+	if t.noAck[dev] {
+		delete(t.noAck, dev)
+		slog.Info("设备开始回 ACK，恢复确认跟踪", "dev", dev)
+	}
+	t.mu.Unlock()
+
+	if found && !mine {
+		slog.Warn("设备替别的设备回 ACK，已忽略",
+			"from", dev, "owner", p.dev, "cid", cid)
+		return
+	}
 	if !found {
 		// 设备对一条我们已经结案的指令补了 ACK（重投撞上在途回执），
 		// 或者 cid 根本不是我们发的。记一笔即可，不是错误。
 		slog.Debug("收到未知 cid 的 ACK", "dev", dev, "cid", cid, "ok", ok)
 		return
 	}
-	t.finish(p, ok, errMsg)
+	t.finish(cid, p, ok, errMsg)
 	if ok {
 		slog.Info("指令已确认", "dev", dev, "topic", p.topic, "cid", cid, "tries", p.tries)
 	} else {
@@ -145,10 +203,10 @@ func (t *Tracker) Ack(dev, cid string, ok bool, errMsg string) {
 	}
 }
 
-func (t *Tracker) finish(p *pending, ok bool, errMsg string) {
+func (t *Tracker) finish(cid string, p *pending, ok bool, errMsg string) {
 	t.mu.Lock()
 	t.last[p.dev] = Outcome{
-		CID: "", Topic: p.topic, OK: ok, Err: errMsg,
+		CID: cid, Topic: p.topic, OK: ok, Err: errMsg,
 		Tries: p.tries, Finished: t.now(),
 	}
 	t.mu.Unlock()
@@ -215,8 +273,17 @@ func (t *Tracker) sweep() {
 	var jobs []job
 	var dead []job
 
+	var expired []job
+
 	t.mu.Lock()
 	for cid, p := range t.pend {
+		// TTL 先判，且和在线与否无关：离线设备不消耗 tries，光靠次数上限
+		// 这条记录永远不会结案，内存会一直涨。
+		if !now.Before(p.deadline) {
+			delete(t.pend, cid)
+			expired = append(expired, job{p, cid})
+			continue
+		}
 		if now.Before(p.next) || !t.online(p.dev) {
 			continue
 		}
@@ -235,12 +302,24 @@ func (t *Tracker) sweep() {
 	}
 	t.mu.Unlock()
 
+	for _, j := range expired {
+		t.finish(j.cid, j.p, false, "expired")
+		slog.Warn("指令超过保留期仍未确认，丢弃",
+			"dev", j.p.dev, "topic", j.p.topic, "cid", j.cid)
+	}
 	for _, j := range dead {
 		// 投了 maxTries 次都没回执。设备可能一直在线却从不 ACK（固件太旧
 		// 或坏了），这时两端状态就是不一致的，必须让人看得见，不能静默。
-		t.finish(j.p, false, "no_ack")
-		slog.Error("指令始终未被确认，设备状态未知",
-			"dev", j.p.dev, "topic", j.p.topic, "cid", j.cid, "tries", j.p.tries)
+		t.finish(j.cid, j.p, false, "no_ack")
+		t.mu.Lock()
+		first := !t.noAck[j.p.dev]
+		t.noAck[j.p.dev] = true
+		t.mu.Unlock()
+		if first {
+			// 只在第一次喊。之后这台设备不再被跟踪，不会反复刷这条。
+			slog.Error("设备始终不回 ACK，后续下行不再跟踪确认",
+				"dev", j.p.dev, "topic", j.p.topic, "cid", j.cid, "tries", j.p.tries)
+		}
 	}
 	for _, j := range jobs {
 		if err := t.pub.PublishRaw(j.p.topic, j.p.payload, j.p.retain); err != nil {

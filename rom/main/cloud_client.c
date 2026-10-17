@@ -216,11 +216,21 @@ static void pair_code_refresh(void)
 static char s_acked[ACK_RING][CID_MAX];
 static int  s_acked_at;
 
+/* pair 另记一格。配对/解绑很少见，而 usage 每 10 分钟一条，8 格环很快就
+ * 把 pair 的 cid 挤掉了——服务端重投一条解绑时设备会重新执行一次。 */
+static char s_acked_pair[CID_MAX];
+
 static bool cid_seen(const char *cid)
 {
+    if (s_acked_pair[0] && strcmp(s_acked_pair, cid) == 0) return true;
     for (int i = 0; i < ACK_RING; i++)
         if (s_acked[i][0] && strcmp(s_acked[i], cid) == 0) return true;
     return false;
+}
+
+static void cid_remember_pair(const char *cid)
+{
+    strlcpy(s_acked_pair, cid, sizeof s_acked_pair);
 }
 
 static void cid_remember(const char *cid)
@@ -229,13 +239,30 @@ static void cid_remember(const char *cid)
     s_acked_at = (s_acked_at + 1) % ACK_RING;
 }
 
-/* 取 cid。没带 cid 的是旧服务端发的：照常处理，但不回 ACK。 */
+/* 取 cid。没带 cid 的是旧服务端发的：照常处理，但不回 ACK。
+ *
+ * 只接受 xid 的形状（20 个 [0-9a-v]）。形状不对的多半是被截断或者 JSON
+ * 被拼坏了，照原样回进 ACK 的 payload 还可能把那条 JSON 也拼坏——宁可
+ * 当成「没有 cid」，让服务端走超时重投。 */
 static bool get_cid(const cJSON *root, char *out, size_t cap)
 {
     out[0] = 0;
     const cJSON *c = cJSON_GetObjectItemCaseSensitive(root, "cid");
     if (!cJSON_IsString(c) || !c->valuestring[0]) return false;
-    strlcpy(out, c->valuestring, cap);
+
+    const char *v = c->valuestring;
+    if (strlen(v) != 20 || cap < 21) {
+        ESP_LOGW(TAG, "cid 形状不对，按无 cid 处理");
+        return false;
+    }
+    for (const char *p = v; *p; p++) {
+        bool okch = (*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'v');
+        if (!okch) {
+            ESP_LOGW(TAG, "cid 含非法字符，按无 cid 处理");
+            return false;
+        }
+    }
+    strlcpy(out, v, cap);
     return true;
 }
 
@@ -248,6 +275,10 @@ static void send_ack(const char *cid, bool ok, const char *err)
     int n = (err && err[0])
         ? snprintf(p, sizeof p, "{\"cid\":\"%s\",\"ok\":%d,\"e\":\"%s\"}", cid, ok ? 1 : 0, err)
         : snprintf(p, sizeof p, "{\"cid\":\"%s\",\"ok\":%d}", cid, ok ? 1 : 0);
+    /* snprintf 返回的是「本该写多少」，截断时会大于缓冲区。原样传给
+     * publish 等于让它读越界。 */
+    if (n < 0) return;
+    if (n >= (int)sizeof p) n = (int)sizeof p - 1;
     esp_mqtt_client_publish(s_mqtt, s_topic_ack, p, n, 1, 0);
     ESP_LOGI(TAG, "ACK cid=%s ok=%d%s%s", cid, ok ? 1 : 0,
              (err && err[0]) ? " e=" : "", (err && err[0]) ? err : "");
@@ -358,7 +389,7 @@ static void handle_pair(const char *json, int len)
         lcd_ui_cloud("已配对");
         pairband_clear();
         ESP_LOGI(TAG, "配对成功，切到看板");
-        if (cid[0]) { cid_remember(cid); send_ack(cid, true, NULL); }
+        if (cid[0]) { cid_remember_pair(cid); send_ack(cid, true, NULL); }
     } else {
         ESP_LOGW(TAG, "设备已解绑，清密钥重新注册");
         prov_erase_devkey();
@@ -368,7 +399,7 @@ static void handle_pair(const char *json, int len)
         /* ACK 必须赶在重启之前发出去。下面那 1500ms 既是给用户看屏的时间，
          * 也是留给 MQTT 把这条 ACK 冲刷出去的时间——顺序反了服务端就永远
          * 等不到回执，会一直重投一条设备其实已经执行过的解绑。 */
-        if (cid[0]) { cid_remember(cid); send_ack(cid, true, NULL); }
+        if (cid[0]) { cid_remember_pair(cid); send_ack(cid, true, NULL); }
         vTaskDelay(pdMS_TO_TICKS(1500));
         esp_restart();
     }

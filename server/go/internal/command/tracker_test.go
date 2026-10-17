@@ -248,3 +248,150 @@ var errSentinel = errSentinelType{}
 type errSentinelType struct{}
 
 func (errSentinelType) Error() string { return "boom" }
+
+// —— 审计第一轮发现的问题 ——
+
+// 跨设备伪造 ACK：xid 可预测，恶意设备能猜到别人的 cid 替它结案。
+func TestAckFromWrongDeviceIsIgnored(t *testing.T) {
+	tr, pub, pres, _, clock := newTracker(t)
+	pres.set("victim", true)
+	cid, _ := tr.Send("victim", "printer/victim/pair", []byte(`{"paired":false}`), true)
+
+	tr.Ack("attacker", cid, true, "")
+
+	if tr.Pending("victim") != 1 {
+		t.Fatal("别的设备把受害者的指令结案了")
+	}
+	if _, ok := tr.LastOutcome("victim"); ok {
+		t.Error("不该产生结局记录")
+	}
+	// 真正的设备仍然能正常确认。
+	tr.Ack("victim", cid, true, "")
+	if tr.Pending("victim") != 0 {
+		t.Error("本人的 ACK 没生效")
+	}
+	*clock = clock.Add(time.Hour)
+	tr.sweep()
+	if len(pub.all()) != 1 {
+		t.Errorf("确认后还在重投，共 %d 条", len(pub.all()))
+	}
+}
+
+// 同一 (dev, topic) 的新指令必须把未确认的旧指令作废。
+// 否则设备离线时先 pair 再 unpair，上线后两条并行重投，最终状态随机。
+func TestNewCommandSupersedesOldOnSameTopic(t *testing.T) {
+	tr, pub, pres, _, clock := newTracker(t)
+	pres.set("d", true)
+	tr.Send("d", "printer/d/pair", []byte(`{"paired":true}`), true)
+	if tr.Pending("d") != 1 {
+		t.Fatal("第一条没记上")
+	}
+	cid2, _ := tr.Send("d", "printer/d/pair", []byte(`{"paired":false}`), true)
+
+	if n := tr.Pending("d"); n != 1 {
+		t.Errorf("同 topic 下应当只剩最新一条，实际 %d", n)
+	}
+	// 旧的那条被记成 superseded。
+	if o, ok := tr.LastOutcome("d"); !ok || o.Err != "superseded" {
+		t.Errorf("旧指令结局 = %+v", o)
+	}
+	// 重投的只能是新的那条。
+	*clock = clock.Add(retryBase + time.Second)
+	tr.sweep()
+	msgs := pub.all()
+	if cidOf(t, msgs[len(msgs)-1].payload) != cid2 {
+		t.Error("重投的不是最新那条")
+	}
+
+	// 不同 topic 之间互不影响。
+	tr.Send("d", "printer/d/usage", []byte(`{"now":1}`), false)
+	if n := tr.Pending("d"); n != 2 {
+		t.Errorf("不同 topic 应当并存，实际 %d", n)
+	}
+}
+
+// 离线设备不消耗重投次数，光靠次数上限这条记录永不结案，内存会一直涨。
+func TestPendingExpiresByTTL(t *testing.T) {
+	tr, pub, pres, _, clock := newTracker(t)
+	pres.set("d", false)
+	tr.Send("d", "printer/d/usage", []byte(`{"now":1}`), false)
+
+	*clock = clock.Add(pendingTTL - time.Minute)
+	tr.sweep()
+	if tr.Pending("d") != 1 {
+		t.Fatal("没到期就被清了")
+	}
+	*clock = clock.Add(2 * time.Minute)
+	tr.sweep()
+	if tr.Pending("d") != 0 {
+		t.Error("到期没清")
+	}
+	if o, ok := tr.LastOutcome("d"); !ok || o.OK || o.Err != "expired" {
+		t.Errorf("结局 = %+v", o)
+	}
+	if len(pub.all()) != 1 {
+		t.Errorf("离线期间不该重投，共 %d 条", len(pub.all()))
+	}
+}
+
+// 旧固件不回 ACK：放弃一次之后就不再跟踪它，否则每条下行投 4 次、
+// 每次刷一条 ERROR，真正的告警会被淹掉。
+func TestStopsTrackingDeviceThatNeverAcks(t *testing.T) {
+	tr, pub, pres, _, clock := newTracker(t)
+	pres.set("old", true)
+	tr.Send("old", "printer/old/usage", []byte(`{"now":1}`), false)
+	for i := 0; i < maxTries+2; i++ {
+		*clock = clock.Add(retryMax + time.Second)
+		tr.sweep()
+	}
+	if n := len(pub.all()); n != maxTries {
+		t.Fatalf("第一条共投 %d 次", n)
+	}
+
+	// 之后的下行只发一次，不跟踪。
+	before := len(pub.all())
+	tr.Send("old", "printer/old/usage", []byte(`{"now":2}`), false)
+	if tr.Pending("old") != 0 {
+		t.Error("已知不回 ACK 的设备不该再被跟踪")
+	}
+	for i := 0; i < maxTries+2; i++ {
+		*clock = clock.Add(retryMax + time.Second)
+		tr.sweep()
+	}
+	if n := len(pub.all()) - before; n != 1 {
+		t.Errorf("第二条发了 %d 次，期望 1 次", n)
+	}
+}
+
+// 刷了新固件开始回 ACK 之后，要能自己恢复跟踪——标记不能是单向的。
+func TestResumesTrackingWhenDeviceStartsAcking(t *testing.T) {
+	tr, _, pres, _, clock := newTracker(t)
+	pres.set("d", true)
+	tr.Send("d", "printer/d/usage", []byte(`{"now":1}`), false)
+	for i := 0; i < maxTries+2; i++ {
+		*clock = clock.Add(retryMax + time.Second)
+		tr.sweep()
+	}
+	cid, _ := tr.Send("d", "printer/d/usage", []byte(`{"now":2}`), false)
+	if tr.Pending("d") != 0 {
+		t.Fatal("此时不该跟踪")
+	}
+	// 设备升级了，对那条未跟踪的指令回了 ACK。
+	tr.Ack("d", cid, true, "")
+
+	tr.Send("d", "printer/d/usage", []byte(`{"now":3}`), false)
+	if tr.Pending("d") != 1 {
+		t.Error("设备开始回 ACK 之后没有恢复跟踪")
+	}
+}
+
+// 结局里要带真实 cid，排障时才查得到是哪条。
+func TestOutcomeCarriesCID(t *testing.T) {
+	tr, _, pres, _, _ := newTracker(t)
+	pres.set("d", true)
+	cid, _ := tr.Send("d", "printer/d/usage", []byte(`{"now":1}`), false)
+	tr.Ack("d", cid, true, "")
+	if o, _ := tr.LastOutcome("d"); o.CID != cid {
+		t.Errorf("Outcome.CID = %q，期望 %q", o.CID, cid)
+	}
+}
