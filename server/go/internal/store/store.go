@@ -103,6 +103,29 @@ CREATE TABLE IF NOT EXISTS playlist_meta(
   plv     INTEGER NOT NULL DEFAULT 0,
   updated INTEGER NOT NULL DEFAULT 0
 );
+
+-- 一次性 SD 初始化授权（P1）：photo init 生成，设备 init_done 或超时后清除。
+CREATE TABLE IF NOT EXISTS photo_init(
+  user_id TEXT PRIMARY KEY,
+  token   TEXT NOT NULL,
+  force   INTEGER NOT NULL DEFAULT 0,
+  expires INTEGER NOT NULL DEFAULT 0
+);
+
+-- 设备照片能力/状态（来自 status.photo，每次心跳覆盖）。
+CREATE TABLE IF NOT EXISTS device_photo(
+  dev       TEXT PRIMARY KEY,
+  user_id   TEXT NOT NULL DEFAULT '',
+  cap       INTEGER NOT NULL DEFAULT 0,
+  ready     INTEGER NOT NULL DEFAULT 0,
+  plv       INTEGER NOT NULL DEFAULT 0,
+  have      INTEGER NOT NULL DEFAULT 0,
+  bad       TEXT NOT NULL DEFAULT '',
+  free_kb   INTEGER NOT NULL DEFAULT 0,
+  state     TEXT NOT NULL DEFAULT '',
+  init_done TEXT NOT NULL DEFAULT '',
+  updated   INTEGER NOT NULL DEFAULT 0
+);
 `
 
 // 打印退役时一次性清掉的旧表。

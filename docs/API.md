@@ -87,6 +87,12 @@ agent / user 令牌不能连 MQTT；设备不能调 agent/user 的 HTTP 端点�
 | GET | `/api/user/tz` | agent/user | 当前生效时区及来源 |
 | PUT | `/api/user/tz` | agent/user | 设置/清除用户级时区，立即换帧 |
 | POST | `/api/photo` | agent/user | 上传照片：缩放 1080p、剥元数据、内容寻址；可自动上屏 |
+| POST | `/api/photo/init` | agent/user | 生成一次性 SD 初始化授权（10 分钟） |
+| DELETE | `/api/photo/{sha256}` | agent/user | 删除照片并从清单移除 |
+| GET | `/api/agent/photos` | agent/user | 列出本用户照片与清单状态 |
+| PUT | `/api/playlist` | agent/user | 设置完整播放清单 |
+| GET | `/api/device/playlist` | device | 完整清单（ETag/304），设备按能力过滤 |
+| GET | `/api/device/photo/{sha256}` | device | 照片字节，单段 Range |
 | GET | `/healthz` | 无 | 健康检查，只返回 200/503 |
 <!-- endpoints:end -->
 

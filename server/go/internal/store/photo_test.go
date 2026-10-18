@@ -84,3 +84,83 @@ func TestAppendPhotoToPlaylist(t *testing.T) {
 }
 
 func shaOf(prefix string) string { return prefix + strings.Repeat("0", 63) }
+
+func TestReplaceAndDeletePlaylist(t *testing.T) {
+	s := open(t)
+	u, _ := s.CreateUser()
+	sha1, sha2 := shaOf("a"), shaOf("b")
+	for _, sha := range []string{sha1, sha2} {
+		if _, _, _, err := s.AddPhoto(u.ID, Photo{SHA256: sha, Size: 1, Width: 1920, Height: 1080}, 10, 1000); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plv, err := s.ReplacePlaylist(u.ID, []PlaylistEntry{
+		{Kind: "board", Theme: "quota", DurationS: 20},
+		{Kind: "photo", SHA256: sha2, DurationS: 5},
+		{Kind: "photo", SHA256: sha1, DurationS: 9},
+	})
+	if err != nil || plv != 1 {
+		t.Fatalf("Replace = plv%d err%v", plv, err)
+	}
+	entries, _ := s.PlaylistEntries(u.ID)
+	if len(entries) != 3 || entries[1].SHA256 != sha2 || entries[1].Pos != 1 {
+		t.Fatalf("entries = %+v", entries)
+	}
+
+	// 删除一张：照片与清单引用都消失，剩余 pos 连续，plv 前进。
+	plv2, found, err := s.DeletePhotoWithPlaylist(u.ID, sha2)
+	if err != nil || !found || plv2 != plv+1 {
+		t.Fatalf("删除 = plv%d found%v err%v", plv2, found, err)
+	}
+	entries, _ = s.PlaylistEntries(u.ID)
+	if len(entries) != 2 || entries[0].Kind != "board" || entries[1].SHA256 != sha1 || entries[1].Pos != 1 {
+		t.Fatalf("删除后清单 = %+v", entries)
+	}
+	if _, ok, _ := s.PhotoBySHA(u.ID, sha2); ok {
+		t.Fatal("照片元数据还在")
+	}
+	// 再删一次：found=false 且 plv 不变。
+	plv3, found, err := s.DeletePhotoWithPlaylist(u.ID, sha2)
+	if err != nil || found || plv3 != 0 {
+		t.Fatalf("重复删除 = plv%d found%v err%v", plv3, found, err)
+	}
+}
+
+func TestPhotoInitAndDeviceStatus(t *testing.T) {
+	s := open(t)
+	u, _ := s.CreateUser()
+	if _, ok, _ := s.PhotoInit(u.ID); ok {
+		t.Fatal("初始不该有 token")
+	}
+	if err := s.SetPhotoInit(u.ID, PhotoInit{Token: "abcdef0123456789", Force: true, Expires: 123}); err != nil {
+		t.Fatal(err)
+	}
+	in, ok, err := s.PhotoInit(u.ID)
+	if err != nil || !ok || in.Token != "abcdef0123456789" || !in.Force || in.Expires != 123 {
+		t.Fatalf("PhotoInit = %+v ok%v err%v", in, ok, err)
+	}
+	if done, _ := s.InitDoneForUser(u.ID, "abcdef01"); done {
+		t.Fatal("还没上报就用掉了")
+	}
+	if err := s.PutDevicePhoto("dev1", DevicePhoto{
+		UserID: u.ID, Cap: true, Ready: true, PLV: 7, Have: 3,
+		Bad: []string{"a1b2c3d4", "ffffffff"}, FreeKB: 1024,
+		State: "ok", InitDone: "abcdef01", Updated: 9,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dp, ok, err := s.DevicePhoto("dev1")
+	if err != nil || !ok || !dp.Cap || !dp.Ready || dp.PLV != 7 || len(dp.Bad) != 2 ||
+		dp.State != "ok" || dp.InitDone != "abcdef01" {
+		t.Fatalf("DevicePhoto = %+v ok%v err%v", dp, ok, err)
+	}
+	if done, _ := s.InitDoneForUser(u.ID, "abcdef01"); !done {
+		t.Fatal("init_done 没匹配到")
+	}
+	if err := s.ClearPhotoInit(u.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.PhotoInit(u.ID); ok {
+		t.Fatal("token 没清掉")
+	}
+}

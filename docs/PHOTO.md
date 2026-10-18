@@ -155,6 +155,7 @@ AVI 的 `00dc` 块头要先写帧长再写字节——照片长度从清单（�
   "plv": 7,
   "init_token": "3f2a9c01d4e5b6a7",
   "init_force": false,
+  "init_expires_at": 1792300000,
   "entries": [
     {"kind": "board", "theme": "quota", "ver": 12, "duration_s": 20, "order": 0},
     {"kind": "photo", "sha256": "3f2a…", "size": 198432,
@@ -175,9 +176,15 @@ AVI 的 `00dc` 块头要先写帧长再写字节——照片长度从清单（�
 - `kind: "photo"`：`sha256` 64 位小写十六进制，`size` 与实际字节一致，
   `url` 是**相对路径**（设备用运行期 API base 拼接）。
 - `duration_s` 停留秒数，5–600。
-- `init_token` / `init_force`：用户通过 `stickbox-agent photo init` 生成的一次性
-  授权（10 分钟有效）。设备格式化成功后把 token 前 8 位写进
-  `status.photo.init_done`，服务端立即清除；超时也清除。没有 token 时不格式化。
+- 初始化授权三字段只用这一套名字：`init_token`（字符串）、
+  `init_expires_at`（unix 秒，绝对到期时间，与 `POST /api/photo/init` 返回的
+  `expires_at` 同值）、`init_force`（布尔，仅 `--force` 时为 true）。
+  三个字段**只在授权有效期内同时出现**；过期、被设备用掉（`init_done`）或撤销后
+  整组消失。没有 `init_token` 或没有 `init_expires_at` 时设备绝不格式化。
+- `init_expires_at` 由服务端按自己的时钟生成；设备用 SNTP 同步后的时间比较。
+  两边时钟差可忽略，但设备时间没对上 SNTP 时必须拒绝格式化。
+- 设备格式化成功后把 token 前 8 位写进 `status.photo.init_done`，服务端立即清除
+  授权并推进 `plv`；超时也清除。
 - 上限：1 个 board + 200 张照片；整份响应控制在 **64KB** 以内（约 25–30KB），
   设备流式解析。响应带 `Content-Length`（设备也能读 chunked，但服务端固定提供）。
 

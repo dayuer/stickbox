@@ -135,8 +135,14 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/user/tz", a.requireUser(a.handleUserTZGet))
 	mux.Handle("PUT /api/user/tz", a.requireUser(a.handleUserTZPut))
 
-	// 照片：上传原图，服务端缩放/剥元数据/内容寻址。
+	// 照片：上传原图，服务端缩放/剥元数据/内容寻址；清单与下载。
 	mux.Handle("POST /api/photo", a.requireUser(a.handlePhotoPost))
+	mux.Handle("POST /api/photo/init", a.requireUser(a.handlePhotoInit))
+	mux.Handle("DELETE /api/photo/{sha256}", a.requireUser(a.handlePhotoDelete))
+	mux.Handle("GET /api/agent/photos", a.requireUser(a.handleAgentPhotos))
+	mux.Handle("PUT /api/playlist", a.requireUser(a.handlePlaylistPut))
+	mux.Handle("GET /api/device/playlist", a.requireDevice(a.handleDevicePlaylist))
+	mux.Handle("GET /api/device/photo/{sha256}", a.requireDevice(a.handleDevicePhoto))
 
 	return drainBody(mux)
 }

@@ -36,11 +36,29 @@ type PairResender interface {
 	ResendPair(dev, keyID string)
 }
 
+// PhotoStatus 是设备 status.photo 的最小投影（P1）。
+type PhotoStatus struct {
+	Cap      bool
+	Ready    bool
+	PLV      int64
+	Have     int
+	Bad      []string
+	FreeKB   int64
+	State    string
+	InitDone string
+}
+
+// PhotoStatusSink 收 status 里的 photo 字段；实现方必须非阻塞。
+type PhotoStatusSink interface {
+	UpdatePhotoStatus(dev string, st PhotoStatus)
+}
+
 type Hook struct {
 	mqtt.HookBase
 	srv    *mqtt.Server
 	v      *auth.Verifier
 	router Router
+	photo  PhotoStatusSink
 	// ids 记录每个连接校验通过的身份，ACL 判定时直接取，不重复跑 argon2。
 	ids *idTable
 	// usage / frame 为 nil 时不补发（测试里、或还没接上的时候）。
@@ -306,9 +324,47 @@ func (h *Hook) OnPublished(cl *mqtt.Client, pk packets.Packet) {
 		if h.router != nil {
 			h.router.Seen(parts[1])
 		}
+		h.notePhotoStatus(parts[1], pk.Payload)
 	case "ack":
 		h.onAck(parts[1], pk.Payload)
 	}
+}
+
+// notePhotoStatus 解析 status 里的 photo 字段。解析很轻，落库交给 sink
+// 的后台 worker；payload 异常或过大直接忽略（不影响在线状态判断）。
+func (h *Hook) notePhotoStatus(dev string, payload []byte) {
+	if h.photo == nil || len(payload) == 0 || len(payload) > 2048 {
+		return
+	}
+	var in struct {
+		Photo *struct {
+			Cap      bool     `json:"cap"`
+			Ready    bool     `json:"ready"`
+			PLV      int64    `json:"plv"`
+			Have     int      `json:"have"`
+			Bad      []string `json:"bad"`
+			FreeKB   int64    `json:"free_kb"`
+			State    string   `json:"state"`
+			InitDone string   `json:"init_done"`
+		} `json:"photo"`
+	}
+	if err := json.Unmarshal(payload, &in); err != nil || in.Photo == nil {
+		return
+	}
+	bad := in.Photo.Bad
+	if len(bad) > 8 {
+		bad = bad[:8]
+	}
+	for i, b := range bad {
+		if len(b) > 8 {
+			bad[i] = b[:8]
+		}
+	}
+	h.photo.UpdatePhotoStatus(dev, PhotoStatus{
+		Cap: in.Photo.Cap, Ready: in.Photo.Ready, PLV: in.Photo.PLV,
+		Have: in.Photo.Have, Bad: bad, FreeKB: in.Photo.FreeKB,
+		State: in.Photo.State, InitDone: in.Photo.InitDone,
+	})
 }
 
 // onAck 处理设备回执。设备说 ok=0 表示「收到了但刻意不应用」，那是永久

@@ -19,8 +19,17 @@ type Store interface {
 	AddPhoto(userID string, p store.Photo, maxCount int, maxBytes int64) (
 		created bool, count int, bytes int64, err error)
 	PhotoBySHA(userID, sha string) (store.Photo, bool, error)
+	PhotosOfUser(userID string) ([]store.Photo, error)
 	AppendPhotoToPlaylist(userID, sha, boardTheme string, durationS int) (
 		plv int64, in bool, err error)
+	Playlist(userID string) (int64, []store.PlaylistEntry, error)
+	ReplacePlaylist(userID string, entries []store.PlaylistEntry) (int64, error)
+	DeletePhotoWithPlaylist(userID, sha string) (plv int64, found bool, err error)
+	BumpPlaylistVersion(userID string) (int64, error)
+	SetPhotoInit(userID string, in store.PhotoInit) error
+	PhotoInit(userID string) (store.PhotoInit, bool, error)
+	ClearPhotoInit(userID string) error
+	InitDoneForUser(userID, prefix string) (bool, error)
 }
 
 // Service 处理上传并落盘。文件路径：<root>/photos/<userID>/<sha256>.jpg。

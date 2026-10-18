@@ -51,13 +51,31 @@ type TZApplier interface {
 	ApplyUserTZ(userID, tz string) error
 }
 
+// PhotoStatus 提供设备最近一次 status.photo。
+type PhotoStatus interface {
+	Get(dev string) (st PhotoStatusInfo, ok bool)
+}
+
+// PhotoStatusInfo 是 device show 的 photo 投影。
+type PhotoStatusInfo struct {
+	Cap      bool
+	Ready    bool
+	PLV      int64
+	Have     int
+	Bad      []string
+	FreeKB   int64
+	State    string
+	InitDone string
+}
+
 type Handler struct {
-	st  Store
-	us  Usage
-	fr  Frames
-	rt  Runtime
-	tz  TZApplier
-	now func() time.Time
+	st    Store
+	us    Usage
+	fr    Frames
+	rt    Runtime
+	tz    TZApplier
+	photo PhotoStatus
+	now   func() time.Time
 }
 
 func NewHandler(st Store, us Usage, fr Frames, rt Runtime) *Handler {
@@ -66,6 +84,9 @@ func NewHandler(st Store, us Usage, fr Frames, rt Runtime) *Handler {
 
 // SetTZApplier 注入时区写入能力；不注入时 POST /user-tz 返回 503。
 func (h *Handler) SetTZApplier(a TZApplier) { h.tz = a }
+
+// SetPhotoStatus 注入设备照片状态（未注入时 device show 不显示这一段）。
+func (h *Handler) SetPhotoStatus(p PhotoStatus) { h.photo = p }
 
 type Report struct {
 	Dev           string                `json:"dev"`
@@ -79,6 +100,18 @@ type Report struct {
 	RegisterQuota QuotaInfo             `json:"register_quota"`
 	Usage         *UsageInfo            `json:"usage,omitempty"`
 	Frame         *FrameInfo            `json:"frame,omitempty"`
+	Photo         *PhotoInfo            `json:"photo,omitempty"`
+}
+
+type PhotoInfo struct {
+	Cap      bool     `json:"cap"`
+	Ready    bool     `json:"ready"`
+	State    string   `json:"state"`
+	PLV      int64    `json:"plv"`
+	Have     int      `json:"have"`
+	Bad      []string `json:"bad,omitempty"`
+	FreeKB   int64    `json:"free_kb"`
+	InitDone string   `json:"init_done,omitempty"`
 }
 
 type KeyInfo struct {
@@ -250,6 +283,14 @@ func (h *Handler) collect(dev string, n int) (Report, error) {
 			rep.Frame = &FrameInfo{Version: ver, Available: true}
 		} else {
 			rep.Frame = &FrameInfo{Available: false}
+		}
+	}
+	if h.photo != nil {
+		if st, ok := h.photo.Get(dev); ok {
+			rep.Photo = &PhotoInfo{
+				Cap: st.Cap, Ready: st.Ready, State: st.State, PLV: st.PLV,
+				Have: st.Have, Bad: st.Bad, FreeKB: st.FreeKB, InitDone: st.InitDone,
+			}
 		}
 	}
 	return rep, nil

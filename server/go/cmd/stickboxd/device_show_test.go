@@ -54,12 +54,18 @@ func TestFormatDeviceShow(t *testing.T) {
 			TZ: "Asia/Bangkok", ReceivedAt: time.Unix(1792241200, 0),
 		},
 		Frame: &admin.FrameInfo{Version: 12, Available: true},
+		Photo: &admin.PhotoInfo{
+			Cap: true, Ready: true, State: "ok", PLV: 7, Have: 12,
+			Bad: []string{"a1b2c3d4"}, FreeKB: 1024 * 1024, InitDone: "abcdef01",
+		},
 	}
 	out := formatDeviceShow(rep)
 	for _, want := range []string{
 		"设备 f412fa87c9e0", "用户 u1", "key-active", "active", "pending", "disabled",
 		"当前连接：key-active", "0x05", "invalid_key", "cid-1", "tries=2",
 		"五小时 37.5%", "七天 19.0%", "Asia/Bangkok", "帧版本：v12", "剩余 3/5",
+		"照片：cap=true ready=true state=ok plv=7", "已用初始化 token abcdef01",
+		"跳过：a1b2c3d4",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("输出缺少 %q：\n%s", want, out)

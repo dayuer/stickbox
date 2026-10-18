@@ -261,3 +261,27 @@ func TestServeRejectsNonLoopback(t *testing.T) {
 		}
 	}
 }
+
+type fakePhotoStatus struct{ st PhotoStatusInfo }
+
+func (f fakePhotoStatus) Get(string) (PhotoStatusInfo, bool) { return f.st, true }
+
+func TestDeviceReportPhotoStatus(t *testing.T) {
+	h := newTestHandler()
+	h.SetPhotoStatus(fakePhotoStatus{st: PhotoStatusInfo{
+		Cap: true, Ready: true, State: "ok", PLV: 7, Have: 3,
+		Bad: []string{"a1b2c3d4"}, FreeKB: 1024, InitDone: "abcdef01",
+	}})
+	req := httptest.NewRequest(http.MethodGet, "/device?dev=f412fa87c9e0", nil)
+	req.RemoteAddr = "127.0.0.1:1"
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	var rep Report
+	if err := json.Unmarshal(rr.Body.Bytes(), &rep); err != nil {
+		t.Fatal(err)
+	}
+	if rep.Photo == nil || !rep.Photo.Cap || rep.Photo.PLV != 7 ||
+		rep.Photo.State != "ok" || rep.Photo.InitDone != "abcdef01" {
+		t.Fatalf("photo = %+v", rep.Photo)
+	}
+}

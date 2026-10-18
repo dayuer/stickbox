@@ -149,3 +149,43 @@ func TestIdentityDroppedOnDisconnect(t *testing.T) {
 		t.Error("断开后身份没清掉")
 	}
 }
+
+type fakePhotoSink struct {
+	dev   string
+	st    PhotoStatus
+	calls int
+}
+
+func (f *fakePhotoSink) UpdatePhotoStatus(dev string, st PhotoStatus) {
+	f.dev, f.st, f.calls = dev, st, f.calls+1
+}
+
+func TestStatusPhotoParsed(t *testing.T) {
+	sink := &fakePhotoSink{}
+	h := &Hook{router: &fakeRouter{}, photo: sink}
+	payload := []byte(`{"photo":{"cap":true,"ready":true,"plv":7,"have":12,
+		"bad":["a1b2c3d4ee","b1","c1","d1","e1","f1","01","02","03"],
+		"free_kb":1234,"state":"ok","init_done":"abcdef01"}}`)
+	publishStatus(h, "printer/f412fa87c9e0/status", payload)
+	if sink.calls != 1 || sink.dev != "f412fa87c9e0" {
+		t.Fatalf("sink = %+v", sink)
+	}
+	st := sink.st
+	if !st.Cap || !st.Ready || st.PLV != 7 || st.Have != 12 ||
+		st.FreeKB != 1234 || st.State != "ok" || st.InitDone != "abcdef01" {
+		t.Fatalf("状态 = %+v", st)
+	}
+	if len(st.Bad) != 8 || st.Bad[0] != "a1b2c3d4" || st.Bad[7] != "02" {
+		t.Fatalf("bad = %v", st.Bad)
+	}
+}
+
+func TestStatusWithoutPhotoIgnored(t *testing.T) {
+	sink := &fakePhotoSink{}
+	h := &Hook{router: &fakeRouter{}, photo: sink}
+	publishStatus(h, "printer/f412fa87c9e0/status", []byte(`{"state":"ready"}`))
+	publishStatus(h, "printer/f412fa87c9e0/status", []byte(`{"photo":"bad"}`))
+	if sink.calls != 0 {
+		t.Fatalf("不该调用 sink：%+v", sink)
+	}
+}

@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"strings"
 )
 
 // ErrPhotoQuota 表示用户照片张数或总字节超过硬配额。
@@ -202,4 +203,241 @@ func (s *Store) PlaylistEntries(userID string) ([]PlaylistEntry, error) {
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// Playlist 返回清单版本与条目。plv=0 表示还没有清单。
+func (s *Store) Playlist(userID string) (int64, []PlaylistEntry, error) {
+	plv, err := s.PlaylistVersion(userID)
+	if err != nil {
+		return 0, nil, err
+	}
+	entries, err := s.PlaylistEntries(userID)
+	return plv, entries, err
+}
+
+// ReplacePlaylist 用完整期望状态替换清单，pos 按数组顺序重排，plv 递增一次。
+func (s *Store) ReplacePlaylist(userID string, entries []PlaylistEntry) (int64, error) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if err := replacePlaylistTx(tx, userID, entries); err != nil {
+		return 0, err
+	}
+	plv, err := bumpPlvTx(tx, userID)
+	if err != nil {
+		return 0, err
+	}
+	return plv, tx.Commit()
+}
+
+// BumpPlaylistVersion 让清单版本前进一次（初始化 token 等“清单文档变了”
+// 但条目没变的场景用）。
+func (s *Store) BumpPlaylistVersion(userID string) (int64, error) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	plv, err := bumpPlvTx(tx, userID)
+	if err != nil {
+		return 0, err
+	}
+	return plv, tx.Commit()
+}
+
+func bumpPlvTx(tx *sql.Tx, userID string) (int64, error) {
+	if _, err := tx.Exec(
+		`INSERT OR IGNORE INTO playlist_meta(user_id, plv, updated) VALUES(?,0,?)`,
+		userID, now()); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(
+		`UPDATE playlist_meta SET plv=plv+1, updated=? WHERE user_id=?`, now(), userID); err != nil {
+		return 0, err
+	}
+	var plv int64
+	err := tx.QueryRow(`SELECT plv FROM playlist_meta WHERE user_id=?`, userID).Scan(&plv)
+	return plv, err
+}
+
+func replacePlaylistTx(tx *sql.Tx, userID string, entries []PlaylistEntry) error {
+	if _, err := tx.Exec(`DELETE FROM playlist_entries WHERE user_id=?`, userID); err != nil {
+		return err
+	}
+	for i, e := range entries {
+		if _, err := tx.Exec(
+			`INSERT INTO playlist_entries(user_id,pos,kind,theme,sha256,duration_s)
+			 VALUES(?,?,?,?,?,?)`,
+			userID, i, e.Kind, e.Theme, e.SHA256, e.DurationS); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeletePhotoWithPlaylist 删除照片元数据与所有清单引用，并把剩余条目重排成
+// 0..N-1。返回新 plv 与是否真的删到了照片。
+func (s *Store) DeletePhotoWithPlaylist(userID, sha string) (int64, bool, error) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, false, err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`DELETE FROM photos WHERE user_id=? AND sha256=?`, userID, sha)
+	if err != nil {
+		return 0, false, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return 0, false, nil // defer Rollback；没有变化就不动 plv
+	}
+
+	rows, err := tx.Query(
+		`SELECT pos, kind, theme, sha256, duration_s FROM playlist_entries
+		 WHERE user_id=? AND NOT (kind='photo' AND sha256=?) ORDER BY pos`,
+		userID, sha)
+	if err != nil {
+		return 0, false, err
+	}
+	var keep []PlaylistEntry
+	for rows.Next() {
+		var e PlaylistEntry
+		if err := rows.Scan(&e.Pos, &e.Kind, &e.Theme, &e.SHA256, &e.DurationS); err != nil {
+			rows.Close()
+			return 0, false, err
+		}
+		keep = append(keep, e)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, false, err
+	}
+	if err := replacePlaylistTx(tx, userID, keep); err != nil {
+		return 0, false, err
+	}
+	plv, err := bumpPlvTx(tx, userID)
+	if err != nil {
+		return 0, false, err
+	}
+	return plv, true, tx.Commit()
+}
+
+// —— 一次性 SD 初始化授权 ——
+
+type PhotoInit struct {
+	Token   string
+	Force   bool
+	Expires int64
+}
+
+func (s *Store) SetPhotoInit(userID string, in PhotoInit) error {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	force := 0
+	if in.Force {
+		force = 1
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO photo_init(user_id, token, force, expires) VALUES(?,?,?,?)
+		 ON CONFLICT(user_id) DO UPDATE SET token=excluded.token,
+		   force=excluded.force, expires=excluded.expires`,
+		userID, in.Token, force, in.Expires)
+	return err
+}
+
+func (s *Store) PhotoInit(userID string) (PhotoInit, bool, error) {
+	var in PhotoInit
+	var force int
+	err := s.db.QueryRow(
+		`SELECT token, force, expires FROM photo_init WHERE user_id=?`, userID).
+		Scan(&in.Token, &force, &in.Expires)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PhotoInit{}, false, nil
+	}
+	in.Force = force != 0
+	return in, err == nil, err
+}
+
+func (s *Store) ClearPhotoInit(userID string) error {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	_, err := s.db.Exec(`DELETE FROM photo_init WHERE user_id=?`, userID)
+	return err
+}
+
+// —— 设备照片能力/状态 ——
+
+type DevicePhoto struct {
+	UserID   string
+	Cap      bool
+	Ready    bool
+	PLV      int64
+	Have     int
+	Bad      []string
+	FreeKB   int64
+	State    string
+	InitDone string
+	Updated  int64
+}
+
+func (s *Store) PutDevicePhoto(dev string, p DevicePhoto) error {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	cap, ready := 0, 0
+	if p.Cap {
+		cap = 1
+	}
+	if p.Ready {
+		ready = 1
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO device_photo(dev,user_id,cap,ready,plv,have,bad,free_kb,state,init_done,updated)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(dev) DO UPDATE SET user_id=excluded.user_id, cap=excluded.cap,
+		   ready=excluded.ready, plv=excluded.plv, have=excluded.have, bad=excluded.bad,
+		   free_kb=excluded.free_kb, state=excluded.state, init_done=excluded.init_done,
+		   updated=excluded.updated`,
+		dev, p.UserID, cap, ready, p.PLV, p.Have, strings.Join(p.Bad, ","),
+		p.FreeKB, p.State, p.InitDone, p.Updated)
+	return err
+}
+
+func (s *Store) DevicePhoto(dev string) (DevicePhoto, bool, error) {
+	var p DevicePhoto
+	var cap, ready int
+	var bad string
+	err := s.db.QueryRow(
+		`SELECT user_id, cap, ready, plv, have, bad, free_kb, state, init_done, updated
+		 FROM device_photo WHERE dev=?`, dev).
+		Scan(&p.UserID, &cap, &ready, &p.PLV, &p.Have, &bad,
+			&p.FreeKB, &p.State, &p.InitDone, &p.Updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DevicePhoto{}, false, nil
+	}
+	if err != nil {
+		return DevicePhoto{}, false, err
+	}
+	p.Cap, p.Ready = cap != 0, ready != 0
+	if bad != "" {
+		p.Bad = strings.Split(bad, ",")
+	}
+	return p, true, nil
+}
+
+// InitDoneForUser 判断该用户任一设备是否用掉了这个 token 前缀。
+func (s *Store) InitDoneForUser(userID, prefix string) (bool, error) {
+	var n int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM device_photo WHERE user_id=? AND init_done=?`,
+		userID, prefix).Scan(&n)
+	return n > 0, err
 }

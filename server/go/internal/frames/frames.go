@@ -73,6 +73,9 @@ type Store interface {
 	KeyByID(keyID string) (store.Key, bool, error)
 	// UserTZ 返回用户级时区设置；空串表示未设置。
 	UserTZ(userID string) (string, error)
+	// PlaylistVersion 是照片清单版本（plv），随 frame 通知下发；0 表示
+	// 还没有照片清单。老固件忽略这个字段。
+	PlaylistVersion(userID string) (int64, error)
 }
 
 // Publisher 把帧版本通知推给一台设备。
@@ -750,17 +753,29 @@ func (s *Service) Playlist(userID string) theme.Playlist {
 
 // notify 把当前播放列表发给该用户名下所有设备。失败不影响帧本身，
 // 设备重连订阅时会由 Resend 补上。
-func (s *Service) notify(userID string) {
+func (s *Service) notify(userID string) { s.notifyPlaylist(userID) }
+
+// NotifyPlaylist 供照片/清单变更时调用：帧本身没变，但 plv 变了，
+// 需要让设备去拉 /api/device/playlist。消息体复用 frame 通知，
+// 仍受 800B/8 项预算约束。
+func (s *Service) NotifyPlaylist(userID string) { s.notifyPlaylist(userID) }
+
+func (s *Service) notifyPlaylist(userID string) {
 	pl := s.Playlist(userID)
 	if len(pl) == 0 {
 		return
+	}
+	plv, err := s.store.PlaylistVersion(userID)
+	if err != nil {
+		slog.Warn("读清单版本失败", "user", userID, "err", err)
+		plv = 0
 	}
 	devs, err := s.store.DevicesOfUser(userID)
 	if err != nil {
 		slog.Warn("列设备失败，跳过帧通知", "user", userID, "err", err)
 		return
 	}
-	payload := playlistPayload(pl)
+	payload := playlistPayload(pl, plv)
 	for _, dev := range devs {
 		if err := s.pub.PublishFrame(dev, payload); err != nil {
 			slog.Warn("推送播放列表失败", "dev", dev, "err", err)
@@ -781,7 +796,7 @@ const (
 // ver 是主主题的版本，单独留着给老固件：它只认 {"ver":N}，不认 pl。
 // 新固件读 pl，忽略 ver。两个字段必须一致地描述主主题，否则老固件会
 // 取到一个它以为是最新、实际是别的主题的包。
-func playlistPayload(pl theme.Playlist) []byte {
+func playlistPayload(pl theme.Playlist, plv int64) []byte {
 	primary, _ := pl.Primary()
 	if len(pl) > MaxPlaylistItems {
 		pl = pl[:MaxPlaylistItems]
@@ -789,8 +804,9 @@ func playlistPayload(pl theme.Playlist) []byte {
 	for {
 		b, _ := json.Marshal(struct {
 			Ver uint64         `json:"ver"`
+			Plv int64          `json:"plv,omitempty"`
 			PL  theme.Playlist `json:"pl"`
-		}{primary.Ver, pl})
+		}{primary.Ver, plv, pl})
 		// 至少留主主题一项；它自己都超预算说明主题名异常，原样发出。
 		if len(b) <= MaxPayloadBytes || len(pl) <= 1 {
 			return b
@@ -826,6 +842,13 @@ func (s *Service) userLock(userID string) *sync.Mutex {
 }
 
 func (s *Service) primaryTheme() string { return s.themes[0].Theme.ID() }
+
+// PrimaryTheme 是主主题 ID：清单里的 board 条目和没有 theme 参数的老
+// 固件都用它。
+func (s *Service) PrimaryTheme() string { return s.primaryTheme() }
+
+// HasTheme 校验清单里的 theme 是否存在。
+func (s *Service) HasTheme(id string) bool { return s.hasTheme(id) }
 
 // ETag 是取帧响应的实体标签。必须带主题名：各主题的版本各自递增，
 // 两个主题都到 v7 时，只用版本号会让切换主题的设备收到假 304。
@@ -976,7 +999,12 @@ func (s *Service) Resend(dev string) {
 		s.MarkDirty(owner)
 		return
 	}
-	if err := s.pub.PublishFrame(dev, playlistPayload(pl)); err != nil {
+	plv, err := s.store.PlaylistVersion(owner)
+	if err != nil {
+		slog.Warn("读清单版本失败", "user", owner, "err", err)
+		plv = 0
+	}
+	if err := s.pub.PublishFrame(dev, playlistPayload(pl, plv)); err != nil {
 		slog.Warn("补发播放列表失败", "dev", dev, "err", err)
 	}
 }

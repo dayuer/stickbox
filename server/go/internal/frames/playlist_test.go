@@ -61,6 +61,7 @@ func lastPlaylist(t *testing.T, f *fixture, dev string) (uint64, theme.Playlist)
 	}
 	var got struct {
 		Ver uint64         `json:"ver"`
+		Plv int64          `json:"plv"`
 		PL  theme.Playlist `json:"pl"`
 	}
 	if err := json.Unmarshal(msgs[len(msgs)-1], &got); err != nil {
@@ -323,12 +324,13 @@ func TestPlaylistPayloadBudget(t *testing.T) {
 	for i := 0; i < 12; i++ {
 		pl = append(pl, theme.Slot{ID: fmt.Sprintf("theme-with-long-name-%02d-xxxxxxxxxxxxxxxx", i), Ver: uint64(100 + i), Secs: 20})
 	}
-	b := playlistPayload(pl)
+	b := playlistPayload(pl, 7)
 	if len(b) > MaxPayloadBytes {
 		t.Fatalf("消息 %d 字节，超过 %d", len(b), MaxPayloadBytes)
 	}
 	var got struct {
 		Ver uint64         `json:"ver"`
+		Plv int64          `json:"plv"`
 		PL  theme.Playlist `json:"pl"`
 	}
 	if err := json.Unmarshal(b, &got); err != nil {
@@ -336,6 +338,9 @@ func TestPlaylistPayloadBudget(t *testing.T) {
 	}
 	if len(got.PL) > MaxPlaylistItems || len(got.PL) == 0 {
 		t.Fatalf("pl 项数 = %d", len(got.PL))
+	}
+	if got.Plv != 7 {
+		t.Errorf("plv = %d，期望 7", got.Plv)
 	}
 	if got.PL[0].ID != pl[0].ID || got.Ver != pl[0].Ver {
 		t.Errorf("主主题必须在首位且 ver 等于它: ver=%d first=%+v", got.Ver, got.PL[0])
@@ -368,5 +373,33 @@ func TestRebuildSerializedPerUser(t *testing.T) {
 	pl := svc.Playlist("u1")
 	if len(pl) != 2 || pl[0].Ver != pl[1].Ver {
 		t.Fatalf("并发重建后两个主题版本应相同（每轮各提交一次）: %+v", pl)
+	}
+}
+
+// 照片清单变化时帧版本不变，但 plv 变了；NotifyPlaylist 必须发一条新的 frame。
+func TestNotifyPlaylistCarriesPLV(t *testing.T) {
+	f := newFixture(t)
+	f.st.plv = 3
+	f.rebuild("u1")
+	ver := f.version("u1")
+	f.st.plv = 4
+	f.svc.NotifyPlaylist("u1")
+
+	sent := f.pub.sent["d1"]
+	if len(sent) == 0 {
+		t.Fatal("没有通知")
+	}
+	var got struct {
+		Ver uint64 `json:"ver"`
+		Plv int64  `json:"plv"`
+	}
+	if err := json.Unmarshal(sent[len(sent)-1], &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Ver != ver || got.Plv != 4 {
+		t.Fatalf("payload = %+v，期望 ver=%d plv=4", got, ver)
+	}
+	if len(sent[len(sent)-1]) > MaxPayloadBytes {
+		t.Fatalf("消息 %d 字节超过预算", len(sent[len(sent)-1]))
 	}
 }

@@ -197,6 +197,10 @@ type fakeStore struct {
 	appendSHA   string
 	appendDur   int
 	plv         int64
+	playlist    []store.PlaylistEntry
+	init        store.PhotoInit
+	initOK      bool
+	initDone    map[string]bool
 }
 
 func (f *fakeStore) AddPhoto(string, store.Photo, int, int64) (bool, int, int64, error) {
@@ -210,6 +214,36 @@ func (f *fakeStore) AppendPhotoToPlaylist(_, sha, _ string, dur int) (int64, boo
 	f.appendCalls++
 	f.appendSHA, f.appendDur = sha, dur
 	return f.plv, true, nil
+}
+func (f *fakeStore) PhotosOfUser(string) ([]store.Photo, error) { return nil, nil }
+func (f *fakeStore) Playlist(string) (int64, []store.PlaylistEntry, error) {
+	return f.plv, f.playlist, nil
+}
+func (f *fakeStore) ReplacePlaylist(_ string, e []store.PlaylistEntry) (int64, error) {
+	f.playlist = e
+	f.plv++
+	return f.plv, nil
+}
+func (f *fakeStore) DeletePhotoWithPlaylist(string, string) (int64, bool, error) {
+	return f.plv, false, nil
+}
+func (f *fakeStore) BumpPlaylistVersion(string) (int64, error) {
+	f.plv++
+	return f.plv, nil
+}
+func (f *fakeStore) SetPhotoInit(_ string, in store.PhotoInit) error {
+	f.init, f.initOK = in, true
+	return nil
+}
+func (f *fakeStore) PhotoInit(string) (store.PhotoInit, bool, error) {
+	return f.init, f.initOK, nil
+}
+func (f *fakeStore) ClearPhotoInit(string) error {
+	f.initOK = false
+	return nil
+}
+func (f *fakeStore) InitDoneForUser(_, prefix string) (bool, error) {
+	return f.initDone[prefix], nil
 }
 
 func TestUploadWritesFileAndAppends(t *testing.T) {
