@@ -261,6 +261,19 @@ func main() {
 				ask = "连续 3 次 rate_limits 为空"
 			}
 		}
+		if s.DurationMS > 30_000 && ask == "" {
+			ask = fmt.Sprintf("单轮耗时 %.1fs > 30s（接近超时或明显变慢）",
+				float64(s.DurationMS)/1000)
+		}
+		errs := 0
+		for _, x := range all {
+			if x.Err != "" {
+				errs++
+			}
+		}
+		if ask == "" && len(all) >= 20 && float64(errs)/float64(len(all)) > 0.05 {
+			ask = fmt.Sprintf("失败率 %d/%d > 5%%", errs, len(all))
+		}
 		if ask != "" {
 			fmt.Printf("ASK: %s（停止采样，等待 master 决定）\n", ask)
 			break
@@ -379,6 +392,7 @@ type summary struct {
 	CostMax            float64    `json:"cost_max_usd"`
 	DurationMS         stat       `json:"duration_ms"`
 	PeakRSSMB          float64    `json:"peak_rss_mb_max"`
+	PeakRSSStat        rssStat    `json:"peak_rss_mb"`
 	Load1Max           float64    `json:"load1_max"`
 	Load1Avg           float64    `json:"load1_avg"`
 	Ask                string     `json:"ask,omitempty"`
@@ -397,9 +411,19 @@ type stat struct {
 	Max int64 `json:"max"`
 }
 
+// rssStat 是每轮 rusage.Maxrss 的分布（MB）。
+type rssStat struct {
+	Min float64 `json:"min"`
+	Avg float64 `json:"avg"`
+	P50 float64 `json:"p50"`
+	P95 float64 `json:"p95"`
+	Max float64 `json:"max"`
+}
+
 func summarize(all []sample, started time.Time) summary {
 	sum := summary{Started: started, Ended: time.Now(), Runs: len(all)}
 	var durs []int64
+	var rss []float64
 	var loadSum float64
 	for _, s := range all {
 		if s.OK {
@@ -425,6 +449,9 @@ func summarize(all []sample, started time.Time) summary {
 		if s.PeakRSSMB > sum.PeakRSSMB {
 			sum.PeakRSSMB = s.PeakRSSMB
 		}
+		if s.PeakRSSMB > 0 {
+			rss = append(rss, s.PeakRSSMB)
+		}
 		if s.Load1 > sum.Load1Max {
 			sum.Load1Max = s.Load1
 		}
@@ -447,6 +474,20 @@ func summarize(all []sample, started time.Time) summary {
 		}
 		sum.Load1Avg = loadSum / float64(len(durs))
 	}
+	if len(rss) > 0 {
+		sort.Float64s(rss)
+		var total float64
+		for _, v := range rss {
+			total += v
+		}
+		sum.PeakRSSStat = rssStat{
+			Min: rss[0],
+			Avg: total / float64(len(rss)),
+			P50: rss[len(rss)/2],
+			P95: rss[(len(rss)*95)/100],
+			Max: rss[len(rss)-1],
+		}
+	}
 	return sum
 }
 
@@ -455,8 +496,11 @@ func printSummary(s summary) {
 		s.Runs, s.OK, s.Skipped, s.Errors, s.RateLimitsOK)
 	fmt.Printf("  duration_ms min/avg/p50/p95/max = %d/%d/%d/%d/%d\n",
 		s.DurationMS.Min, s.DurationMS.Avg, s.DurationMS.P50, s.DurationMS.P95, s.DurationMS.Max)
-	fmt.Printf("  cost total/max = %.6f/%.6f；peak_rss=%.1fMB；load1 avg/max=%.2f/%.2f\n",
-		s.CostTotal, s.CostMax, s.PeakRSSMB, s.Load1Avg, s.Load1Max)
+	fmt.Printf("  cost total/max = %.6f/%.6f；load1 avg/max=%.2f/%.2f\n",
+		s.CostTotal, s.CostMax, s.Load1Avg, s.Load1Max)
+	fmt.Printf("  peak_rss_mb min/avg/p50/p95/max = %.1f/%.1f/%.1f/%.1f/%.1f（claude/Node 子进程）\n",
+		s.PeakRSSStat.Min, s.PeakRSSStat.Avg, s.PeakRSSStat.P50,
+		s.PeakRSSStat.P95, s.PeakRSSStat.Max)
 	fmt.Printf("  ~/.claude/projects: %d → %d bytes (%+d)，files %d → %d\n",
 		s.ProjectsStart.Bytes, s.ProjectsEnd.Bytes, s.ProjectsDeltaBytes,
 		s.ProjectsStart.Files, s.ProjectsEnd.Files)

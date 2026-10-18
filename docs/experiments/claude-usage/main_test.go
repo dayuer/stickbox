@@ -56,6 +56,11 @@ func TestSummarize(t *testing.T) {
 	if sum.PeakRSSMB != 120 || sum.Load1Max != 4 || sum.Load1Avg != 3 {
 		t.Fatalf("内存/负载 = %+v", sum)
 	}
+	if sum.PeakRSSStat.Min != 100 || sum.PeakRSSStat.Avg != 110 ||
+		sum.PeakRSSStat.P50 != 110 || sum.PeakRSSStat.P95 != 120 ||
+		sum.PeakRSSStat.Max != 120 {
+		t.Fatalf("RSS 分布 = %+v", sum.PeakRSSStat)
+	}
 	if sum.FirstErr != "超时" {
 		t.Fatalf("FirstErr = %q", sum.FirstErr)
 	}
