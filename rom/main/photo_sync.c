@@ -70,6 +70,10 @@ static int          s_last_plv = -1;
 static volatile int s_want_plv = -1;
 static volatile bool s_force_fetch;
 static volatile bool s_boot_mount;
+/* 开机照片门：打开之前 photo 任务的所有工作（挂卡/清单/下载）都不做。
+ * 只靠 s_boot_mount 只能推迟挂卡，清单/下载仍会被 MQTT/plv 通知提前拉起
+ * （r110 日志里 10–23 秒就开了清单 TLS，正是这个原因）。 */
+static volatile bool s_boot_gate_open;
 static volatile bool s_formatting;
 static volatile bool s_running;
 static volatile bool s_kick;
@@ -951,6 +955,10 @@ static void do_boot_mount(void)
 
 static void run_sync(void)
 {
+    /* 开机门没开：MQTT/plv 通知可以随便 kick，照片工作一律不做，
+     * 避免和首帧、TV 重连、MQTT 重连叠在一起。 */
+    if (!__atomic_load_n(&s_boot_gate_open, __ATOMIC_ACQUIRE)) return;
+
     /* 开机挂卡：离线时立即挂（从索引播缓存照片）；在线时推迟到清单 TLS
      * 之后，避免 sdmmc 的 6.7KB 驱动/缓冲和清单握手叠加。 */
     bool boot_deferred = false;
@@ -1040,6 +1048,8 @@ static void run_sync(void)
 
 static void kick(void)
 {
+    /* 开机门没开：通知先不建任务，等 boot_delay_task 开门后统一 kick。 */
+    if (!__atomic_load_n(&s_boot_gate_open, __ATOMIC_ACQUIRE)) return;
     if (__atomic_test_and_set(&s_running, __ATOMIC_SEQ_CST)) {
         __atomic_store_n(&s_kick, true, __ATOMIC_RELEASE);
         return;
@@ -1116,8 +1126,27 @@ void photo_sync_notify_connected(void)
 /* 开机照片任务延后：等 MQTT 连上、首帧取帧跑完，再等 30 秒。
  * 目的是让 MQTT TLS、首帧 TLS、LCD/时钟初始化的峰值先过去，照片的
  * 挂卡/清单/下载不要和它们叠在一起（第三轮板测开机 min 16.9K 的来源）。 */
-#define BOOT_WAIT_MAX_US   (90LL * 1000 * 1000)
-#define BOOT_EXTRA_DELAY_US (30LL * 1000 * 1000)
+#define BOOT_WAIT_MAX_US     (90LL * 1000 * 1000)
+#define BOOT_EXTRA_DELAY_US  (30LL * 1000 * 1000)
+#define BOOT_STABLE_S        10
+#define BOOT_STABLE_MAX_S    60
+
+static void boot_heap_log(const char *what)
+{
+    multi_heap_info_t in;
+    heap_caps_get_info(&in, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    ESP_LOGW(TAG, "%s：free=%u largest=%u min=%u", what,
+             (unsigned)in.total_free_bytes, (unsigned)in.largest_free_block,
+             (unsigned)in.minimum_free_bytes);
+}
+
+static void boot_gate_open(void)
+{
+    boot_heap_log("打开照片门");
+    __atomic_store_n(&s_boot_mount, true, __ATOMIC_RELEASE);
+    __atomic_store_n(&s_boot_gate_open, true, __ATOMIC_RELEASE);
+    kick();
+}
 
 static void boot_delay_task(void *arg)
 {
@@ -1128,23 +1157,47 @@ static void boot_delay_task(void *arg)
         if (cloud_connected() && framefetch_first_done()) break;
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
-    multi_heap_info_t in;
-    heap_caps_get_info(&in, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    ESP_LOGW(TAG, "启动条件 mqtt=%d 首帧=%d：free=%u largest=%u min=%u；"
-             "再等 %d 秒",
-             cloud_connected(), framefetch_first_done(),
-             (unsigned)in.total_free_bytes, (unsigned)in.largest_free_block,
-             (unsigned)in.minimum_free_bytes,
-             (int)(BOOT_EXTRA_DELAY_US / 1000000));
+    boot_heap_log("启动条件");
+
+    if (!cloud_connected()) {
+        /* 离线：首帧不会来，等一小段就开门，从索引播缓存照片。 */
+        ESP_LOGW(TAG, "离线启动，5 秒后开照片门");
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        boot_gate_open();
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGW(TAG, "再等 %d 秒基准", (int)(BOOT_EXTRA_DELAY_US / 1000000));
     vTaskDelay(pdMS_TO_TICKS(BOOT_EXTRA_DELAY_US / 1000));
+    boot_heap_log("30 秒基准结束，等电视流稳定");
 
-    heap_caps_get_info(&in, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    ESP_LOGW(TAG, "延迟结束，开始挂卡/拉清单：free=%u largest=%u min=%u",
-             (unsigned)in.total_free_bytes, (unsigned)in.largest_free_block,
-             (unsigned)in.minimum_free_bytes);
+    /* 系统安静：电视在拉流、没有取帧/清单在跑、客户端数没变，连续 10 秒。
+     * TV 重连（连接数变化）、取帧、MQTT 掉线都会让计时归零。最多等 60 秒。 */
+    int stable_s = 0;
+    int last_clients = -1;
+    for (int i = 0; i < BOOT_STABLE_MAX_S; i++) {
+        int c = stream_clients();
+        bool active = c > 0 &&
+            esp_timer_get_time() - stream_last_active_us() < 2000000;
+        bool busy = framefetch_busy() || !cloud_connected();
+        if (active && !busy && c == last_clients) {
+            stable_s++;
+        } else {
+            if (stable_s) ESP_LOGI(TAG, "电视流变化（clients=%d busy=%d），重新计时",
+                                   c, busy ? 1 : 0);
+            stable_s = 0;
+            last_clients = c;
+        }
+        if (stable_s >= BOOT_STABLE_S) {
+            ESP_LOGW(TAG, "电视流稳定 %d 秒，开门", stable_s);
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    if (stable_s < BOOT_STABLE_S) ESP_LOGW(TAG, "稳定等待超时，开门");
 
-    __atomic_store_n(&s_boot_mount, true, __ATOMIC_RELEASE);
-    kick();
+    boot_gate_open();
     vTaskDelete(NULL);
 }
 
@@ -1152,8 +1205,9 @@ void photo_sync_boot_mount(void)
 {
     if (xTaskCreate(boot_delay_task, "photo_boot", 3072, NULL, 1, NULL)
         != pdPASS) {
-        ESP_LOGW(TAG, "开机延迟任务创建失败，立即挂卡");
+        ESP_LOGW(TAG, "开机延迟任务创建失败，立即开门");
         __atomic_store_n(&s_boot_mount, true, __ATOMIC_RELEASE);
+        __atomic_store_n(&s_boot_gate_open, true, __ATOMIC_RELEASE);
         kick();
     }
 }
