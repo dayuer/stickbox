@@ -176,6 +176,8 @@ type Service struct {
 
 	renderSem chan struct{}
 	commitMu  sync.Mutex // 串行提交，保证版本号按提交顺序递增
+	ulMu      sync.Mutex // 保护 userLocks
+	userLocks map[string]*sync.Mutex
 
 	mu    sync.RWMutex
 	cache map[packKey]*cached
@@ -446,6 +448,11 @@ func (s *Service) Rebuild(userID string) error {
 	if !safeUserID(userID) {
 		return fmt.Errorf("frames: 非法 userID %q", userID)
 	}
+	// 同一用户的重建必须串行：worker 的防抖重建和改时区触发的同步重建可能
+	// 并发，逐主题提交会交错，导致通知里的播放列表混着新旧版本。
+	mu := s.userLock(userID)
+	mu.Lock()
+	defer mu.Unlock()
 	devs, err := s.store.DevicesOfUser(userID)
 	if err != nil {
 		return fmt.Errorf("frames: 查设备：%w", err)
@@ -725,9 +732,15 @@ func (s *Service) Playlist(userID string) theme.Playlist {
 	defer s.mu.RUnlock()
 	secs := int(s.opt.Dwell / time.Second)
 	pl := make(theme.Playlist, 0, len(s.themes))
-	for _, t := range s.themes {
+	for i, t := range s.themes {
 		c, ok := s.cache[packKey{user: userID, theme: t.Theme.ID()}]
 		if !ok {
+			if i == 0 {
+				// 主主题没有帧包（渲染失败或被淘汰）：返回空列表。
+				// 宁可不发通知，也不能让次主题顶到第一位——老固件把 ver
+				// 当主主题版本，会取到一个它以为是最新、实际是别的主题的包。
+				return nil
+			}
 			continue
 		}
 		pl = append(pl, theme.Slot{ID: t.Theme.ID(), Ver: c.ver, Secs: secs})
@@ -755,6 +768,14 @@ func (s *Service) notify(userID string) {
 	}
 }
 
+// 老固件整条 MQTT 消息缓冲只有 1024 字节，超出会整条丢弃且之后不再更新，
+// 所以 pl 必须有硬预算：最多 8 项、整条消息不超过 800 字节，超出从尾部截断
+// （主主题永远在第一位，不会被截掉）。
+const (
+	MaxPlaylistItems = 8
+	MaxPayloadBytes  = 800
+)
+
 // playlistPayload 是 frame 主题的消息体。
 //
 // ver 是主主题的版本，单独留着给老固件：它只认 {"ver":N}，不认 pl。
@@ -762,11 +783,20 @@ func (s *Service) notify(userID string) {
 // 取到一个它以为是最新、实际是别的主题的包。
 func playlistPayload(pl theme.Playlist) []byte {
 	primary, _ := pl.Primary()
-	b, _ := json.Marshal(struct {
-		Ver uint64         `json:"ver"`
-		PL  theme.Playlist `json:"pl"`
-	}{primary.Ver, pl})
-	return b
+	if len(pl) > MaxPlaylistItems {
+		pl = pl[:MaxPlaylistItems]
+	}
+	for {
+		b, _ := json.Marshal(struct {
+			Ver uint64         `json:"ver"`
+			PL  theme.Playlist `json:"pl"`
+		}{primary.Ver, pl})
+		// 至少留主主题一项；它自己都超预算说明主题名异常，原样发出。
+		if len(b) <= MaxPayloadBytes || len(pl) <= 1 {
+			return b
+		}
+		pl = pl[:len(pl)-1]
+	}
 }
 
 func (s *Service) cachedVersion(k packKey) (uint64, bool) {
@@ -780,14 +810,33 @@ func (s *Service) cachedVersion(k packKey) (uint64, bool) {
 }
 
 // primaryTheme 是主主题的 ID：老固件不带 theme 参数时给它这一个。
+// userLock 返回该用户的重建锁。锁表只增不减：每用户一个 Mutex，量级可忽略。
+func (s *Service) userLock(userID string) *sync.Mutex {
+	s.ulMu.Lock()
+	defer s.ulMu.Unlock()
+	if s.userLocks == nil {
+		s.userLocks = map[string]*sync.Mutex{}
+	}
+	m, ok := s.userLocks[userID]
+	if !ok {
+		m = &sync.Mutex{}
+		s.userLocks[userID] = m
+	}
+	return m
+}
+
 func (s *Service) primaryTheme() string { return s.themes[0].Theme.ID() }
 
 // ETag 是取帧响应的实体标签。必须带主题名：各主题的版本各自递增，
 // 两个主题都到 v7 时，只用版本号会让切换主题的设备收到假 304。
 // themeID 为空表示主主题（老固件的请求）。
+//
+// 老固件（v1.0.x）不带 theme 参数，只认纯数字 ETag "7"：给它带主题名的
+// 标签，它的 If-None-Match 永远对不上，每次开机或配对都会白下一个帧包并
+// 擦一个 flash 槽。所以只有显式指定主题时才用 "theme-ver"。
 func (s *Service) ETag(themeID string, ver uint64) string {
 	if themeID == "" {
-		themeID = s.primaryTheme()
+		return strconv.FormatUint(ver, 10)
 	}
 	return themeID + "-" + strconv.FormatUint(ver, 10)
 }

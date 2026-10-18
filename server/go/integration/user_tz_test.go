@@ -115,6 +115,5 @@ func TestUserTZSetAndClearRerendersImmediately(t *testing.T) {
 	}
 }
 
-// ETag 带主题名（见 frames.Service.ETag）：各主题版本各自递增，
-// 光一个版本号会让切主题的设备收到假 304。
-func quoted(v uint64) string { return fmt.Sprintf(`"quota-%d"`, v) }
+// 不带 theme 参数（老固件）时 ETag 是纯数字，见 frames.Service.ETag。
+func quoted(v uint64) string { return fmt.Sprintf(`"%d"`, v) }

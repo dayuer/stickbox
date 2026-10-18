@@ -167,11 +167,10 @@ func TestDeviceFrameETagAnd304(t *testing.T) {
 	if ct := rr.Header().Get("Content-Type"); ct != "application/octet-stream" {
 		t.Errorf("Content-Type = %q", ct)
 	}
-	// ETag 带主题名：各主题版本各自递增，光一个版本号会让切主题的设备
-	// 收到假 304。
+	// 老固件不带 theme 参数，ETag 必须是纯数字 "7"，否则永远不命中 304。
 	etag := rr.Header().Get("ETag")
-	if etag != `"quota-1"` {
-		t.Errorf("ETag = %q，期望 \"quota-1\"", etag)
+	if etag != `"1"` {
+		t.Errorf("ETag = %q，期望 \"1\"", etag)
 	}
 	if ver := rr.Header().Get("X-Frame-Version"); ver != "1" {
 		t.Errorf("X-Frame-Version = %q", ver)
@@ -197,7 +196,7 @@ func TestDeviceFrameETagAnd304(t *testing.T) {
 	waitFrameVersion(t, fs, userID, 2, 2*time.Second)
 
 	rr3 := get(h, "/api/device/frame", bearer(devTok))
-	if rr3.Code != 200 || rr3.Header().Get("ETag") != `"quota-2"` {
+	if rr3.Code != 200 || rr3.Header().Get("ETag") != `"2"` {
 		t.Errorf("上报后取帧 = %d ETag=%q", rr3.Code, rr3.Header().Get("ETag"))
 	}
 	hdr["If-None-Match"] = etag
@@ -292,5 +291,23 @@ func TestDeviceFrameIsPerUser(t *testing.T) {
 	}
 	if want := fmt.Sprintf("base:%.0f", fakePct(userB)); string(b.Base) != want {
 		t.Errorf("B 底帧 = %q，期望 %q", b.Base, want)
+	}
+}
+
+// 显式带 ?theme= 才用带主题的 ETag；X-Frame-Version 始终是纯数字。
+func TestDeviceFrameExplicitThemeETag(t *testing.T) {
+	h, _, fs, _ := newFrameAPI(t)
+	devTok, code := register(t, h, "f412fa87c9e0")
+	_, _, userID := mustPair(t, h, code, "")
+	waitFrameVersion(t, fs, userID, 1, 2*time.Second)
+	rr := get(h, "/api/device/frame?theme=quota", bearer(devTok))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("= %d", rr.Code)
+	}
+	if got := rr.Header().Get("ETag"); got != `"quota-1"` {
+		t.Errorf("ETag = %q", got)
+	}
+	if got := rr.Header().Get("X-Frame-Version"); got != "1" {
+		t.Errorf("X-Frame-Version = %q，必须是纯数字", got)
 	}
 }

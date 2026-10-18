@@ -2,6 +2,8 @@ package frames
 
 import (
 	"encoding/json"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -261,8 +263,8 @@ func TestETagDistinguishesThemes(t *testing.T) {
 	if svc.ETag("quota", 1) == svc.ETag("sales", 1) {
 		t.Fatal("同版本不同主题的 ETag 相同")
 	}
-	if svc.ETag("", 1) != svc.ETag("quota", 1) {
-		t.Error("空主题名应当等于主主题")
+	if svc.ETag("", 7) != "7" {
+		t.Errorf("老固件（无 theme 参数）ETag = %q，要纯数字 7", svc.ETag("", 7))
 	}
 }
 
@@ -289,5 +291,82 @@ func TestDropRemovesAllThemes(t *testing.T) {
 		if _, _, ok := svc.Current("u1", id); ok {
 			t.Errorf("%s 的帧包没清掉", id)
 		}
+	}
+}
+
+// 老固件回归：主主题缺帧包时，Playlist 必须为空，次主题不能顶到第一位，
+// 否则通知里的 ver 会变成次主题版本。
+func TestPlaylistPrimaryMissingNeverPromotesSecondary(t *testing.T) {
+	f := newFixture(t)
+	f.svc.Close()
+	sl := &fakeSales{ok: true, rep: salesReport(), at: f.currentTime().Add(-time.Minute)}
+	svc := twoThemes(t, f, sl)
+	if err := svc.Rebuild("u1"); err != nil {
+		t.Fatal(err)
+	}
+	svc.mu.Lock()
+	delete(svc.cache, packKey{user: "u1", theme: "quota"})
+	svc.mu.Unlock()
+	if pl := svc.Playlist("u1"); len(pl) != 0 {
+		t.Fatalf("主主题缺失时播放列表 = %+v，要空", pl)
+	}
+	before := len(f.pub.sent["d1"])
+	svc.notify("u1")
+	if len(f.pub.sent["d1"]) != before {
+		t.Error("主主题缺失时不应发通知")
+	}
+}
+
+// 老固件回归：消息缓冲 1024 字节，pl 最多 8 项且整条 ≤800 字节，ver 恒为主主题，主主题恒在首位。
+func TestPlaylistPayloadBudget(t *testing.T) {
+	var pl theme.Playlist
+	for i := 0; i < 12; i++ {
+		pl = append(pl, theme.Slot{ID: fmt.Sprintf("theme-with-long-name-%02d-xxxxxxxxxxxxxxxx", i), Ver: uint64(100 + i), Secs: 20})
+	}
+	b := playlistPayload(pl)
+	if len(b) > MaxPayloadBytes {
+		t.Fatalf("消息 %d 字节，超过 %d", len(b), MaxPayloadBytes)
+	}
+	var got struct {
+		Ver uint64         `json:"ver"`
+		PL  theme.Playlist `json:"pl"`
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.PL) > MaxPlaylistItems || len(got.PL) == 0 {
+		t.Fatalf("pl 项数 = %d", len(got.PL))
+	}
+	if got.PL[0].ID != pl[0].ID || got.Ver != pl[0].Ver {
+		t.Errorf("主主题必须在首位且 ver 等于它: ver=%d first=%+v", got.Ver, got.PL[0])
+	}
+}
+
+// X-Frame-Version 与老固件的 ETag 用纯数字；v1.0.0 槽头版本串只有 12 字节。
+func TestETagLegacyNumeric(t *testing.T) {
+	f := newFixture(t)
+	if got := f.svc.ETag("", 123456789012); got != "123456789012" {
+		t.Errorf("ETag = %q", got)
+	}
+	if got := f.svc.ETag("sales", 3); got != "sales-3" {
+		t.Errorf("显式主题 ETag = %q", got)
+	}
+}
+
+// 同一用户并发 Rebuild 不能交错：每轮结束后各主题版本一致递增。
+func TestRebuildSerializedPerUser(t *testing.T) {
+	f := newFixture(t)
+	f.svc.Close()
+	sl := &fakeSales{ok: true, rep: salesReport(), at: f.currentTime().Add(-time.Minute)}
+	svc := twoThemes(t, f, sl)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = svc.Rebuild("u1") }()
+	}
+	wg.Wait()
+	pl := svc.Playlist("u1")
+	if len(pl) != 2 || pl[0].Ver != pl[1].Ver {
+		t.Fatalf("并发重建后两个主题版本应相同（每轮各提交一次）: %+v", pl)
 	}
 }
