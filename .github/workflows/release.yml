@@ -1,22 +1,31 @@
-# 打 v* tag 时发布：
+# 手动触发（workflow_dispatch）发布：
 #   - 固件（ESP-IDF 5.5 容器，OTA 签名）
 #   - stickboxd Docker 镜像（ghcr.io/<owner>/stickboxd:<tag>）
 #   - stickbox-agent 六平台二进制 + SHA256SUMS
 #
-# 仓库 secret：OTA_SIGNING_KEY（PEM 私钥全文）。
-# 详见 docs/RELEASE.md。所有 action 钉到 commit SHA。
+# 正式发布用「本机签名发布」（docs/RELEASE.md 第 3 节）：签名私钥由用户
+# 保管，不放进 GitHub secret。这个工作流只给配置了 OTA_SIGNING_KEY 的
+# 仓库/环境使用；没有 secret 时手动运行会在「检查发布配置」一步明确失败。
+#
+# 为什么不再是 push tag 自动触发：没有 secret 时每次打 tag 都会产生一次
+# 必然失败的 Release 运行；而正式路径改为本机签名后，tag 推送不应再自动
+# 产出发布。手动触发让发布动作显式、可重跑，也避免误触发。
 name: release
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（如 v1.0.0，必须已推送到仓库）'
+        required: true
+        type: string
 
 permissions:
   contents: write
   packages: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag }}
   cancel-in-progress: false
 
 jobs:
@@ -24,11 +33,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      TAG: ${{ github.ref_name }}
+      TAG: ${{ inputs.tag }}
     steps:
       - name: 检出
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ inputs.tag }}
           fetch-depth: 0
 
       - name: 检查发布配置
@@ -43,7 +53,7 @@ jobs:
             exit 1
           }
           test -n "${OTA_SIGNING_KEY:-}" || {
-            echo "::error::缺少仓库 secret OTA_SIGNING_KEY"
+            echo "::error::缺少仓库 secret OTA_SIGNING_KEY。正式发布请按 docs/RELEASE.md 在本机签名；只有配置了该 secret 的环境才使用本工作流。"
             exit 1
           }
         env:
