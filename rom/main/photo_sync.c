@@ -73,8 +73,10 @@ static volatile bool s_boot_mount;
 static volatile bool s_formatting;
 static volatile bool s_running;
 static volatile bool s_kick;
-static int          s_fails[PHOTO_PL_MAX_PHOTOS];
-static int64_t      s_next_try_us[PHOTO_PL_MAX_PHOTOS];
+/* 失败计数/下次重试（绝对 uptime 秒）。用 32 位秒而不是 64 位微秒：
+ * 200 项从 2.4KB 降到 1KB。 */
+static uint8_t      s_fails[PHOTO_PL_MAX_PHOTOS];
+static uint32_t     s_next_try_s[PHOTO_PL_MAX_PHOTOS];
 static bool         s_ready_prev;
 static char         s_used_token[65];
 static uint8_t      s_buf[READ_CHUNK];
@@ -731,7 +733,7 @@ finish:
 
 static void download_missing(photostore_t *store)
 {
-    int64_t next = 0;
+    uint32_t next = 0;   /* 绝对 uptime 秒 */
     for (int i = 0; i < s_pl.photo_count; i++) {
         const photo_pl_entry_t *e = &s_pl.photos[i];
         char hex[65];
@@ -748,40 +750,37 @@ static void download_missing(photostore_t *store)
         /* 新 plv 到了：立刻收工，别拿旧清单继续下。 */
         if (__atomic_load_n(&s_want_plv, __ATOMIC_ACQUIRE) != s_last_plv) return;
 
-        int64_t now = esp_timer_get_time();
-        if (s_next_try_us[i] > now) {
-            if (!next || s_next_try_us[i] < next) next = s_next_try_us[i];
+        uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000);
+        if (s_next_try_s[i] > now_s) {
+            if (!next || s_next_try_s[i] < next) next = s_next_try_s[i];
             continue;
         }
 
         int r = download_one(e, store);
         if (r == DL_OK) {
             s_fails[i] = 0;
-            s_next_try_us[i] = 0;
+            s_next_try_s[i] = 0;
             /* 新照片已提交：让播放器马上能把它排进序列。 */
             __atomic_add_fetch(&s_play_gen, 1, __ATOMIC_RELEASE);
             /* 一轮只下一张：维护窗口（停流握手）一次只有几秒，下完
              * 立刻恢复播放，1 秒后再为下一张开一个窗口。 */
-            int64_t t = esp_timer_get_time() + RETRY_SOON_US;
-            if (!next || t < next) next = t;
+            next = now_s + 1;
             break;
         }
         if (r == DL_NOSPACE) {
             /* 卡满不会自己变好；按清单顺序跳过并报到 bad。 */
             bad_add(hex);
-            s_next_try_us[i] = 0;
+            s_next_try_s[i] = 0;
             continue;
         }
         if (r == DL_PREEMPT) {
-            int64_t t = esp_timer_get_time() + RETRY_SOON_US;
-            s_next_try_us[i] = t;
-            if (!next || t < next) next = t;
+            s_next_try_s[i] = now_s + 1;
+            next = s_next_try_s[i];
             break;
         }
         if (r == DL_RESTART) {
-            int64_t t = esp_timer_get_time() + 100000;
-            s_next_try_us[i] = 0;
-            if (!next || t < next) next = t;
+            s_next_try_s[i] = 0;
+            next = now_s;   /* 立即（下面会钳到 now+100ms） */
             break;
         }
 
@@ -790,17 +789,21 @@ static void download_missing(photostore_t *store)
         if (bs < 0) {
             ESP_LOGW(TAG, "照片 %.8s 连续三次失败，标记跳过", hex);
             bad_add(hex);
-            s_next_try_us[i] = 0;
+            s_next_try_s[i] = 0;
             abort_put();
         } else {
-            int64_t t = esp_timer_get_time() + (int64_t)bs * 1000000LL;
-            s_next_try_us[i] = t;
-            if (!next || t < next) next = t;
+            s_next_try_s[i] = now_s + (uint32_t)bs;
+            if (!next || s_next_try_s[i] < next) next = s_next_try_s[i];
         }
     }
 
-    if (next) schedule_retry(next);
-    else cancel_retry();
+    if (next) {
+        int64_t at = (int64_t)next * 1000000;
+        if (at <= esp_timer_get_time()) at = esp_timer_get_time() + 100000;
+        schedule_retry(at);
+    } else {
+        cancel_retry();
+    }
 }
 
 /* ------------------------------------------------------------ 应用清单 */
@@ -902,7 +905,7 @@ static void apply_playlist(void)
 static void reset_attempts(void)
 {
     memset(s_fails, 0, sizeof s_fails);
-    memset(s_next_try_us, 0, sizeof s_next_try_us);
+    memset(s_next_try_s, 0, sizeof s_next_try_s);
 }
 
 static void run_sync(void)
@@ -1010,7 +1013,7 @@ static void run_sync(void)
                  (unsigned)in.total_free_bytes, (unsigned)in.largest_free_block,
                  (unsigned)in.minimum_free_bytes,
                  (unsigned)sizeof(s_pl), (unsigned)sizeof(s_buf),
-                 (unsigned)(sizeof(s_fails) + sizeof(s_next_try_us)),
+                 (unsigned)(sizeof(s_fails) + sizeof(s_next_try_s)),
                  (unsigned)sizeof(s_pj));
     }
 }
@@ -1092,10 +1095,49 @@ void photo_sync_notify_connected(void)
     kick();
 }
 
-void photo_sync_boot_mount(void)
+/* 开机照片任务延后：等 MQTT 连上、首帧取帧跑完，再等 30 秒。
+ * 目的是让 MQTT TLS、首帧 TLS、LCD/时钟初始化的峰值先过去，照片的
+ * 挂卡/清单/下载不要和它们叠在一起（第三轮板测开机 min 16.9K 的来源）。 */
+#define BOOT_WAIT_MAX_US   (90LL * 1000 * 1000)
+#define BOOT_EXTRA_DELAY_US (30LL * 1000 * 1000)
+
+static void boot_delay_task(void *arg)
 {
+    (void)arg;
+    int64_t t0 = esp_timer_get_time();
+    ESP_LOGI(TAG, "开机照片任务延后：等 MQTT + 首帧完成");
+    while (esp_timer_get_time() - t0 < BOOT_WAIT_MAX_US) {
+        if (cloud_connected() && framefetch_first_done()) break;
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    multi_heap_info_t in;
+    heap_caps_get_info(&in, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    ESP_LOGW(TAG, "启动条件 mqtt=%d 首帧=%d：free=%u largest=%u min=%u；"
+             "再等 %d 秒",
+             cloud_connected(), framefetch_first_done(),
+             (unsigned)in.total_free_bytes, (unsigned)in.largest_free_block,
+             (unsigned)in.minimum_free_bytes,
+             (int)(BOOT_EXTRA_DELAY_US / 1000000));
+    vTaskDelay(pdMS_TO_TICKS(BOOT_EXTRA_DELAY_US / 1000));
+
+    heap_caps_get_info(&in, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    ESP_LOGW(TAG, "延迟结束，开始挂卡/拉清单：free=%u largest=%u min=%u",
+             (unsigned)in.total_free_bytes, (unsigned)in.largest_free_block,
+             (unsigned)in.minimum_free_bytes);
+
     __atomic_store_n(&s_boot_mount, true, __ATOMIC_RELEASE);
     kick();
+    vTaskDelete(NULL);
+}
+
+void photo_sync_boot_mount(void)
+{
+    if (xTaskCreate(boot_delay_task, "photo_boot", 3072, NULL, 1, NULL)
+        != pdPASS) {
+        ESP_LOGW(TAG, "开机延迟任务创建失败，立即挂卡");
+        __atomic_store_n(&s_boot_mount, true, __ATOMIC_RELEASE);
+        kick();
+    }
 }
 
 int photo_sync_status_json(char *out, size_t cap)

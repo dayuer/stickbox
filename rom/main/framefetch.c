@@ -23,6 +23,7 @@
 #include "freertos/task.h"
 
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -66,6 +67,7 @@ typedef enum {
  * 所以用原子的 test-and-set 而不是 if(flag){flag=1}：两个任务同时挤进来会
  * 各自 fp_write_begin() 到同一个槽上，把帧包写成两份交错的字节。 */
 static volatile bool s_fetching;
+static volatile bool s_first_done;
 static volatile bool s_again;      /* 取帧期间又收到通知 */
 /* 取帧期间收到的通知版本。同一版本只算一次；收完再和已激活版本比对，
  * 相同就丢掉——避免开机时“取帧 + 两条 v9 通知”叠成三次 TLS。 */
@@ -392,8 +394,26 @@ static void fetch_task(void *arg)
             ESP_LOGI(TAG, "取帧期间的通知版本 %s 已激活，不再补拉", s_again_ver);
         }
     }
+    bool first;
+    taskENTER_CRITICAL(&s_ver_mux);
+    first = !s_first_done;
+    s_first_done = true;
+    taskEXIT_CRITICAL(&s_ver_mux);
+    if (first) {
+        multi_heap_info_t in;
+        heap_caps_get_info(&in, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        ESP_LOGW(TAG, "首帧取帧结束：free=%u largest=%u min=%u",
+                 (unsigned)in.total_free_bytes,
+                 (unsigned)in.largest_free_block,
+                 (unsigned)in.minimum_free_bytes);
+    }
     __atomic_clear(&s_fetching, __ATOMIC_SEQ_CST);
     vTaskDelete(NULL);
+}
+
+bool framefetch_first_done(void)
+{
+    return __atomic_load_n(&s_first_done, __ATOMIC_ACQUIRE);
 }
 
 static void set_target(const char *ver)
