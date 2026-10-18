@@ -39,7 +39,8 @@ static const char *TAG = "photoplay";
  * 服务端照片 ≤250KB，正常的都能过；超限的条目不播。 */
 #define PHOTO_PLAY_MAX_FRAME (FP_MAX_PACK + BAND_CAP + 8)
 
-static pp_seq_t   s_seq;
+/* 播放计划只存下标，照片本体在 photo_sync 的 s_pl 里（省 8.8KB 静态 RAM）。 */
+static pp_plan_t  s_plan;
 static pp_state_t s_work;
 
 typedef struct {
@@ -60,6 +61,9 @@ static int      s_bad_n;
 static uint8_t  s_fail_sha[32];
 static int      s_fail_count;
 static volatile bool s_force_rebuild;
+static volatile bool s_pause_req;
+static volatile bool s_paused;
+static int64_t       s_pause_t0;
 
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -101,8 +105,9 @@ static void hold_del_locked(const uint8_t sha[32])
 
 static void publish(void)
 {
+    bool allow = !(s_paused || s_pause_req);
     taskENTER_CRITICAL(&s_mux);
-    s_pub.has_photo = s_work.has_photo;
+    s_pub.has_photo = allow && s_work.has_photo;
     memcpy(s_pub.sha256, s_work.sha256, 32);
     s_pub.size = s_work.size;
     taskEXIT_CRITICAL(&s_mux);
@@ -134,44 +139,26 @@ static bool playable_cb(const pp_item_t *it, void *arg)
 
 /* ------------------------------------------------------------ 重建 */
 
-static void visit_cb(void *arg, const photo_pl_entry_t *e,
-                     uint16_t board_s, bool has_board)
-{
-    (void)arg;
-    if (!e) {
-        pp_seq_begin(&s_seq, has_board ? board_s : 0);
-        return;
-    }
-    pp_seq_add_photo(&s_seq, e->sha256, e->size, e->duration_s, e->order);
-}
-
-static bool walk_cb(const photo_entry_t *e, void *arg)
-{
-    (void)arg;
-    pp_seq_add_photo(&s_seq, e->sha256, e->size, e->duration_s, e->order);
-    return true;
-}
-
 static void rebuild(void)
 {
-    pp_seq_clear(&s_seq);
-    bool from_pl = photo_sync_playlist_visit(visit_cb, NULL);
-    if (!from_pl) {
-        /* 还没有清单（刚开机/断网）：用 SD 索引，board 默认 20s；
-         * 索引按 order 排序。在线清单的数组顺序是权威，不排序。 */
-        pp_seq_begin(&s_seq, 0);
-        photostore_t *store = photo_sd_store();
-        if (store && photo_io_store_lock(1000)) {
-            uint32_t bad = 0;
-            photostore_walk(store, walk_cb, NULL, &bad);
-            photo_io_store_unlock();
-        }
-        pp_seq_sort(&s_seq);
+    if (!photo_sync_playlist_online()) photo_sync_build_offline();
+
+    const photo_pl_t *pl = NULL;
+    bool online = false;
+    bool locked = photo_sync_playlist_lock(&pl, &online, 2000);
+    if (locked) {
+        if (online) pp_plan_from_playlist(&s_plan, pl);
+        else pp_plan_from_playlist_sorted(&s_plan, pl);
+    } else {
+        pp_plan_clear(&s_plan);   /* 拿不到清单锁：这轮只播 board */
     }
-    pp_rebase(&s_work, &s_seq, esp_timer_get_time(), playable_cb, NULL);
+
+    pp_rebase(&s_work, pl, &s_plan, esp_timer_get_time(), playable_cb, NULL);
     publish();
-    ESP_LOGI(TAG, "序列重建：%d 项，当前=%s", s_seq.n,
-             s_work.has_photo ? "照片" : "board");
+    if (locked) photo_sync_playlist_unlock();
+
+    ESP_LOGI(TAG, "序列重建：照片 %d 张（%s），当前=%s", s_plan.n,
+             online ? "在线" : "索引", s_work.has_photo ? "照片" : "board");
 }
 
 /* ------------------------------------------------------------ 任务 */
@@ -183,6 +170,25 @@ static void play_task(void *arg)
     bool built = false;
 
     for (;;) {
+        /* 维护窗口：切回 board，冻结当前项的计时，等网络工作做完。 */
+        if (s_pause_req) {
+            if (!s_paused) {
+                s_paused = true;
+                s_pause_t0 = esp_timer_get_time();
+                publish();   /* publish() 看到 paused，会强制 board */
+                ESP_LOGI(TAG, "照片播放暂停，让出给清单/下载");
+            }
+        } else if (s_paused) {
+            s_paused = false;
+            int64_t now = esp_timer_get_time();
+            /* 只冻结暂停前那一项的计时；暂停期间重建过（start_us 已是
+             * 新起点）就不要再加一遍。 */
+            if (s_work.start_us < s_pause_t0)
+                s_work.start_us += now - s_pause_t0;
+            publish();
+            ESP_LOGI(TAG, "照片播放恢复");
+        }
+
         uint32_t g = photo_sync_play_gen();
         if (!built || g != gen || s_force_rebuild) {
             s_force_rebuild = false;
@@ -190,8 +196,16 @@ static void play_task(void *arg)
             built = true;
             rebuild();
         }
-        if (pp_tick(&s_work, &s_seq, esp_timer_get_time(), playable_cb, NULL))
-            publish();
+        if (!s_paused) {
+            const photo_pl_t *pl = NULL;
+            bool online = false;
+            if (photo_sync_playlist_lock(&pl, &online, 100)) {
+                if (pp_tick(&s_work, pl, &s_plan, esp_timer_get_time(),
+                            playable_cb, NULL))
+                    publish();
+                photo_sync_playlist_unlock();
+            }
+        }
         vTaskDelay(pdMS_TO_TICKS(PLAY_TICK_MS));
     }
 }
@@ -211,9 +225,31 @@ void photo_play_notify_playlist(void)
     s_force_rebuild = true;
 }
 
+bool photo_play_pause(uint32_t max_wait_ms)
+{
+    s_pause_req = true;
+    int64_t t0 = esp_timer_get_time();
+    while (esp_timer_get_time() - t0 < (int64_t)max_wait_ms * 1000) {
+        if (s_paused && photo_play_holds() == 0) {
+            /* 再等一拍，让 stream 的下一个 board 帧把读缓冲释放掉。
+             * 1200ms 覆盖 1fps（帧间隔 1s）。 */
+            vTaskDelay(pdMS_TO_TICKS(1200));
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    return false;
+}
+
+void photo_play_resume(void)
+{
+    s_pause_req = false;
+}
+
 bool photo_play_frame(photo_play_frame_t *out)
 {
     if (!out) return false;
+    if (s_pause_req || s_paused) return false;
     if (cloud_pair_pending() || photo_sync_formatting() ||
         photo_sd_state() != PHOTO_READY) return false;
 
@@ -312,6 +348,7 @@ void photo_play_mark_bad(const uint8_t sha[32], const char *why)
 
 bool photo_is_playing(void)
 {
+    if (s_pause_req || s_paused) return false;
     if (cloud_pair_pending() || photo_sync_formatting() ||
         photo_sd_state() != PHOTO_READY) return false;
     bool p;

@@ -1,16 +1,13 @@
 /*
  * 照片播放序列（M3）——纯逻辑，不依赖 ESP-IDF。
  *
- * 序列来自两处：
- *   - 在线：M2 拉到的清单（board + photos，数组顺序权威）
- *   - 离线：SD 索引（board 默认 20s，照片按 order 排序）
+ * **不复制清单。** 播放计划只是一组指向 photo_pl_t.photos 的下标：
+ *   pos 0       board（虚拟项，时长取清单/默认 20s）
+ *   pos 1..n    plan->ix[pos-1] 指向清单里的照片
+ * 这样在线清单和播放序列共用同一份 8KB 数据，不再多占 8.8KB 静态 RAM。
  *
- * 时间用调用方注入的单调微秒（板上是 esp_timer_get_time()，host 测试是假
- * 时钟）。调度只做「当前项/下一项」的决定；真正的发送在 stream.c 的帧
- * 边界。切换因此最多晚一个帧间隔。
- *
- * 不可播的条目（文件缺失、下载失败、超过 AVI 单帧上限）整条跳过，不占
- * 停留时间。board 永远可播（最差是预置/状态页）。
+ * 时间用调用方注入的单调微秒。不可播的条目（文件缺失、bad、超单帧上限）
+ * 整条跳过，不占停留时间。board 永远可播。
  */
 #pragma once
 #include <stdbool.h>
@@ -19,7 +16,6 @@
 #include "photo_json.h"
 #include "photostore.h"
 
-#define PP_MAX_ITEMS       (PHOTO_PL_MAX_PHOTOS + 1)
 #define PP_DEFAULT_BOARD_S 20
 #define PP_DEFAULT_PHOTO_S 8
 
@@ -29,6 +25,13 @@ typedef enum {
 } pp_kind_t;
 
 typedef struct {
+    uint16_t ix[PHOTO_PL_MAX_PHOTOS];   /* 播放顺序：清单 photos[] 的下标 */
+    uint16_t n;
+    uint16_t board_s;
+    bool     has_board;
+} pp_plan_t;
+
+typedef struct {
     uint8_t  kind;
     uint8_t  sha256[32];
     uint32_t size;
@@ -36,42 +39,32 @@ typedef struct {
     uint16_t order;
 } pp_item_t;
 
-typedef struct {
-    pp_item_t items[PP_MAX_ITEMS];
-    int       n;
-} pp_seq_t;
-
-/* 当前项是否可播。board 由回调返回 true；照片检查索引/大小/本地 bad。 */
 typedef bool (*pp_playable_cb)(const pp_item_t *it, void *arg);
 
 typedef struct {
-    int      pos;
+    int      pos;          /* 0=board, 1..n=照片 */
     int64_t  start_us;
     bool     has_photo;
     uint8_t  sha256[32];
     uint32_t size;
 } pp_state_t;
 
-void pp_seq_clear(pp_seq_t *s);
-/* 手工构建（播放器从清单逐项 visit / 从索引 walk 时用）。 */
-void pp_seq_begin(pp_seq_t *s, uint16_t board_s);
-void pp_seq_add_photo(pp_seq_t *s, const uint8_t sha[32], uint32_t size,
-                      uint16_t dur, uint16_t order);
-void pp_seq_sort(pp_seq_t *s);
+void pp_plan_clear(pp_plan_t *p);
+/* 在线清单：数组顺序权威，不排序。 */
+int  pp_plan_from_playlist(pp_plan_t *p, const photo_pl_t *pl);
+/* 离线索引：按 index 里的 order 稳定排序。 */
+int  pp_plan_from_playlist_sorted(pp_plan_t *p, const photo_pl_t *pl);
 
-int  pp_seq_from_playlist(pp_seq_t *s, const photo_pl_t *pl);
-int  pp_seq_from_index(pp_seq_t *s, const photo_entry_t *e, int n,
-                       uint16_t board_s);
-
-void pp_reset(pp_state_t *st, const pp_seq_t *s, int64_t now_us,
-              pp_playable_cb cb, void *arg);
-/* 到点/当前项失效则推进；返回是否换了项。 */
-bool pp_tick(pp_state_t *st, const pp_seq_t *s, int64_t now_us,
-             pp_playable_cb cb, void *arg);
-/* 序列重建后调用：当前照片仍在新序列且可播就保持剩余时间，否则从
- * 第一项（board）重新开始。 */
-void pp_rebase(pp_state_t *st, const pp_seq_t *s, int64_t now_us,
-               pp_playable_cb cb, void *arg);
-
-bool pp_current(const pp_state_t *st, const pp_seq_t *s, pp_item_t *out);
+/* 取 pos 处条目；board 不依赖 pl。pl 为 NULL 且 pos>0 返回 false。 */
+bool pp_item_at(const photo_pl_t *pl, const pp_plan_t *p, int pos,
+                pp_item_t *out);
 uint32_t pp_duration_s(const pp_item_t *it);
+
+void pp_reset(pp_state_t *st, const photo_pl_t *pl, const pp_plan_t *p,
+              int64_t now_us, pp_playable_cb cb, void *arg);
+bool pp_tick(pp_state_t *st, const photo_pl_t *pl, const pp_plan_t *p,
+             int64_t now_us, pp_playable_cb cb, void *arg);
+void pp_rebase(pp_state_t *st, const photo_pl_t *pl, const pp_plan_t *p,
+               int64_t now_us, pp_playable_cb cb, void *arg);
+bool pp_current(const pp_state_t *st, const photo_pl_t *pl,
+                const pp_plan_t *p, pp_item_t *out);

@@ -23,6 +23,7 @@
 #include "freertos/task.h"
 
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -37,14 +38,18 @@
 #include "photo_policy.h"
 #include "photo_sd.h"
 #include "photostore.h"
+#include "stream.h"
 
 static const char *TAG = "photo";
 
 #define TASK_STACK       8192
 #define TASK_PRIO        2
-#define READ_CHUNK       4096
+#define READ_CHUNK       2048   /* HTTP 读缓冲；解析器/写卡都按任意分片处理 */
 #define PL_MAX_BYTES     65536
-#define MIN_FREE_HEAP    60000
+/* 网络操作的堆门槛：下载/清单会再开一次 TLS，必须给 40KB 硬底线留余量。
+ * 低于门槛时任务先暂停照片播放、等堆回到门槛以上再开连接。 */
+#define MIN_FREE_HEAP    90000
+#define NET_WAIT_MS      10000
 #define FRAME_WAIT_MS    5000
 /* 清单拉取持 net 时，如果取帧在等：最多再占 500ms 就断流让路。
  * 加一次 HTTPS 连接阶段（正常 <1s），看板帧被挡的上界约 1.5s。
@@ -268,13 +273,7 @@ static int fetch_playlist(bool *notmod)
         ESP_LOGI(TAG, "API 地址还没就绪，稍后再拉清单");
         return -1;
     }
-    if (esp_get_free_heap_size() < MIN_FREE_HEAP) {
-        ESP_LOGW(TAG, "空闲堆 %u < %d，本轮不拉清单",
-                 (unsigned)esp_get_free_heap_size(), MIN_FREE_HEAP);
-        return -1;
-    }
-
-    /* 取帧优先：已经开始/正在等锁时，这轮清单直接让路。 */
+    /* 堆门槛放到 quiet 排空之后（见下），这里只看取帧。 */
     if (framefetch_busy()) return -3;
 
     char url[160];
@@ -306,6 +305,24 @@ static int fetch_playlist(bool *notmod)
         esp_http_client_cleanup(h);
         return -1;
     }
+    /* 停发几帧，排空 WiFi 发送缓冲再握手；期间照片播放已暂停。 */
+    stream_quiet(true);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    for (int i = 0; i < NET_WAIT_MS / 100 &&
+                    esp_get_free_heap_size() < MIN_FREE_HEAP; i++)
+        vTaskDelay(pdMS_TO_TICKS(100));
+    if (esp_get_free_heap_size() < MIN_FREE_HEAP) {
+        ESP_LOGW(TAG, "停流后堆仍只有 %u < %d，清单延后",
+                 (unsigned)esp_get_free_heap_size(), MIN_FREE_HEAP);
+        stream_quiet(false);
+        photo_io_net_unlock();
+        esp_http_client_cleanup(h);
+        return -3;
+    }
+    ESP_LOGI(TAG, "清单 TLS 开始，堆 %u 最大块 %u",
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL |
+                                                        MALLOC_CAP_8BIT));
 
     int64_t lock_t0 = esp_timer_get_time();
     bool pl_locked = false;
@@ -385,8 +402,13 @@ static int fetch_playlist(bool *notmod)
 done:
     if (pl_locked && s_pl_mux) xSemaphoreGive(s_pl_mux);
     esp_http_client_close(h);
+    stream_quiet(false);
     photo_io_net_unlock();
     esp_http_client_cleanup(h);
+    ESP_LOGI(TAG, "清单 TLS 结束，堆 %u 最大块 %u",
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL |
+                                                        MALLOC_CAP_8BIT));
     return ret;
 }
 
@@ -435,6 +457,7 @@ static bool try_format(void)
     if (!nvs_save_used(s_used_token))
         ESP_LOGW(TAG, "记下已用 token 失败（重启后可能重复使用）");
     set_init_done(s_used_token);
+    __atomic_add_fetch(&s_play_gen, 1, __ATOMIC_RELEASE);
     ESP_LOGW(TAG, "格式化完成，init_done=%.8s", s_used_token);
     return true;
 }
@@ -442,10 +465,11 @@ static bool try_format(void)
 /* ------------------------------------------------------------ GC / 元数据 */
 
 static const photo_pl_t *s_gc_pl;
+typedef struct { photostore_t *store; bool changed; } gc_ctx_t;
 
 static bool gc_cb(const photo_entry_t *e, void *arg)
 {
-    photostore_t *store = arg;
+    gc_ctx_t *c = arg;
     const photo_pl_entry_t *p = pl_find(s_gc_pl, e->sha256);
     if (!p) {
         char hex[65];
@@ -456,11 +480,14 @@ static bool gc_cb(const photo_entry_t *e, void *arg)
             return true;
         }
         ESP_LOGI(TAG, "回收不在清单里的照片 %.8s", hex);
-        photostore_remove(store, e->sha256);
+        photostore_remove(c->store, e->sha256);
+        c->changed = true;
         return true;
     }
-    if (p->duration_s != e->duration_s || p->order != e->order)
-        photostore_update_meta(store, e->sha256, p->duration_s, p->order);
+    if (p->duration_s != e->duration_s || p->order != e->order) {
+        photostore_update_meta(c->store, e->sha256, p->duration_s, p->order);
+        c->changed = true;
+    }
     return true;
 }
 
@@ -469,9 +496,12 @@ static void gc_store(photostore_t *store)
     if (!photo_io_store_lock(30000)) return;
     s_gc_pl = &s_pl;
     uint32_t bad = 0;
-    photostore_walk(store, gc_cb, store, &bad);
+    gc_ctx_t ctx = { .store = store, .changed = false };
+    photostore_walk(store, gc_cb, &ctx, &bad);
     s_gc_pl = NULL;
     photo_io_store_unlock();
+    /* 只有真的删/改了索引才让播放器重建，避免堆不足时每几秒重建一次。 */
+    if (ctx.changed) __atomic_add_fetch(&s_play_gen, 1, __ATOMIC_RELEASE);
 }
 
 /* ------------------------------------------------------------ 下载 */
@@ -519,10 +549,8 @@ begin:
     uint32_t off = s_put_off;
     if (off >= e->size) goto finish;   /* 上次已经收满，只差提交 */
 
-    if (esp_get_free_heap_size() < MIN_FREE_HEAP) {
-        ESP_LOGW(TAG, "空闲堆不足，暂停下载");
-        return DL_PREEMPT;
-    }
+    /* 堆门槛在 quiet 排空之后（见下）：板子发帧时稳态只有 65–80K，
+     * 在停流之前判断永远不够。 */
 
     /* 取帧优先：等它做完再开自己的 TLS。 */
     for (int i = 0; i < FRAME_WAIT_MS / 100 && framefetch_busy(); i++)
@@ -557,7 +585,25 @@ begin:
         esp_http_client_cleanup(h);
         return DL_PREEMPT;
     }
+    stream_quiet(true);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    for (int i = 0; i < NET_WAIT_MS / 100 &&
+                    esp_get_free_heap_size() < MIN_FREE_HEAP; i++)
+        vTaskDelay(pdMS_TO_TICKS(100));
+    if (esp_get_free_heap_size() < MIN_FREE_HEAP) {
+        ESP_LOGW(TAG, "停流后堆仍只有 %u < %d，下载延后",
+                 (unsigned)esp_get_free_heap_size(), MIN_FREE_HEAP);
+        stream_quiet(false);
+        photo_io_net_unlock();
+        esp_http_client_cleanup(h);
+        return DL_PREEMPT;
+    }
+    ESP_LOGI(TAG, "下载 TLS 开始 %.8s，堆 %u 最大块 %u", hex,
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL |
+                                                        MALLOC_CAP_8BIT));
     if (esp_http_client_open(h, 0) != ESP_OK) {
+        stream_quiet(false);
         photo_io_net_unlock();
         esp_http_client_cleanup(h);
         ESP_LOGW(TAG, "下载 %.8s 连不上", hex);
@@ -570,6 +616,11 @@ begin:
     if (off > 0 && (st == 200 || st == 416)) {
         /* 服务端忽略了 Range（或偏移越界）：这次开机内从头再来一次。 */
         esp_http_client_close(h);
+        stream_quiet(false);
+        ESP_LOGI(TAG, "下载 TLS 结束，堆 %u 最大块 %u",
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL |
+                                                        MALLOC_CAP_8BIT));
         photo_io_net_unlock();
         esp_http_client_cleanup(h);
         abort_put();
@@ -581,6 +632,11 @@ begin:
     }
     if (!((off == 0 && st == 200) || (off > 0 && st == 206))) {
         esp_http_client_close(h);
+        stream_quiet(false);
+        ESP_LOGI(TAG, "下载 TLS 结束，堆 %u 最大块 %u",
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL |
+                                                        MALLOC_CAP_8BIT));
         photo_io_net_unlock();
         esp_http_client_cleanup(h);
         ESP_LOGW(TAG, "下载 %.8s HTTP %d", hex, st);
@@ -588,6 +644,11 @@ begin:
     }
     if (clen <= 0 || (int64_t)off + clen != (int64_t)e->size) {
         esp_http_client_close(h);
+        stream_quiet(false);
+        ESP_LOGI(TAG, "下载 TLS 结束，堆 %u 最大块 %u",
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL |
+                                                        MALLOC_CAP_8BIT));
         photo_io_net_unlock();
         esp_http_client_cleanup(h);
         ESP_LOGW(TAG, "下载 %.8s 长度不符：offset=%u clen=%lld size=%u",
@@ -628,6 +689,11 @@ begin:
     }
 
     esp_http_client_close(h);
+    stream_quiet(false);
+    ESP_LOGI(TAG, "下载 TLS 结束，堆 %u 最大块 %u",
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL |
+                                                        MALLOC_CAP_8BIT));
     photo_io_net_unlock();
     esp_http_client_cleanup(h);
 
@@ -694,7 +760,11 @@ static void download_missing(photostore_t *store)
             s_next_try_us[i] = 0;
             /* 新照片已提交：让播放器马上能把它排进序列。 */
             __atomic_add_fetch(&s_play_gen, 1, __ATOMIC_RELEASE);
-            continue;
+            /* 一轮只下一张：维护窗口（停流握手）一次只有几秒，下完
+             * 立刻恢复播放，1 秒后再为下一张开一个窗口。 */
+            int64_t t = esp_timer_get_time() + RETRY_SOON_US;
+            if (!next || t < next) next = t;
+            break;
         }
         if (r == DL_NOSPACE) {
             /* 卡满不会自己变好；按清单顺序跳过并报到 bad。 */
@@ -872,11 +942,27 @@ static void run_sync(void)
         ESP_LOGI(TAG, "开机挂卡：state=%d 上报=%d", (int)st, (int)report);
     }
 
+    /* MQTT 不在线：本轮不做 HTTPS（两次 TLS 同时握手会把堆打到几 KB）。
+     * 不排重试——MQTT 连上时 cloud 会调 photo_sync_notify_connected()。
+     * 离线照片照常从索引播。 */
+    if (!cloud_connected()) {
+        ESP_LOGI(TAG, "MQTT 未连接，本轮不拉清单/不下载");
+        return;
+    }
+
     bool force = __atomic_exchange_n(&s_force_fetch, false, __ATOMIC_ACQ_REL);
     int want = __atomic_load_n(&s_want_plv, __ATOMIC_ACQUIRE);
     bool need = force || !s_have_pl || s_last_plv < 0 ||
                 (want >= 0 && want != s_last_plv);
 
+    /* 维护窗口：照片播放让位给 HTTPS 和写卡，避免 TLS/播放/流发送叠加。 */
+    bool paused = photo_play_pause(4000);
+    if (!paused) {
+        ESP_LOGW(TAG, "照片播放未能及时让出，2 秒后再同步");
+        photo_play_resume();
+        schedule_retry(esp_timer_get_time() + RETRY_SOON_US * 2);
+        return;
+    }
     if (need) {
         bool notmod = false;
         int r = fetch_playlist(&notmod);
@@ -889,15 +975,19 @@ static void run_sync(void)
             reset_attempts();
             prune_bad();
             set_plv(s_last_plv);
+            /* 清单内容变了：只有这里（及下载/GC/格式化）通知播放器重建。 */
+            __atomic_add_fetch(&s_play_gen, 1, __ATOMIC_RELEASE);
             ESP_LOGW(TAG, "清单更新 plv=%d，照片 %d 张", s_pl.plv,
                      s_pl.photo_count);
         } else if (r == -2) {
             ESP_LOGI(TAG, "服务端说还没配对（403），60 秒后再拉清单");
+            photo_play_resume();
             schedule_retry(esp_timer_get_time() + FETCH_FAIL_US);
             return;
         } else if (r == -3) {
-            /* 取帧优先：1 秒后再试，不把这次算成清单失败。 */
-            ESP_LOGI(TAG, "清单拉取让路给取帧，1 秒后重试");
+            /* 取帧优先/堆不足：1 秒后再试，不把这次算成清单失败。 */
+            ESP_LOGI(TAG, "清单拉取延后（取帧优先或堆不足），1 秒后重试");
+            photo_play_resume();
             schedule_retry(esp_timer_get_time() + RETRY_SOON_US);
             return;
         } else {
@@ -907,8 +997,22 @@ static void run_sync(void)
     }
 
     if (s_have_pl) apply_playlist();
-    /* 清单和/或索引可能变了（含下载完成、GC）；通知播放器重建序列。 */
-    __atomic_add_fetch(&s_play_gen, 1, __ATOMIC_RELEASE);
+    /* 不再无条件 bump：304/失败/没下载的轮次不触发播放器重建。 */
+    photo_play_resume();
+
+    static bool reported;
+    if (!reported) {
+        reported = true;
+        multi_heap_info_t in;
+        heap_caps_get_info(&in, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        ESP_LOGW(TAG, "heap 对账：free=%u largest=%u min=%u；静态 s_pl=%u "
+                 "s_buf=%u retry=%u parser=%u",
+                 (unsigned)in.total_free_bytes, (unsigned)in.largest_free_block,
+                 (unsigned)in.minimum_free_bytes,
+                 (unsigned)sizeof(s_pl), (unsigned)sizeof(s_buf),
+                 (unsigned)(sizeof(s_fails) + sizeof(s_next_try_us)),
+                 (unsigned)sizeof(s_pj));
+    }
 }
 
 /* ------------------------------------------------------------ 任务 */
@@ -936,6 +1040,14 @@ static void photo_task(void *arg)
         __atomic_clear(&s_running, __ATOMIC_SEQ_CST);
         if (!__atomic_load_n(&s_kick, __ATOMIC_ACQUIRE)) break;
         if (__atomic_test_and_set(&s_running, __ATOMIC_SEQ_CST)) break;
+    }
+    {
+        multi_heap_info_t in;
+        heap_caps_get_info(&in, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        ESP_LOGI(TAG, "photo 任务退出：free=%u largest=%u min=%u",
+                 (unsigned)in.total_free_bytes,
+                 (unsigned)in.largest_free_block,
+                 (unsigned)in.minimum_free_bytes);
     }
     vTaskDelete(NULL);
 }
@@ -1020,18 +1132,72 @@ uint32_t photo_sync_play_gen(void)
     return __atomic_load_n(&s_play_gen, __ATOMIC_ACQUIRE);
 }
 
-bool photo_sync_playlist_visit(photo_sync_pl_visit_cb cb, void *arg)
+bool photo_sync_playlist_online(void)
 {
-    if (!cb) return false;
-    if (s_pl_mux) xSemaphoreTake(s_pl_mux, portMAX_DELAY);
-    bool ok = s_have_pl;
-    if (ok) {
-        cb(arg, NULL, s_pl.board_duration_s, s_pl.board_seen);
-        for (int i = 0; i < s_pl.photo_count; i++)
-            cb(arg, &s_pl.photos[i], 0, false);
+    return __atomic_load_n(&s_have_pl, __ATOMIC_ACQUIRE);
+}
+
+bool photo_sync_playlist_lock(const photo_pl_t **pl, bool *online,
+                              uint32_t timeout_ms)
+{
+    if (pl) *pl = NULL;
+    if (online) *online = false;
+    if (!s_pl_mux) {
+        if (pl) *pl = &s_pl;
+        if (online) *online = s_have_pl;
+        return true;
     }
+    TickType_t ticks = timeout_ms == UINT32_MAX ? portMAX_DELAY
+                                                : pdMS_TO_TICKS(timeout_ms);
+    if (xSemaphoreTake(s_pl_mux, ticks) != pdTRUE) return false;
+    if (pl) *pl = &s_pl;
+    if (online) *online = s_have_pl;
+    return true;
+}
+
+void photo_sync_playlist_unlock(void)
+{
     if (s_pl_mux) xSemaphoreGive(s_pl_mux);
-    return ok;
+}
+
+typedef struct {
+    photo_pl_t *pl;
+} off_ctx_t;
+
+static bool off_walk_cb(const photo_entry_t *e, void *arg)
+{
+    off_ctx_t *c = arg;
+    if (c->pl->photo_count >= PHOTO_PL_MAX_PHOTOS) return false;
+    photo_pl_entry_t *x = &c->pl->photos[c->pl->photo_count++];
+    memcpy(x->sha256, e->sha256, 32);
+    x->size = e->size;
+    x->duration_s = e->duration_s;
+    x->order = e->order;
+    return true;
+}
+
+int photo_sync_build_offline(void)
+{
+    if (!s_pl_mux) return 0;
+    xSemaphoreTake(s_pl_mux, portMAX_DELAY);
+    if (s_have_pl) {   /* 拿到清单锁时在线清单赢了，别覆盖它 */
+        int n = s_pl.photo_count;
+        xSemaphoreGive(s_pl_mux);
+        return n;
+    }
+    memset(&s_pl, 0, sizeof s_pl);
+    if (photo_io_store_lock(1000)) {
+        photostore_t *store = photo_sd_store();
+        if (store) {
+            off_ctx_t ctx = { .pl = &s_pl };
+            uint32_t bad = 0;
+            photostore_walk(store, off_walk_cb, &ctx, &bad);
+        }
+        photo_io_store_unlock();
+    }
+    int n = s_pl.photo_count;
+    xSemaphoreGive(s_pl_mux);
+    return n;
 }
 
 void photo_sync_report_bad(const uint8_t sha[32])

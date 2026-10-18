@@ -32,6 +32,11 @@ void photo_play_frame_ok(const uint8_t sha[32]);
 /* 序列当前项是照片且卡 READY（配对页期间为 false）。 */
 bool photo_is_playing(void);
 
+/* 维护窗口：让播放器在下一帧边界切回 board、等正在发的照片结束，
+ * 网络/下载期间不播照片。返回 true 表示已让出；用完必须 resume。 */
+bool photo_play_pause(uint32_t max_wait_ms);
+void photo_play_resume(void);
+
 /* 正在发送中的照片引用数（GC/格式化用）。 */
 int photo_play_holds(void);
 

@@ -81,3 +81,8 @@ bool stream_band_publish_rows(uint8_t *buf, size_t len,
 int stream_clients(void);
 uint32_t stream_frames_sent(void);
 int64_t stream_last_active_us(void);
+
+/* 网络维护窗口：暂停发帧，让 WiFi 发送缓冲释放，给 TLS 握手留出堆。
+ * 只由持有 photo_io net 锁的一方调用（同一时刻只有一个 owner）；
+ * 期间保持 stream_last_active_us 前进，supervisor 不会误判断流重推。 */
+void stream_quiet(bool on);

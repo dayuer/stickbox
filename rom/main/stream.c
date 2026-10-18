@@ -44,9 +44,9 @@ static const char *TAG = "stream";
  * 期间这个连接任务是不睡的，会一直占着发送路径。 */
 #define BURST_FRAMES 8
 
-/* 照片从 SD 读出到 socket 的块大小。8KB 是实测吞吐最好的粒度；
- * 每块拿一次 store 锁，send 在锁外。 */
-#define PHOTO_CHUNK 8192
+/* 照片从 SD 读出到 socket 的块大小。4KB 与 photostore 内部缓冲同粒度，
+ * 2fps 下吞吐足够；播放一结束这块缓冲就 free，网络期间不占堆。 */
+#define PHOTO_CHUNK 4096
 
 static const frame_t *s_frames;
 static jb_page_t s_pages[4];
@@ -83,6 +83,7 @@ static int s_busy[2];
 static int s_fp_hold;
 static volatile int s_cur;
 static volatile int s_clients;
+static volatile bool s_quiet;
 static volatile uint32_t s_sent;
 static volatile int64_t s_last_us;
 static uint8_t s_hdr[224];
@@ -208,6 +209,8 @@ bool stream_band_publish(uint8_t *buf, size_t len, int page)
     xSemaphoreGive(s_mx);
     return true;
 }
+void stream_quiet(bool on) { s_quiet = on; }
+
 int stream_current(void) { return s_cur; }
 void stream_set(int idx) { s_cur = ((idx % s_n) + s_n) % s_n; }
 int stream_clients(void) { return s_clients; }
@@ -309,6 +312,13 @@ static void client_task(void *arg)
     bool last_photo = false;
     bool ok = send_all(fd, s_hdr, s_hdr_len);
     while (ok) {
+        /* 网络维护窗口：不发新帧，让发送缓冲释放。last_active 继续前进，
+         * supervisor 不会当成本连接掉了。 */
+        if (s_quiet) {
+            s_last_us = esp_timer_get_time();
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
         int64_t frame_t0 = esp_timer_get_time();
         /* ── 第四种模式：照片 ──
          *
@@ -393,6 +403,10 @@ static void client_task(void *arg)
             /* 第一块读不出来（或缓冲/锁拿不到）：本帧回 board，不断流。 */
             photo_play_frame_done(&pf);
             if (first_read_err) photo_play_mark_bad(pf.sha256, "first-read");
+        } else if (pbuf) {
+            /* 回到 board（或维护暂停）：照片读缓冲还给堆。 */
+            free(pbuf);
+            pbuf = NULL;
         }
 
         /* 每帧只在这一个临界区里看一次共享状态，拿到的东西（模式、底帧

@@ -33,12 +33,17 @@ int photo_sync_status_json(char *out, size_t cap);
  * photo_play 用它决定何时重建序列。 */
 uint32_t photo_sync_play_gen(void);
 
-/* 逐条访问当前清单，避免把 8KB 结构复制到调度任务栈上。
- * 回调参数：e==NULL 表示 board 元数据（board_s / has_board）；
- * 其余每个 photo 条目调用一次。返回 false 表示当前没有清单。 */
-typedef void (*photo_sync_pl_visit_cb)(void *arg, const photo_pl_entry_t *e,
-                                       uint16_t board_s, bool has_board);
-bool photo_sync_playlist_visit(photo_sync_pl_visit_cb cb, void *arg);
+/* M3 播放器直接读这份唯一的清单（不再复制一份序列）。
+ * 先 online 判断来源；lock 拿 s_pl 的读锁，回调/使用期间不能解锁。
+ * online=true：服务端清单，数组顺序权威；false：由 SD 索引构建的离线清单。 */
+bool photo_sync_playlist_online(void);
+bool photo_sync_playlist_lock(const photo_pl_t **pl, bool *online,
+                              uint32_t timeout_ms);
+void photo_sync_playlist_unlock(void);
+
+/* 没有在线清单时，用 SD 索引填 s_pl（board 默认 20s）；返回照片数。
+ * 调用方通常是播放调度任务（栈 4KB），walk 在这里完成。 */
+int photo_sync_build_offline(void);
 
 /* 播放侧连续读失败 3 次后上报：进 status.photo.bad，并阻止再下载。 */
 void photo_sync_report_bad(const uint8_t sha[32]);
