@@ -335,3 +335,38 @@ func TestDevicePhotoRange(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentDevicesIncludesPhotoState(t *testing.T) {
+	h, dep, agentTok, _ := setupPhotos(t)
+	userID := userIDOf(t, dep)
+	if err := dep.store.PutDevicePhoto("f412fa87c9e0", store.DevicePhoto{
+		UserID: userID, Cap: true, Ready: true, State: "ok", PLV: 7, Have: 12,
+		Bad: []string{"a1b2c3d4"}, FreeKB: 1024, InitDone: "abcdef01",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Devices []struct {
+			Dev   string `json:"dev"`
+			Photo *struct {
+				Cap      bool     `json:"cap"`
+				Ready    bool     `json:"ready"`
+				State    string   `json:"state"`
+				PLV      int64    `json:"plv"`
+				Have     int      `json:"have"`
+				Bad      []string `json:"bad"`
+				FreeKB   int64    `json:"free_kb"`
+				InitDone string   `json:"init_done"`
+			} `json:"photo"`
+		} `json:"devices"`
+	}
+	getJSON(h, "/api/agent/devices", bearer(agentTok), &out)
+	if len(out.Devices) != 1 || out.Devices[0].Photo == nil {
+		t.Fatalf("devices = %+v", out)
+	}
+	p := out.Devices[0].Photo
+	if !p.Cap || !p.Ready || p.PLV != 7 || p.Have != 12 ||
+		len(p.Bad) != 1 || p.InitDone != "abcdef01" {
+		t.Fatalf("photo = %+v", p)
+	}
+}

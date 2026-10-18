@@ -276,11 +276,23 @@ func (a *API) handleAgentDevices(w http.ResponseWriter, r *http.Request, id auth
 		fail(w, 500, "server error", "")
 		return
 	}
+	type photoRow struct {
+		Cap      bool     `json:"cap"`
+		Ready    bool     `json:"ready"`
+		State    string   `json:"state"`
+		PLV      int64    `json:"plv"`
+		Have     int      `json:"have"`
+		Bad      []string `json:"bad,omitempty"`
+		FreeKB   int64    `json:"free_kb"`
+		InitDone string   `json:"init_done,omitempty"`
+		Updated  int64    `json:"updated"`
+	}
 	type row struct {
-		Dev    string `json:"dev"`
-		Name   string `json:"name"`
-		Online bool   `json:"online"`
-		Bound  int64  `json:"bound"`
+		Dev    string    `json:"dev"`
+		Name   string    `json:"name"`
+		Online bool      `json:"online"`
+		Bound  int64     `json:"bound"`
+		Photo  *photoRow `json:"photo,omitempty"`
 	}
 	out := []row{}
 	for _, dev := range devs {
@@ -288,6 +300,13 @@ func (a *API) handleAgentDevices(w http.ResponseWriter, r *http.Request, id auth
 		if meta, ok, err := a.store.DeviceMeta(dev); err == nil && ok {
 			it.Name = meta.Name
 			it.Bound = meta.Bound
+		}
+		if dp, ok, err := a.store.DevicePhoto(dev); err == nil && ok {
+			it.Photo = &photoRow{
+				Cap: dp.Cap, Ready: dp.Ready, State: dp.State, PLV: dp.PLV,
+				Have: dp.Have, Bad: dp.Bad, FreeKB: dp.FreeKB,
+				InitDone: dp.InitDone, Updated: dp.Updated,
+			}
 		}
 		out = append(out, it)
 	}
