@@ -684,6 +684,41 @@ static void schedule_reconnect(int delay_ms)
     esp_timer_start_once(s_reconnect_timer, (uint64_t)delay_ms * 1000ULL);
 }
 
+/* 重启后密钥已加载、手里没有码（#13）。pending 阶段服务端不让订 usage/frame，
+ * 所以不能指望 SUBACK 0x80；连上 MQTT 后给 retained pair(paired=true) /
+ * usage 一点时间（25s），都没来且仍未配对，就按 pending 处理：起换码任务，
+ * 先换一个新码显示。esp_timer 回调只做布尔判断和一次 xTaskCreate。
+ * 已配对设备在这 25s 内会收到 usage，回调什么都不做，无常驻开销。 */
+#define PENDING_PROBE_US (25LL * 1000000)
+static esp_timer_handle_t s_probe_timer;
+static bool s_probe_armed;
+
+static void start_pair_task(void)
+{
+    if (s_pair_code[0] || s_paired || s_got_usage || s_pair_task_alive) return;
+    s_pair_task_alive = true;
+    if (xTaskCreate(pair_code_task, "pair_code", 8192, NULL, 3, NULL) != pdPASS)
+        s_pair_task_alive = false;   /* 堆不够：下次订阅被拒/不会再试，见 probe_cb 重启定时器 */
+}
+
+static void probe_cb(void *arg)
+{
+    (void)arg;
+    if (s_paired || s_got_usage || s_pair_code[0]) return;
+    start_pair_task();
+    if (!s_pair_task_alive && s_probe_timer)   /* 建任务失败：25s 后再试 */
+        esp_timer_start_once(s_probe_timer, PENDING_PROBE_US);
+}
+
+static void arm_pending_probe(void)
+{
+    if (s_probe_armed || !s_devkey[0] || s_pair_code[0] || s_paired) return;
+    const esp_timer_create_args_t a = { .callback = probe_cb, .name = "pend_probe" };
+    if (esp_timer_create(&a, &s_probe_timer) != ESP_OK) return;
+    if (esp_timer_start_once(s_probe_timer, PENDING_PROBE_US) == ESP_OK)
+        s_probe_armed = true;
+}
+
 static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     esp_mqtt_event_handle_t e = data;
@@ -707,6 +742,7 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
         /* 手里有密钥就直接订用量与帧通知，不等 paired=true——理由见
          * subscribe_paired_topics() 的注释。被拒了会走 SUBACK 分支。 */
         if (s_devkey[0]) {
+            arm_pending_probe();
             subscribe_paired_topics();
             /* 每次连上都对一次清单：断线期间 plv 可能已经变了，
              * ETag 会让没变化时只花一个 304。 */
@@ -728,14 +764,7 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
                  * 屏幕上什么都没有，framefetch/photo_sync 又因为
                  * cloud_pair_pending()==false 反复请求被 403（#13）。
                  * 这里起换码任务：它先换一个新码并显示，之后走常规过期换码。 */
-                if (!s_pair_code[0] && !s_paired && !s_pair_task_alive) {
-                    s_pair_task_alive = true;
-                    if (xTaskCreate(pair_code_task, "pair_code", 8192, NULL, 3,
-                                    NULL) != pdPASS) {
-                        s_pair_task_alive = false;
-                        ESP_LOGW(TAG, "换码任务创建失败，下次订阅被拒时重试");
-                    }
-                }
+                start_pair_task();
             }
         }
         break;
