@@ -141,8 +141,10 @@ typedef bool (*photo_walk_cb)(const photo_entry_t *e, void *arg);
 /* 遍历有效项（按索引顺序）。返回遍历到的项数；*bad 返回 CRC 损坏项数。 */
 int photostore_walk(photostore_t *st, photo_walk_cb cb, void *arg,
                     uint32_t *bad);
-/* 空闲/总数据字节（4KB 块粒度）、有效项数。 */
-bool photostore_space(photostore_t *st, uint32_t *free_bytes,
-                      uint32_t *total_bytes, uint16_t *used_entries);
+/* 空闲/总数据字节（4KB 块粒度）、有效项数。
+ * **64 位**：256GB 卡的字节数超过 uint32，用 32 位会在 4GB 处回绕
+ * （M2 上板表现为 status.photo.free_kb 只剩 1.2GB）。 */
+bool photostore_space(photostore_t *st, uint64_t *free_bytes,
+                      uint64_t *total_bytes, uint16_t *used_entries);
 /* 只校验索引项 CRC（不读数据），返回有效项数，*bad=损坏项数。 */
 int photostore_scan_index(photostore_t *st, uint32_t *bad);

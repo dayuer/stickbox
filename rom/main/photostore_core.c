@@ -569,8 +569,8 @@ int photostore_walk(photostore_t *st, photo_walk_cb cb, void *arg, uint32_t *bad
     return n;
 }
 
-bool photostore_space(photostore_t *st, uint32_t *free_bytes,
-                      uint32_t *total_bytes, uint16_t *used_entries)
+bool photostore_space(photostore_t *st, uint64_t *free_bytes,
+                      uint64_t *total_bytes, uint16_t *used_entries)
 {
     if (st->state != PHOTO_READY) return false;
     uint32_t total_blocks = (st->lay.data_end - st->lay.data_start) / PHOTO_ALIGN_SECTORS;
@@ -584,8 +584,11 @@ bool photostore_space(photostore_t *st, uint32_t *free_bytes,
         if (e.status == PHOTO_ENTRY_VALID) used++;
     }
     if (used_blocks > total_blocks) used_blocks = total_blocks;
-    if (total_bytes) *total_bytes = total_blocks * 4096;
-    if (free_bytes) *free_bytes = (total_blocks - used_blocks) * 4096;
+    /* 先提升到 64 位再乘：256GB 卡的 total_blocks*4096 会越过 uint32。 */
+    uint64_t total = (uint64_t)total_blocks * 4096u;
+    uint64_t freeb = (uint64_t)(total_blocks - used_blocks) * 4096u;
+    if (total_bytes) *total_bytes = total;
+    if (free_bytes) *free_bytes = freeb;
     if (used_entries) *used_entries = used;
     return true;
 }

@@ -149,7 +149,7 @@ int main(void)
     check(g_writes == 0, "UNINIT 不写卡");
     check(photostore_format(&st, false), "format 成功");
     check(photostore_state(&st) == PHOTO_READY, "format 后 READY");
-    uint32_t free0 = 0, total = 0;
+    uint64_t free0 = 0, total = 0;
     uint16_t used0 = 0;
     check(photostore_space(&st, &free0, &total, &used0) && free0 == total,
           "空卡空闲 = 总量");
@@ -334,6 +334,21 @@ int main(void)
     reset_card();
     check(local_io_lifetime(),
           "局部 IO 表：open 后毒化原表仍可 format/写入");
+
+    /* 13. 大卡 free 字节不能 uint32 回绕（256GB 卡） */
+    reset_card();
+    free(buf); st = open_store(&buf);
+    photostore_format(&st, false);
+    st.lay.data_end = 500000000u;   /* ~256GB，字节数 > 4GB */
+    uint64_t big_free = 0, big_total = 0;
+    uint16_t big_used = 0;
+    check(photostore_space(&st, &big_free, &big_total, &big_used),
+          "大卡取空间");
+    uint64_t expect_total =
+        (uint64_t)((500000000u - st.lay.data_start) / PHOTO_ALIGN_SECTORS) * 4096u;
+    check(big_total == expect_total && big_total > 0xFFFFFFFFULL,
+          "总字节按 64 位计算（>4GB 不回绕）");
+    check(big_free == big_total, "空卡 free == total");
 
     free(buf);
     free(g_disk);

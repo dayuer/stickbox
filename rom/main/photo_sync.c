@@ -74,7 +74,7 @@ typedef struct {
     bool        ready;
     int         plv;
     int         have;
-    uint32_t    free_kb;
+    uint64_t    free_kb;
     const char *state;
     char        init_done[9];
     photo_bad_t bad;
@@ -168,7 +168,8 @@ static void set_plv(int plv)
 static void update_stats(photostore_t *store)
 {
     if (!store) return;
-    uint32_t bad = 0, free_b = 0, total = 0;
+    uint32_t bad = 0;
+    uint64_t free_b = 0, total = 0;
     uint16_t used = 0;
     if (!photo_io_lock(30000)) return;
     int valid = photostore_scan_index(store, &bad);
