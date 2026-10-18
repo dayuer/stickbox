@@ -30,15 +30,18 @@
 go run . --runs 3 --interval 15s
 
 # 24h 长跑：必须用 caffeinate 包住，否则拒绝启动
-caffeinate -dimsu go run . --duration 24h
+caffeinate -dimsu env STICKBOX_CAFFEINATE_OK=1 go run . --duration 24h
 ```
 
 编译后跑更稳：
 
 ```sh
 go build -o /tmp/claudeusage-harness .
-caffeinate -dimsu /tmp/claudeusage-harness --duration 24h
+caffeinate -dimsu env STICKBOX_CAFFEINATE_OK=1 /tmp/claudeusage-harness --duration 24h
 ```
+
+`macOS` 的 caffeinate 会 fork 出独立的断言进程，命令的父进程链里看不到它，
+所以用 `STICKBOX_CAFFEINATE_OK=1` 显式标记；`--allow-no-caffeinate` 只用于调试。
 
 长跑期间本机每 10 分钟还有 stickbox-agent 的用量采集在并行跑（用户要求恢复
 监测），所以负载会叠加；报告里要注明。

@@ -110,10 +110,35 @@ func parseLoadavg(s string) (float64, float64, float64, error) {
 	return a, b, c, nil
 }
 
-// underCaffeinate 检查父进程是不是 caffeinate，用来拦住没包 caffeinate 的长跑。
+// underCaffeinate 判断是否由 caffeinate 包住。
+//
+// macOS 的 caffeinate 可能 fork 出独立的断言进程，命令的父进程链里
+// 看不到它，所以启动脚本用 STICKBOX_CAFFEINATE_OK=1 显式标记；父进程
+// 链检查留给直接 exec 的情况。
 func underCaffeinate() bool {
-	out, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(os.Getppid())).Output()
-	return err == nil && strings.Contains(strings.ToLower(string(out)), "caffeinate")
+	if os.Getenv("STICKBOX_CAFFEINATE_OK") == "1" {
+		return true
+	}
+	pid := os.Getppid()
+	for i := 0; i < 6 && pid > 1; i++ {
+		out, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
+		if err != nil {
+			return false
+		}
+		if strings.Contains(strings.ToLower(string(out)), "caffeinate") {
+			return true
+		}
+		ppidOut, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
+		if err != nil {
+			return false
+		}
+		ppid, err := strconv.Atoi(strings.TrimSpace(string(ppidOut)))
+		if err != nil {
+			return false
+		}
+		pid = ppid
+	}
+	return false
 }
 
 // loadAvg 读系统 1/5/15 分钟负载。失败返回 error，调用方原样记录。
@@ -225,7 +250,7 @@ func main() {
 		if !longRun {
 			fmt.Println("caffeinate 检查：短跑，不强制")
 		} else if !*noCaff && !underCaffeinate() {
-			fatalf("长跑必须用 caffeinate 包住：caffeinate -dimsu %s ...", os.Args[0])
+			fatalf("长跑必须用 caffeinate 包住：caffeinate -dimsu env STICKBOX_CAFFEINATE_OK=1 %s ...", os.Args[0])
 		} else {
 			fmt.Println("caffeinate 检查：通过（长跑期间防休眠）")
 		}
