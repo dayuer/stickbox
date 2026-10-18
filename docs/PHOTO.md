@@ -451,3 +451,35 @@ stickbox-agent photo init [--force]              # 生成一次性初始化授�
 2. 看板与照片的默认编排：默认「board 1 条 + 照片按上传顺序」已定；看板占多少比例/
    是否多轮 board —— 产品后续可调，不阻塞 P1。
 3. StickBox PCB 是否加 SD 槽 —— 硬件，不阻塞本设计。
+
+## 13. M2 固件实现：互斥状态机（2026-10-18）
+
+M2 只做「清单 → 格式化 → 下载 → 状态上报」，不碰 `stream.c`。所有网络与
+SD 操作共用 `photo_io` 的一把互斥锁（`rom/main/photo_io.c`）：
+
+| 持有者 | 持锁范围 | 让路点 |
+|---|---|---|
+| 取帧（`framefetch`） | 整轮 `fetch_once()`（TLS + 写 flash） | 无；优先级最高 |
+| 清单拉取（`photo` 任务） | 整轮 GET + 流式解析（≤64KB） | 开始前等取帧空闲 |
+| 照片下载（`photo` 任务） | HTTP 一次 + 逐 4KB 写入，**每 4KB 检查 `framefetch_busy()`** | 有取帧：断流、放锁、保留 Range 偏移 |
+| 格式化 / GC / 元数据 / 读索引 | 单次调用 | 由 `photo` 任务串行发起 |
+
+状态机（`photo_sync.c` 的任务循环）：
+
+```
+IDLE ──plv 变化 / 首次连接 / 卡变为可用──> FETCH_PLAYLIST
+FETCH_PLAYLIST ──304──> APPLY(旧清单)
+FETCH_PLAYLIST ──200──> 解析成功 ──> APPLY
+FETCH_PLAYLIST ──网络错/403──> IDLE（60s 后重试）
+APPLY ──photo 条目为 0──> GC(已挂载时) ──> IDLE
+APPLY ──挂载失败────────> 尝试 init_token 判决 ──> FORMAT ──> APPLY
+APPLY ──READY──> GC -> 元数据 -> DOWNLOAD(逐张)
+DOWNLOAD ──取帧请求──> 保存 offset/sha，放锁 ──> 1s 后 IDLE 重入
+DOWNLOAD ──HTTP 错──> 1/5/30 分钟退避；3 次后进 bad
+DOWNLOAD ──完成──> put_finish（sha 读回校验 + 索引提交）-> 下一张
+```
+
+- `photo_io_lock` 未创建成功时退化为 no-op：宁可偶发并发，也不让看板停止更新。
+- 下载的半成品只存在于本次开机的 RAM（`ps_put_t` + offset），重启后从头下。
+- 卡从「不可用」变「可用」时置 `force_fetch`，主动重拉一次清单（不依赖 plv）。
+- 取帧路径唯一的改动是 `fetch_task` 外层的锁；`ver` 订阅、取帧触发和换帧逻辑未动。

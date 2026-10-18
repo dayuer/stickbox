@@ -147,6 +147,12 @@ bool photo_sd_format(bool authorized, bool force)
     return true;
 }
 
+photo_format_mode_t photo_sd_format_mode(void)
+{
+    if (!s_inited) return PHOTO_FMT_UNAVAILABLE;
+    return photostore_format_mode(&s_store);
+}
+
 photostore_t *photo_sd_store(void)
 {
     if (!s_inited || photostore_state(&s_store) != PHOTO_READY) return NULL;

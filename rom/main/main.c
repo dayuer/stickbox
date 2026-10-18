@@ -33,6 +33,7 @@
 #include "memdiag.h"
 #include "ota.h"
 #include "pairband.h"
+#include "photo_sync.h"
 #include "provision.h"
 #include "stream.h"
 
@@ -235,6 +236,7 @@ void app_main(void)
     }
     ESP_LOGI(TAG, "NVS 就绪（OTA 坏版本记录可写）");
     ota_boot_check();     /* 尽早：要先知道本次是不是 OTA 后的试运行 */
+    photo_sync_init();    /* 只建锁/读 token，不挂 SD、不起任务 */
 #if CONFIG_STICKBOX_OTA_SUICIDE
     /* 只为验证 OTA 回滚而存在的测试版本。
      *
