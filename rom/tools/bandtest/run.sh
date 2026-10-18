@@ -17,6 +17,8 @@ cc $CC_ARGS -o packtest packtest.c ../../main/framepack_band.c ../../main/framep
 cc -I../../main -Ihoststub -O1 -Wall -o pagetest pagetest.c ../../main/jband.c ../../main/statusmask.c
 cc -I../../main -Ihoststub -O1 -Wall -o pairtest pairtest.c ../../main/pairband.c ../../main/jband.c ../../main/statusmask.c
 cc $CC_ARGS -o vertest vertest.c ../../main/framepack_ver.c
+# 照片裸扇区存储：板上跑的是同一份 photostore_core.c，掉电/CRC/分配在主机钉死
+cc $CC_ARGS -o photostore_test photostore_test.c ../../main/photostore_core.c ../../main/photosha.c
 
 # 帧包和黄金帧都由 server/go/cmd/packgen 现生成，不依赖任何别人的 worktree
 # ——那些目录会被收敛掉，测试不该因此失效。
@@ -51,3 +53,6 @@ echo "== 5. 配对页最坏码 + 提示文字 =="
 
 echo "== 6. 槽头版本字段解码 =="
 ./vertest
+
+echo "== 7. 照片存储：格式化/掉电/CRC/扫描 =="
+./photostore_test | tail -3
