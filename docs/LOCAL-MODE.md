@@ -56,6 +56,36 @@
 新增 `internal/local/...`（第 3–6 节）。**抽包是唯一会改到现有代码的地方**，
 要单独提交、单独审，且只移动不改行为。
 
+### 2.3 用量数据怎么来（本地模式不经服务器）
+
+托管模式：agent 跑 `claude -p /usage` → `POST /api/usage` → 云端渲染 → 板子取帧。
+**本地模式直接在进程内取，不上报任何服务器**：
+
+```
+internal/claudeusage（从 agent 抽出，agent 与 local 共用同一份）
+  └─ 白名单环境 + 专用空工作目录里执行 claude -p /usage --setting-sources project
+     --output-format stream-json --verbose
+  └─ parseUsageStream → usage.Report（five_hour / seven_day，0..100 + resets_at）
+        │
+        ▼
+source.Claude{Report, ReceivedAt}.Snapshot(now)   ← 与云端同一个换算
+        │
+        ▼
+render.Quota{R}.FullImage(snap)  → 混合器的「看板」片源
+```
+
+- **沿用 agent 已踩过的坑**（agent 的 `filterEnv`、`memory/t2-agent-local-usage-testing`）：
+  必须白名单环境 + 专用空目录，否则 `rate_limits` 为 null。这些逻辑随包一起搬，不重写
+- **频率**：默认 5 分钟一次，与 agent 一致。`/usage` 是本地斜杠命令；按 T2 的结论不调用模型，
+  但本地模式要长期常驻跑，用 L-E0 复核一次（第 9 节），确认不产生费用
+- **没在用 Claude 时**：看板停在上一次的数据，「更新 X 分前」如实显示（用户已确认这是对的）
+- **可选增强（不在首版）**：`docs/experiments/claude-usage/` 已验证 statusline stdin 带
+  `rate_limits`，交互会话期间可以更及时地刷新；只在同一台机器上、只读本地数据
+- **不用**：claude.ai 网页 Cookie、`api.anthropic.com/api/oauth/usage`（理由见
+  `docs/experiments/claude-usage/README.md`）
+- 本地模式**不需要配对、不需要服务端账号**。托管模式的 agent 照旧上报，两者互不影响；
+  同一台机器同时跑两者时各自采集（`/usage` 很轻，重复一次可接受，L-E0 一并确认）
+
 ## 3. 视频管线
 
 ### 3.1 核心决定：在编码前切换，只有一个编码器
@@ -92,7 +122,7 @@
 
 ### 3.3 编码器（`internal/local/enc`）
 
-外部 ffmpeg，参数取原型实测规格：
+外部 ffmpeg。分辨率/帧率/GOP/音频取原型实测规格；**码率、编码后端、profile 待测**（L-E3、L-E6）：
 
 ```
 ffmpeg -f rawvideo -pix_fmt yuv420p -s 1920x1080 -r 30 -i pipe:0 \
@@ -109,7 +139,7 @@ ffmpeg -f rawvideo -pix_fmt yuv420p -s 1920x1080 -r 30 -i pipe:0 \
 | Linux `h264_vaapi` / `h264_v4l2m2m` | 有就用 | 待测 |
 | `libx264 -preset veryfast -tune zerolatency -x264-params repeat-headers=1` | 兜底 | 外部进程调用，不涉及我们打包 GPL |
 
-码率：静止看板/照片用不满码率，6M 是给视频和直播的上限，**局域网带宽不是约束**，
+码率（**全部待测**，L-E6）：静止看板/照片用不满码率，6M 是给视频和直播的建议上限，**局域网带宽不是约束**，
 真正要测的是电视解码器吃不吃得下（待测，3–8 Mbps 区间各测一档）。
 
 编码器挂了 → 混合器丢帧不阻塞，2 秒内重启编码器；已连接的电视会断，靠它自己重连接回。
@@ -251,22 +281,26 @@ logs/            按天滚动，保留 7 天
 8. **退路**：如果单编码器在弱机器上扛不住，退回原型的「预转码统一段 + concat 流拷贝」，
    只支持 ①②③，④直播需要单独实时转码一路
 
-## 9. 建议的实验清单（全部由 USB-TV 调度；实验前先在本机用 ffprobe/ffplay 验证产物，**不往电视推未验证的文件**）
+## 9. 实验清单（按优先级；全部由 USB-TV 调度）
 
-| # | 实验 | 通过标准 |
-|---|---|---|
-| L-E1 | 单编码器 + 静止图输入（看板截图）推 30 分钟 | 持续出画，无卡顿；记录 CPU |
-| L-E2 | 同一流内 看板 → 照片 → 本地视频 → 看板 切换 | 目视无黑屏、无暂停重载 |
-| L-E3 | VideoToolbox vs libx264 两种后端各推 10 分钟 | 两者都能播；不能播的记 profile/level |
-| L-E4 | 无音频轨 vs 静音 AAC 轨 | 确认是否必须带音频 |
-| L-E5 | 人为断开电视连接（或等它 20 秒闪断），看重连 | 重连后画面是「现在」，记录黑屏时长 |
-| L-E6 | 码率 3 / 6 / 8 Mbps 各一档播本地视频 | 电视不掉帧的上限 |
-| L-E7 | 接一个 RTMP/HLS 直播，播放中断网 | 秒切兜底片源，恢复后自动切回 |
-| L-E8 | 电视待机/切输入源再回来 | 看门狗是否能重推回来，用时多少 |
-| L-E9 | 编码器空闲停后，电视回来的起播时间 | 记录秒数 |
+规则：每个实验产物**先在本机验证**再上电视——`ffprobe -show_frames` 确认无 DTS 回退、
+GOP=60、每个 IDR 前有 SPS/PPS；`ffmpeg -v warning -i out.ts -f null -` 无告警。
+未经本机验证的文件不推电视（D13 教训）。
 
-本地可先验（不上电视）：用 `ffprobe -show_frames` 检查混合器输出的 TS 无 DTS 回退、
-GOP 恰好 60、SPS/PPS 每个 IDR 前都有；用 `ffmpeg -v warning -i out.ts -f null -` 无告警。
+| 优先级 | # | 实验 | 通过标准 | 不过的后果 |
+|---|---|---|---|---|
+| **P0** | L-E1 | 单编码器 + 静止图（看板截图）推 30 分钟 | 持续出画，无卡顿；记录 CPU | 第 3 节整体方案回退到 concat 流拷贝 |
+| **P0** | L-E2 | 同一流内 看板 → 照片 → 本地视频 → 看板 切换 | 目视无黑屏、无暂停重载 | 同上 |
+| **P0** | L-E0 | 本机（不上电视）24 小时每 5 分钟跑一次 `claude -p /usage` | 账号用量/费用无增长；每次都拿到 `rate_limits` | 降低频率或改走 statusline |
+| P1 | L-E3 | VideoToolbox vs libx264 各推 10 分钟 | 都能播；不能播的记 profile/level | 默认后端改 libx264 |
+| P1 | L-E4 | 无音频轨 vs 静音 AAC 轨 | 确认是否必须带音频 | 决定混合器是否常带静音轨（默认带） |
+| P1 | L-E5 | 等电视 20 秒闪断 / 人为断开，看重连 | 重连后是「现在」的画面；记录黑屏时长 | 接入点改为等下一个 IDR（最多 2 秒黑） |
+| P2 | L-E7 | 接一个 RTMP/HLS 直播，播放中断网 | 秒切兜底片源，恢复后自动切回 | 调片源状态机超时 |
+| P2 | L-E6 | 码率 3 / 6 / 8 Mbps 各一档播本地视频 | 电视不掉帧的上限 | 调默认码率 |
+| P3 | L-E8 | 电视待机 / 切走输入源再回来 | 看门狗重推回来的用时 | 调看门狗阈值 |
+| P3 | L-E9 | 编码器空闲停后电视回来的起播时间 | 记录秒数 | 调空闲停时长或不停 |
+
+**P0 三条任何一条不过，先停下来改设计，不进入实现。**
 
 ## 10. 不做
 
