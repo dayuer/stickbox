@@ -492,6 +492,7 @@ agent 应把非空 token 存到用户配置目录（0600）。
 | `name` | 注册时留的名字，可能为空 |
 | `online` | 最近 120 秒内收到过 MQTT 心跳 |
 | `bound` | 当前有效 device 密钥的创建时间（Unix 秒） |
+| `photo` | 可选。设备最近一次 `status.photo`：`cap`/`ready`/`state`/`plv`/`have`/`bad`/`free_kb`/`init_done`/`updated`。老固件或未上报时没有这个字段 |
 
 没有设备时返回 `{"devices":[]}`，不是 404。
 

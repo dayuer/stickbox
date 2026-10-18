@@ -117,6 +117,48 @@ stickbox-agent tz clear              # 清除用户设置，回退到 agent/默�
 
 ---
 
+## 3c. 照片（带 SD 槽的屏）
+
+照片存在 SD 卡上，**只对有 SD 槽且卡已初始化的设备生效**；其余屏继续只看板。
+
+```sh
+stickbox-agent photo add 照片1.jpg 照片2.png   # 上传，默认自动上屏
+stickbox-agent photo add --no-show 照片.jpg    # 只上传，不进播放清单
+stickbox-agent photo add --secs 12 照片.jpg    # 上屏并停留 12 秒（5–600）
+stickbox-agent photo ls                        # 照片列表 + 设备卡状态
+stickbox-agent photo rm abcdef01               # 按 sha 前缀删除（至少 8 位）
+stickbox-agent photo init                      # 授权设备初始化 SD 卡（会清空卡）
+stickbox-agent photo init --force              # 连 CRC 损坏的卡也允许格式化
+```
+
+**上传**
+
+- 服务端负责：方向校正 → 缩放/留白到 1920×1080 → 剥掉 EXIF/GPS/XMP/ICC →
+  baseline JPEG（≤250KB）→ 内容寻址。原图不会留在服务器上。
+- 单张上限 20MB；每人 200 张 / 64MiB，超了拒绝（不会静默删旧照片）。
+- macOS 上遇到 HEIC 会先用 `sips` 转 JPEG；遇到非 sRGB 的照片会尝试用
+  `sips -m` 转 sRGB，转不了就照常上传并提示一句（广色域可能略偏淡）。
+- agent 不会把原图缓存到别处；只有转换时才在系统临时目录生成副本，上传后删除。
+- 同一张照片（最终 JPEG 相同）不会重复占配额；重复上传只返回已有 sha。
+
+**查看**
+
+`photo ls` 显示 sha 前 8 位、大小、停留时长、是否在清单，并附带每台设备最近
+一次上报的卡状态（ready/state/plv/已缓存/剩余空间/跳过列表）。老固件没有
+`status.photo`，会显示“未上报”。
+
+**初始化（危险操作）**
+
+- SD 卡是**专用整卡**，初始化会清空卡内所有数据，且不能插卡直接拷照片。
+- `photo init` 会先要求输入 `yes` 确认；`--force` 还要再确认一次。
+- 服务端生成一次性 token（10 分钟有效），agent 只显示前 8 位和到期时间；
+  设备只有在清单里拿到有效 token 时才会格式化，格式化后 token 立即失效。
+- 没有合法超级块（空白/别的文件系统）才允许普通初始化；超级块存在但 CRC
+  都坏的卡算故障，只有 `--force` 授权后才格式化。
+- 卡级读失败永远不会自动格式化；受影响设备只上报 `state=fault`，看板照常。
+
+---
+
 ## 4. 诊断：`stickbox-agent doctor`
 
 出问题时先跑它，每一项都会给中文修复建议：

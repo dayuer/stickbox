@@ -314,14 +314,17 @@ type apiError struct {
 }
 
 var errText = map[string]string{
-	"unauthorized": "令牌无效",
-	"bad code":     "配对码无效或已过期",
-	"rate limited": "尝试次数过多，请稍后再试",
-	"device bound": "该屏已绑定到其他用户",
-	"not found":    "服务端没有这条数据",
-	"forbidden":    "无权操作这台设备",
-	"bad request":  "服务端拒绝了请求",
-	"bad tz":       "时区不合法",
+	"unauthorized":           "令牌无效",
+	"bad code":               "配对码无效或已过期",
+	"rate limited":           "尝试次数过多，请稍后再试",
+	"device bound":           "该屏已绑定到其他用户",
+	"not found":              "服务端没有这条数据",
+	"forbidden":              "无权操作这台设备",
+	"bad request":            "服务端拒绝了请求",
+	"bad tz":                 "时区不合法",
+	"quota exceeded":         "照片配额已满（每人 200 张 / 64MiB）",
+	"unsupported media type": "不支持的图片格式（HEIC 请先在 macOS 上用 sips 转换）",
+	"unprocessable image":    "图片无法处理（可能压不到 250KB）",
 }
 
 func (e *apiError) Error() string {
@@ -759,10 +762,11 @@ func cmdUnpair(args []string) error {
 }
 
 type deviceRow struct {
-	Dev    string `json:"dev"`
-	Name   string `json:"name"`
-	Online bool   `json:"online"`
-	Bound  int64  `json:"bound"`
+	Dev    string            `json:"dev"`
+	Name   string            `json:"name"`
+	Online bool              `json:"online"`
+	Bound  int64             `json:"bound"`
+	Photo  *devicePhotoState `json:"photo,omitempty"`
 }
 
 func cmdDevices(args []string) error {
@@ -1400,6 +1404,11 @@ func usage() {
   stickbox-agent tz set <时区>         设置用户时区（如 Asia/Jakarta、+07:00）
   stickbox-agent tz show               查看生效时区及来源
   stickbox-agent tz clear              清除用户设置，回退 agent/默认
+  stickbox-agent photo add [--no-show] [--secs N] <文件...>
+                                       上传照片；默认自动上屏
+  stickbox-agent photo ls              列出照片与设备卡状态
+  stickbox-agent photo rm <sha前缀>    删除照片
+  stickbox-agent photo init [--force]  授权设备初始化 SD 卡（会清空卡）
 
 示例：
   stickbox-agent pair 123456
@@ -1445,6 +1454,8 @@ func main() {
 		err = cmdLogout(args)
 	case "tz":
 		err = cmdTZ(args)
+	case "photo":
+		err = cmdPhoto(args)
 	case "version", "-v", "--version":
 		fmt.Println(version)
 		return
