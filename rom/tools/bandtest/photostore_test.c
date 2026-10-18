@@ -102,6 +102,32 @@ static bool put_photo(photostore_t *st, const uint8_t sha[32],
     return photostore_put_finish(p);
 }
 
+/* 回归：open() 传的是局部 photo_io_t。修复前 open 只存指针，函数返回后
+ * 该栈帧被复用，format 会调到垃圾地址（上板表现为 InstrFetchProhibited,
+ * PC=0）。这里在 open 之后把原表毒化，再 format/写入：只有按值拷贝才能过。 */
+static bool local_io_lifetime(void)
+{
+    uint8_t *buf = malloc(4096);
+    if (!buf) return false;
+    photostore_t st;
+    photo_io_t io = IO;          /* 局部变量，故意不留生命周期 */
+    photostore_open(&st, &io, buf, 4096);
+    bool uninit = photostore_state(&st) == PHOTO_UNINIT;
+
+    io.read = NULL;              /* 毒化调用方的表 */
+    io.write = NULL;
+    bool fmt = photostore_format(&st, false);
+    bool ready = photostore_state(&st) == PHOTO_READY;
+
+    uint8_t data[700], h[32];
+    fill(data, sizeof data, 77);
+    photosha(data, sizeof data, h);
+    bool put = put_photo(&st, h, data, sizeof data, 8, 0);
+
+    free(buf);
+    return uninit && fmt && ready && put;
+}
+
 int main(void)
 {
     g_disk = malloc((size_t)SECTORS * 512);
@@ -303,6 +329,11 @@ int main(void)
     check(g_max_write <= SECTORS, "写不越过卡尾");
     photo_layout_t lay = st.lay;
     check(g_max_write <= lay.data_end, "写不越过 data_end");
+
+    /* 12. open 的 IO 表生命周期（上板 PC=0 回归） */
+    reset_card();
+    check(local_io_lifetime(),
+          "局部 IO 表：open 后毒化原表仍可 format/写入");
 
     free(buf);
     free(g_disk);

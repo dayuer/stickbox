@@ -669,25 +669,23 @@ static void download_missing(photostore_t *store)
 
 /* ------------------------------------------------------------ 应用清单 */
 
-static void apply_playlist(void)
+/* 清单里有未过期的 init_token。即使一张照片都没有，也要挂卡：
+ * 用户标准流程是「先 photo init 再 photo add」，不能等到有照片才格式化。 */
+static bool token_pending(void)
 {
-    if (s_pl.photo_count == 0) {
-        /* 清单里没有照片：不挂 SD；已经挂着的则清掉全部缓存。 */
-        abort_put();
-        cancel_retry();
-        if (photo_sd_mounted() && photo_sd_state() == PHOTO_READY) {
-            photostore_t *store = photo_sd_store();
-            if (store) {
-                gc_store(store);
-                update_stats(store);
-            }
-        }
-        return;
-    }
+    if (!s_pl.has_token || !photo_token_valid(s_pl.init_token)) return false;
+    time_t now;
+    if (!wall_time_valid(&now)) return false;
+    if (!s_pl.has_expires) return false;
+    return (int64_t)now < s_pl.expires_at;
+}
 
+/* 挂载，必要时凭 token 格式化。true = READY（并已更新 status 快照）。 */
+static bool mount_card_ready(void)
+{
     if (!photo_io_lock(30000)) {
         schedule_retry(esp_timer_get_time() + RETRY_SOON_US);
-        return;
+        return false;
     }
     photo_state_t st = photo_sd_mount();
     photo_io_unlock();
@@ -696,13 +694,60 @@ static void apply_playlist(void)
         /* 卡要重新初始化/格式化：半成品数据区马上就不属于我们了。 */
         abort_put();
         if (try_format()) st = photo_sd_state();
-        if (st != PHOTO_READY) {
-            ESP_LOGW(TAG, "SD 不可用（state=%d），本轮只显示看板", (int)st);
-            set_card(st);
-            s_ready_prev = false;
+    }
+    if (st != PHOTO_READY) {
+        ESP_LOGW(TAG, "SD 不可用（state=%d），本轮只显示看板", (int)st);
+        set_card(st);
+        s_ready_prev = false;
+        return false;
+    }
+    set_card(PHOTO_READY);
+    return true;
+}
+
+static void note_ready_transition(void)
+{
+    if (!s_ready_prev) {
+        s_ready_prev = true;
+        /* 卡从不可用变可用：按约定主动重拉一次清单，不依赖 plv 变化。 */
+        __atomic_store_n(&s_force_fetch, true, __ATOMIC_RELEASE);
+        kick();
+    }
+}
+
+static void apply_playlist(void)
+{
+    if (s_pl.photo_count == 0) {
+        abort_put();
+        cancel_retry();
+
+        if (!token_pending()) {
+            /* 没有照片也没有未过期的 token：不初始化 SD。
+             * 之前已经挂着的，顺手把不在清单里的缓存对账掉。 */
+            if (photo_sd_mounted() && photo_sd_state() == PHOTO_READY) {
+                photostore_t *store = photo_sd_store();
+                if (store) {
+                    gc_store(store);
+                    update_stats(store);
+                }
+            }
             return;
         }
+
+        ESP_LOGI(TAG, "清单暂无照片，但有未过期的 init token：挂卡检查状态");
+        if (!mount_card_ready()) return;
+        photostore_t *store = photo_sd_store();
+        if (!store) {
+            set_card(PHOTO_FAULT);
+            return;
+        }
+        gc_store(store);
+        update_stats(store);
+        note_ready_transition();
+        return;
     }
+
+    if (!mount_card_ready()) return;
 
     photostore_t *store = photo_sd_store();
     if (!store) {
@@ -710,19 +755,12 @@ static void apply_playlist(void)
         set_card(PHOTO_FAULT);
         return;
     }
-    set_card(PHOTO_READY);
     gc_store(store);
 
     if (s_put_live && !pl_find(&s_pl, s_put_sha)) abort_put();
     download_missing(store);
     update_stats(store);
-
-    if (!s_ready_prev) {
-        s_ready_prev = true;
-        /* 卡从不可用变可用：按约定主动重拉一次清单，不依赖 plv 变化。 */
-        __atomic_store_n(&s_force_fetch, true, __ATOMIC_RELEASE);
-        kick();
-    }
+    note_ready_transition();
 }
 
 static void reset_attempts(void)

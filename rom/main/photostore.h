@@ -85,7 +85,10 @@ typedef struct {
 } photo_layout_t;
 
 typedef struct photostore {
-    const photo_io_t *io;
+    /* **按值保存** IO 表。open() 只拷贝，不保留调用方指针：调用方在栈上
+     * 放一个局部 photo_io_t 是天然写法，指针存下来会在函数返回后悬空
+     * （M2 上板踩过：格式化时 PC=0）。 */
+    photo_io_t io;
     uint8_t *buf;          /* 调用方提供的 ≥4KB 缓冲 */
     uint32_t buf_len;
     photo_state_t state;
