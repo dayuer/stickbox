@@ -698,7 +698,7 @@ static void start_pair_task(void)
     if (s_pair_code[0] || s_paired || s_got_usage || s_pair_task_alive) return;
     s_pair_task_alive = true;
     if (xTaskCreate(pair_code_task, "pair_code", 8192, NULL, 3, NULL) != pdPASS)
-        s_pair_task_alive = false;   /* 堆不够：下次订阅被拒/不会再试，见 probe_cb 重启定时器 */
+        s_pair_task_alive = false;   /* 堆不够：probe_cb 会 25s 后重试 */
 }
 
 static void probe_cb(void *arg)
