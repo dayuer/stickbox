@@ -1,5 +1,7 @@
 # 本地模式（stickbox-local）设计
 
+> **已迁移**：本项目 2026-10-18 分拆到 dayuer/stickbox-tv，本文的后续维护在新仓库。此处仅作历史保留。
+
 状态：**设计稿，未实施。** 任务 L0，分支 `task/local-design`。
 所有三星 Room C（UA60DU7000，192.168.3.18）的参数，凡标「实测」的出自
 2026-10-18 server-pull 实验（`docs/HANDOFF-server-pull.md` §1），其余一律标「待测」。
