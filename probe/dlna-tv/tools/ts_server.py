@@ -34,7 +34,7 @@ class H(http.server.BaseHTTPRequestHandler):
             ["ffmpeg", "-v", "error", "-re", "-f", "lavfi", "-i", f"testsrc2=size={A.size}:rate=30",
              "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
              "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-pix_fmt", "yuv420p",
-             "-profile:v", "high", "-b:v", "6M", "-maxrate", "6M", "-bufsize", "6M", "-g", "60", "-bf", "0",
+             "-profile:v", "high", "-b:v", A.bitrate, "-maxrate", A.bitrate, "-bufsize", A.bitrate, "-g", "60", "-bf", "0",
              "-x264-params", "repeat-headers=1", "-c:a", "aac", "-b:a", "128k",
              "-flush_packets", "1", "-muxdelay", "0", "-f", "mpegts", "-"],
             stdout=subprocess.PIPE)
@@ -56,5 +56,6 @@ class H(http.server.BaseHTTPRequestHandler):
 ap = argparse.ArgumentParser()
 ap.add_argument("--port", type=int, default=8768)
 ap.add_argument("--size", default="1920x1080")
+ap.add_argument("--bitrate", default="6M")
 A = ap.parse_args()
 http.server.ThreadingHTTPServer(("0.0.0.0", A.port), H).serve_forever()
