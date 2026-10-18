@@ -1210,17 +1210,25 @@ static void boot_delay_task(void *arg)
     vTaskDelete(NULL);
 }
 
-/* 1 秒周期的轻量等待：在 esp_timer 任务里只做布尔判断和一次 xTaskCreate。
- * 这样首帧取帧期间没有 photo_boot 的 3KB 栈，也没有 photo_play 的 4KB 栈。 */
+/* 1 秒周期的轻量等待：在 esp_timer 任务（栈仅 2KB）里只做布尔判断和一次
+ * xTaskCreate。这样首帧取帧期间没有 photo_boot 的 3KB 栈，也没有 photo_play
+ * 的 4KB 栈。
+ *
+ * 建任务失败（此刻堆不够）时什么都不做：不开门、不停定时器、不打日志，
+ * 下一个 tick 条件仍成立，自然重试。绝不在这里调 boot_gate_open()——它会
+ * 格式化日志并建两个任务，在 2KB 栈上会溢出（memdiag.c 记过同类教训）。 */
 static void boot_wait_cb(void *arg)
 {
     (void)arg;
     if ((cloud_connected() && framefetch_first_done()) ||
         ++s_boot_wait_ticks >= (int)(BOOT_WAIT_MAX_US / 1000000)) {
-        if (s_boot_timer) esp_timer_stop(s_boot_timer);
-        s_boot_wait_done = true;
+        s_boot_wait_done = true;   /* 先置位：任务一起来就会读它 */
         if (xTaskCreate(boot_delay_task, "photo_boot", 3072, NULL, 1, NULL)
-            != pdPASS) boot_gate_open();
+            != pdPASS) {
+            s_boot_wait_done = false;
+            return;
+        }
+        if (s_boot_timer) esp_timer_stop(s_boot_timer);
     }
 }
 
