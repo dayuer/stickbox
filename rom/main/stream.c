@@ -44,9 +44,9 @@ static const char *TAG = "stream";
  * 期间这个连接任务是不睡的，会一直占着发送路径。 */
 #define BURST_FRAMES 8
 
-/* 照片从 SD 读出到 socket 的块大小。4KB 与 photostore 内部缓冲同粒度，
- * 2fps 下吞吐足够；播放一结束这块缓冲就 free，网络期间不占堆。 */
-#define PHOTO_CHUNK 4096
+/* 照片从 SD 读出到 socket 的块大小。2KB：2fps 下吞吐足够，且比 4KB
+ * 再省 2KB；播放一结束这块缓冲就 free，网络期间不占堆。 */
+#define PHOTO_CHUNK 2048
 
 static const frame_t *s_frames;
 static jb_page_t s_pages[4];

@@ -44,7 +44,7 @@ static const char *TAG = "photo";
 
 #define TASK_STACK       8192
 #define TASK_PRIO        2
-#define READ_CHUNK       2048   /* HTTP 读缓冲；解析器/写卡都按任意分片处理 */
+#define READ_CHUNK       1024   /* HTTP 读缓冲；解析器/写卡都按任意分片处理 */
 #define PL_MAX_BYTES     65536
 /* 网络操作的堆门槛：下载/清单会再开一次 TLS，必须给 40KB 硬底线留余量。
  * 低于门槛时任务先暂停照片播放、等堆回到门槛以上再开连接。 */
@@ -908,41 +908,55 @@ static void reset_attempts(void)
     memset(s_next_try_s, 0, sizeof s_next_try_s);
 }
 
+/* 开机挂卡：只在没有在线清单时（离线）或清单拉取之后调用；不格式化。 */
+static void do_boot_mount(void)
+{
+    multi_heap_info_t in;
+    heap_caps_get_info(&in, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    ESP_LOGI(TAG, "开机挂卡开始：free=%u largest=%u min=%u",
+             (unsigned)in.total_free_bytes, (unsigned)in.largest_free_block,
+             (unsigned)in.minimum_free_bytes);
+
+    if (!photo_sd_mounted()) {
+        if (photo_io_store_lock(30000)) {
+            photo_sd_mount();
+            photo_io_store_unlock();
+        }
+    }
+    photo_state_t st = photo_sd_state();
+    photo_state_t report = st;
+    if (st == PHOTO_READY) {
+        /* 索引里一张照片都没有：立刻卸载，别为无照片的卡常驻
+         * sdmmc 驱动和 4KB 缓冲。有缓存照片才保持挂载供离线播放。 */
+        if (photo_io_store_lock(30000)) {
+            photostore_t *store = photo_sd_store();
+            uint32_t bad = 0;
+            int have = store ? photostore_walk(store, NULL, NULL, &bad) : 0;
+            if (have == 0) photo_sd_unmount();
+            photo_io_store_unlock();
+        }
+    } else if (st != PHOTO_ABSENT) {
+        photo_sd_unmount();
+    }
+    set_card(report);
+    if (report == PHOTO_READY) update_stats(photo_sd_store());
+    __atomic_add_fetch(&s_play_gen, 1, __ATOMIC_RELEASE);
+
+    heap_caps_get_info(&in, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    ESP_LOGI(TAG, "开机挂卡结束：state=%d 上报=%d free=%u largest=%u min=%u",
+             (int)st, (int)report, (unsigned)in.total_free_bytes,
+             (unsigned)in.largest_free_block,
+             (unsigned)in.minimum_free_bytes);
+}
+
 static void run_sync(void)
 {
-    /* 开机只挂卡、不格式化：断网时也能从 SD 索引继续播已缓存照片。 */
+    /* 开机挂卡：离线时立即挂（从索引播缓存照片）；在线时推迟到清单 TLS
+     * 之后，避免 sdmmc 的 6.7KB 驱动/缓冲和清单握手叠加。 */
+    bool boot_deferred = false;
     if (__atomic_exchange_n(&s_boot_mount, false, __ATOMIC_ACQ_REL)) {
-        if (!photo_sd_mounted()) {
-            if (photo_io_store_lock(30000)) {
-                photo_sd_mount();
-                photo_io_store_unlock();
-            }
-        }
-        photo_state_t st = photo_sd_state();
-        photo_state_t report = st;
-        if (st == PHOTO_READY) {
-            /* 索引里一张照片都没有：立刻卸载，别为无照片的卡常驻
-             * sdmmc 驱动和 4KB 缓冲。有缓存照片才保持挂载供离线播放。 */
-            if (photo_io_store_lock(30000)) {
-                photostore_t *store = photo_sd_store();
-                uint32_t bad = 0;
-                int have = store ? photostore_walk(store, NULL, NULL, &bad) : 0;
-                if (have == 0) {
-                    photo_sd_unmount();
-                    /* 状态仍报卡的真实状态（READY/UNINIT），只是没挂载：
-                     * server 的 device show 不该把一张好卡显示成 absent。 */
-                }
-                photo_io_store_unlock();
-            }
-        } else if (st != PHOTO_ABSENT) {
-            /* UNINIT/FAULT 的卡上没有可播的照片，先释放驱动和缓冲；
-             * 等带 token/照片的清单到了再挂。 */
-            photo_sd_unmount();
-        }
-        set_card(report);
-        if (report == PHOTO_READY) update_stats(photo_sd_store());
-        __atomic_add_fetch(&s_play_gen, 1, __ATOMIC_RELEASE);
-        ESP_LOGI(TAG, "开机挂卡：state=%d 上报=%d", (int)st, (int)report);
+        if (!cloud_connected()) do_boot_mount();
+        else boot_deferred = true;
     }
 
     /* MQTT 不在线：本轮不做 HTTPS（两次 TLS 同时握手会把堆打到几 KB）。
@@ -962,6 +976,7 @@ static void run_sync(void)
     bool paused = photo_play_pause(4000);
     if (!paused) {
         ESP_LOGW(TAG, "照片播放未能及时让出，2 秒后再同步");
+        if (boot_deferred) do_boot_mount();
         photo_play_resume();
         schedule_retry(esp_timer_get_time() + RETRY_SOON_US * 2);
         return;
@@ -984,12 +999,14 @@ static void run_sync(void)
                      s_pl.photo_count);
         } else if (r == -2) {
             ESP_LOGI(TAG, "服务端说还没配对（403），60 秒后再拉清单");
+            if (boot_deferred) do_boot_mount();
             photo_play_resume();
             schedule_retry(esp_timer_get_time() + FETCH_FAIL_US);
             return;
         } else if (r == -3) {
             /* 取帧优先/堆不足：1 秒后再试，不把这次算成清单失败。 */
             ESP_LOGI(TAG, "清单拉取延后（取帧优先或堆不足），1 秒后重试");
+            if (boot_deferred) do_boot_mount();
             photo_play_resume();
             schedule_retry(esp_timer_get_time() + RETRY_SOON_US);
             return;
@@ -1000,6 +1017,7 @@ static void run_sync(void)
     }
 
     if (s_have_pl) apply_playlist();
+    if (boot_deferred) do_boot_mount();
     /* 不再无条件 bump：304/失败/没下载的轮次不触发播放器重建。 */
     photo_play_resume();
 
