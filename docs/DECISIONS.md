@@ -17,6 +17,8 @@
 | D8 | 照片存 SD 卡，**可选功能**（无 SD 槽的板子只显示看板） | 10-18 |
 | D9 | SD 卡用**裸扇区**，不用 FAT；按需挂载 | 10-18 |
 | D10 | 照片**纯显示**，不叠时钟和用量卡片 | 10-18 |
+| D11 | **照片功能正式做**，规格以 `docs/PHOTO.md` 为准；实机已验证 SD 链路（见 experiments/sd-bare-sector-round1.md） | 10-18 |
+| D12 | **play 任务放弃**（设备推外部 TS 流）；T33 保持停止 | 10-18 |
 
 ## 2. 硬约束
 
@@ -49,8 +51,10 @@
 
 | 任务 | 负责 | 状态 | 下一个检查点 |
 |---|---|---|---|
-| fix/T24-review（兼容性 6 条） | StickBox | 进行中 | 交付后我上板验老固件 |
-| T32-photo（PHOTO.md） | StickBox | 等 SD 实验结果 | 改完第 0、12 节 |
-| SD 可行性实验 | esp | 进行中 | 堆数据、读速；上板前先通知 |
-| T33-channel | esp1 | **已停止** | 整理说明留在分支 |
-| 照片 agent 命令 / 服务端接口 | esp1 | 等设计 | PHOTO.md 定稿后派 |
+| P0 规格确认 | esp、esp1 | 进行中 | 读 PHOTO.md 和 sd-bare-sector-round1.md，**开工前**用一条消息列出歧义/不一致和你的理解，等我确认 |
+| P1 服务端+agent：照片存储、缩放(1080p)、剥 EXIF、`/api/photo`、`/api/device/playlist`、plv 通知、`agent photo add/ls/rm` | esp1 | 待 P0 | 接口规格先发我，通过后写代码；老固件兼容回归 |
+| P2 固件 M1：SD 裸扇区存储层（A/B 超级块、索引、写后读回校验）+ host 测试 | esp | 待 P0 | M1 完成再做 M2 |
+| P2 固件 M2：清单拉取、按需下载（HTTPS，断点续传）、GC 限 /sb/ | esp | 待 M1 | |
+| P2 固件 M3：照片播放模式（stream.c 帧边界切换）、监督逻辑让位、无卡/坏卡回看板、status 上报 | esp | 待 M2 | |
+| 上板验收（含 BOARD-ACCEPTANCE 新增照片项） | 集成 | 待固件 | |
+| play / T33 | — | **已放弃** | 删除分支 |
