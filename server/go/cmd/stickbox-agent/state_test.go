@@ -1,0 +1,107 @@
+package main
+
+import (
+	"errors"
+	"os"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestStateSaveLoadAndPerms(t *testing.T) {
+	t.Setenv("STICKBOX_CONFIG_DIR", t.TempDir())
+	if got := loadState(); got != (agentState{}) {
+		t.Fatalf("文件不存在应得到空状态：%+v", got)
+	}
+	want := agentState{LastSuccessAt: 100, LastError: "boom", LastErrorAt: 200, ClaudeAuth: stateAuthOut, ClaudeAuthAt: 300}
+	if err := saveState(want); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadState(); got != want {
+		t.Fatalf("读回 %+v，期望 %+v", got, want)
+	}
+	if runtime.GOOS != "windows" {
+		p, _ := statePath()
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := fi.Mode().Perm(); perm != 0o600 {
+			t.Errorf("状态文件权限 = %o，期望 600", perm)
+		}
+	}
+}
+
+func TestLoadStateCorruptIsEmpty(t *testing.T) {
+	t.Setenv("STICKBOX_CONFIG_DIR", t.TempDir())
+	p, _ := statePath()
+	if err := os.WriteFile(p, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadState(); got != (agentState{}) {
+		t.Fatalf("损坏文件应当空状态：%+v", got)
+	}
+}
+
+func TestRecordRoundState(t *testing.T) {
+	t.Setenv("STICKBOX_CONFIG_DIR", t.TempDir())
+	logf := func(string, ...any) {}
+	t0 := time.Unix(1_000, 0)
+
+	recordRoundState(logf, errClaudeNotLoggedIn, t0)
+	s := loadState()
+	if s.ClaudeAuth != stateAuthOut || !strings.Contains(s.LastError, "claude auth login") || s.LastErrorAt != 1_000 {
+		t.Fatalf("未登录失败后：%+v", s)
+	}
+
+	// 别的失败不改登录状态，只更新最近错误。
+	recordRoundState(logf, errors.New("上报失败"), t0.Add(time.Minute))
+	s = loadState()
+	if s.ClaudeAuth != stateAuthOut || s.LastError != "上报失败" {
+		t.Fatalf("其它失败后：%+v", s)
+	}
+
+	// 成功：记成功时间、登录状态转已登录；最近错误保留（历史线索）。
+	recordRoundState(logf, nil, t0.Add(2*time.Minute))
+	s = loadState()
+	if s.LastSuccessAt != 1_120 || s.ClaudeAuth != stateAuthIn || s.LastError != "上报失败" {
+		t.Fatalf("成功后：%+v", s)
+	}
+}
+
+func TestRecordRoundStateTruncatesError(t *testing.T) {
+	t.Setenv("STICKBOX_CONFIG_DIR", t.TempDir())
+	recordRoundState(func(string, ...any) {}, errors.New(strings.Repeat("长", 1000)), time.Now())
+	if n := len([]rune(loadState().LastError)); n > stateMaxErr+1 {
+		t.Errorf("错误文本未截断：%d 字", n)
+	}
+}
+
+func TestStatusLines(t *testing.T) {
+	empty := agentState{}.statusLines()
+	if len(empty) != 3 || !strings.Contains(empty[0], "无记录") || !strings.Contains(empty[1], "无") || !strings.Contains(empty[2], "未知") {
+		t.Fatalf("空状态：%v", empty)
+	}
+	s := agentState{LastSuccessAt: 1_000, LastError: "boom", LastErrorAt: 2_000, ClaudeAuth: stateAuthOut, ClaudeAuthAt: 2_000}
+	got := strings.Join(s.statusLines(), "\n")
+	for _, w := range []string{"上次成功：", "最近错误：boom", "claude auth login"} {
+		if !strings.Contains(got, w) {
+			t.Errorf("缺少 %q：\n%s", w, got)
+		}
+	}
+}
+
+// runRound 的失败/成功都会写状态；用伪造 claude 走一遍未登录分支。
+func TestRunRoundRecordsNotLoggedIn(t *testing.T) {
+	t.Setenv("STICKBOX_CONFIG_DIR", t.TempDir())
+	claude := fakeClaudeFiles(t, totalCostStream, `{"loggedIn":false}`+"\n", 1)
+	err := runRound(&agentConfig{ClaudePath: claude}, func(string, ...any) {})
+	if !errors.Is(err, errClaudeNotLoggedIn) {
+		t.Fatalf("err = %v", err)
+	}
+	s := loadState()
+	if s.ClaudeAuth != stateAuthOut || s.LastErrorAt == 0 {
+		t.Fatalf("状态未记录：%+v", s)
+	}
+}

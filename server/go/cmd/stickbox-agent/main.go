@@ -611,6 +611,7 @@ func tailText(b []byte, n int) string {
 func runRound(c *agentConfig, logf func(string, ...any)) error {
 	rep, skip, err := collectUsage(c)
 	if err != nil {
+		recordRoundState(logf, err, time.Now())
 		return err
 	}
 	if skip != "" {
@@ -620,8 +621,11 @@ func runRound(c *agentConfig, logf func(string, ...any)) error {
 	rep.TZ = localTZ()
 	n, err := postUsage(c, rep)
 	if err != nil {
-		return fmt.Errorf("上报失败：%w", err)
+		err = fmt.Errorf("上报失败：%w", err)
+		recordRoundState(logf, err, time.Now())
+		return err
 	}
+	recordRoundState(logf, nil, time.Now())
 	logf("已上报：五小时 %s / 七天 %s；服务端推送到 %d 台设备",
 		fmtWindow(rep.FiveHour), fmtWindow(rep.SevenDay), n)
 	return nil
@@ -1002,6 +1006,9 @@ func cmdStatus(args []string) error {
 		fmt.Printf("后台服务：已安装（%s）\n", where)
 	} else {
 		fmt.Println("后台服务：未安装（运行 stickbox-agent install）")
+	}
+	for _, line := range loadState().statusLines() {
+		fmt.Println(line)
 	}
 	return nil
 }
