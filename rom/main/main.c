@@ -317,10 +317,10 @@ void app_main(void)
      * 放在 stream_start() 之后是因为要用它的带缓冲和页面解析结果。 */
     framefetch_boot();
     memdiag_heap("framefetch_boot 之后（含 flash 帧包与时钟任务）");
-    /* 照片播放调度 + 开机只挂卡（不格式化）：断网也能播已缓存的照片。 */
-    photo_play_start();
+    /* 照片开机门：先等 MQTT/首帧/电视流稳定，门开了才起播放调度、
+     * 挂卡（不格式化）、拉清单。调度任务也不在首帧取帧期间占堆。 */
     photo_sync_boot_mount();
-    memdiag_heap("照片播放调度之后");
+    memdiag_heap("照片开机门已布置");
 
     sntp_start();
     xTaskCreate(services_task, "svc", 8192, NULL, 4, NULL);

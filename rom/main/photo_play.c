@@ -215,10 +215,16 @@ static void play_task(void *arg)
 
 /* ------------------------------------------------------------ 对外 */
 
+/* 调度任务是否已创建。开机照片门打开前它不存在（R1：首帧期间不占 4KB 栈）。 */
+static volatile bool s_play_started;
+
+/* 幂等；由照片开机门打开时调用，避免调度任务栈在首帧取帧期间占堆。 */
 void photo_play_start(void)
 {
+    if (__atomic_test_and_set(&s_play_started, __ATOMIC_SEQ_CST)) return;
     if (xTaskCreate(play_task, "photo_play", PLAY_STACK, NULL, PLAY_PRIO, NULL)
         != pdPASS) {
+        __atomic_clear(&s_play_started, __ATOMIC_SEQ_CST);
         ESP_LOGE(TAG, "播放调度任务创建失败，照片不播，看板照常");
     }
 }
@@ -232,6 +238,10 @@ bool photo_play_pause(uint32_t max_wait_ms)
 {
     __atomic_add_fetch(&s_pause_refs, 1, __ATOMIC_ACQ_REL);
     s_pause_req = true;
+    /* 调度任务没起来 = 没有在播的照片，无需等它让出。计数与 s_pause_req
+     * 照常加减：任务稍后创建时会看到 s_pause_req，直到 resume 才播。
+     * 否则崩溃镜像上传（t≈45s）会在照片门打开前白等满 max_wait_ms。 */
+    if (!__atomic_load_n(&s_play_started, __ATOMIC_ACQUIRE)) return true;
     int64_t t0 = esp_timer_get_time();
     while (esp_timer_get_time() - t0 < (int64_t)max_wait_ms * 1000) {
         if (s_paused && photo_play_holds() == 0) {
