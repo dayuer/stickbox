@@ -1,9 +1,19 @@
-# 电视推流实验脚本
+# 电视推流实验脚本索引
 
-两条研究线，八个脚本。每个脚本的用法和结论写在它自己的 docstring 里，
-这里只列「哪个脚本回答哪个问题」，免得下次要翻八个文件才找得到入口。
+两条研究线。每个脚本的用法和结论写在它自己的 docstring 里，这里只列
+「哪个脚本回答哪个问题」，免得下次要翻八个文件才找得到入口。
 
 全部脚本都用 `python3 -I` 跑（隔离模式，不从脚本目录和当前目录加载第三方包）。
+
+## 脚本在哪
+
+| 目录 | 内容 |
+|---|---|
+| `docs/experiments/tvstart/` | 线一（T17 首次出画）：`exp2.py` + 公共模块 |
+| `probe/dlna-tv/tools/` | 线二（服务端出流）：8 个脚本，含公共模块的副本 |
+
+`dlna_push.py` / `live_avi.py` 两份副本字节相同——`live_ts.py` 和 `push_url.py`
+会 `import dlna_push`，所以每个目录都得自带一份。
 
 ## 公共模块
 
@@ -11,8 +21,7 @@
 |---|---|
 | `dlna_push.py` | DLNA 控制点：SSDP 发现、`SetAVTransportURI` / `Play` / `Stop`、`GetTransportInfo` |
 | `live_avi.py` | 永不结束的 MJPEG-AVI 流（这是**固件今天在用**的那种封装） |
-
-`live_ts.py` 和 `push_url.py` 会 `import dlna_push`，所以这些脚本必须放在同一个目录里。
+| `tizen_remote.py` | 三星 Tizen 遥控（只在 `probe/` 下） |
 
 ## 线一：首次出画延迟（T17）
 
@@ -46,7 +55,7 @@
 
 ## 出处
 
-线二这 5 个脚本原先在未跟踪的 `probe/dlna-tv/tools/` 下（2026-10-18 上午），
+线二的脚本在 `probe/dlna-tv/tools/`（2026-10-18 上午写的，提交 `0cc5cba`）。
 按 mtime 的推进顺序是 `push_url` → `ts_server` → `swap_server` → `live_switch`，
 这个顺序本身就是论证链：先问「板子能不能完全退出数据面」，再问「服务端出流可行吗」，
 再问「流内换素材电视受不受得了」，最后才是「怎么换」。
