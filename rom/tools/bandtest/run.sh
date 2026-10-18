@@ -23,6 +23,8 @@ cc $CC_ARGS -o photostore_test photostore_test.c ../../main/photostore_core.c ..
 cc $CC_ARGS -o photo_core_test photo_core_test.c ../../main/photo_json.c ../../main/photo_policy.c
 # 播放序列：构建/计时/跳过不可播/重建，以及「无照片永远 board」回归
 cc $CC_ARGS -o photo_seq_test photo_seq_test.c ../../main/photo_play_seq.c
+# 崩溃镜像上传退避：413 每次开机重试是 v1.1.0 开机堆低点的根因，在主机钉死
+cc $CC_ARGS -o coredump_policy_test coredump_policy_test.c ../../main/coredump_policy.c
 
 # 帧包和黄金帧都由 server/go/cmd/packgen 现生成，不依赖任何别人的 worktree
 # ——那些目录会被收敛掉，测试不该因此失效。
@@ -66,3 +68,6 @@ echo "== 8. 照片清单解析 / 初始化授权 / status.photo =="
 
 echo "== 9. 照片播放序列 / 无照片时恒为 board =="
 ./photo_seq_test | tail -3
+
+echo "== 10. 崩溃镜像上传退避（413 不再每次开机重试）=="
+./coredump_policy_test | tail -3

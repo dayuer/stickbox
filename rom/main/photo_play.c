@@ -62,6 +62,9 @@ static uint8_t  s_fail_sha[32];
 static int      s_fail_count;
 static volatile bool s_force_rebuild;
 static volatile bool s_pause_req;
+/* 暂停是引用计数：照片同步和崩溃镜像上传都会开维护窗口，各自配对
+ * pause/resume。单个布尔量会让先结束的那一方把另一方的暂停解掉。 */
+static int s_pause_refs;
 static volatile bool s_paused;
 static int64_t       s_pause_t0;
 
@@ -227,6 +230,7 @@ void photo_play_notify_playlist(void)
 
 bool photo_play_pause(uint32_t max_wait_ms)
 {
+    __atomic_add_fetch(&s_pause_refs, 1, __ATOMIC_ACQ_REL);
     s_pause_req = true;
     int64_t t0 = esp_timer_get_time();
     while (esp_timer_get_time() - t0 < (int64_t)max_wait_ms * 1000) {
@@ -243,7 +247,13 @@ bool photo_play_pause(uint32_t max_wait_ms)
 
 void photo_play_resume(void)
 {
-    s_pause_req = false;
+    int left = __atomic_sub_fetch(&s_pause_refs, 1, __ATOMIC_ACQ_REL);
+    if (left < 0) {
+        /* 多调了一次 resume：归零，不让计数变负把后面的 pause 吞掉。 */
+        __atomic_store_n(&s_pause_refs, 0, __ATOMIC_RELEASE);
+        left = 0;
+    }
+    if (left == 0) s_pause_req = false;
 }
 
 bool photo_play_frame(photo_play_frame_t *out)
