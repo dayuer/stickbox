@@ -80,6 +80,8 @@ agent / user 令牌不能连 MQTT；设备不能调 agent/user 的 HTTP 端点�
 | GET | `/api/agent/devices` | agent | 列出名下设备与在线状态 |
 | GET | `/api/agent/usage` | agent | 读取本用户最新用量 |
 | POST | `/api/usage` | agent | 上报一次用量 |
+| GET | `/api/agent/data` | agent | 读取本用户最新经营数据 |
+| POST | `/api/data` | agent | 上报一次当日经营数据 |
 | GET | `/api/agent/coredumps` | agent | 列出自己名下设备的崩溃记录 |
 | POST | `/api/agent/logout` | agent | 注销当前 agent 令牌 |
 | GET | `/api/user/tz` | agent/user | 当前生效时区及来源 |
@@ -181,13 +183,46 @@ device 鉴权，且密钥必须已配对（pending 密钥返回 `403`）。
 三个长度都是大端。`base` / `atlas` 是 `FRAME.md` 约定的 DRI=8 JPEG 底帧与
 字形图集；`meta` 是 `FRAME.md` 的 JSON 索引。
 
-- `ETag` 是帧版本号（形如 `"7"`），同时返回 `X-Frame-Version`。
-- 带 `If-None-Match` 且版本没变时返回 `304`，无 body。
+**查询参数 `theme`**：取哪个主题的帧包，例如
+`GET /api/device/frame?theme=sales`。省略时给**主主题**（播放列表第一项）
+——老固件不带这个参数。主题名非法返回 `400`，服务端不认识这个主题返回
+`404 not found`。
+
+- `ETag` 形如 `"quota-7"`：**主题名 + 版本号**。各主题的版本是各自递增的，
+  两个主题可能都到 v7，ETag 只放版本号会让切换主题的设备收到假 `304`，
+  屏幕就一直停在上一个主题的画面上。`X-Frame-Version` 仍是纯版本号。
+- 带 `If-None-Match` 且没变时返回 `304`，无 body。
 - 还没出过帧时返回 `404 frame not ready`，带 `Retry-After: 30`。
 - 未配对返回 `403 forbidden`。
 
-帧版本变化时服务端往 MQTT `printer/{dev}/frame` 发 `{"ver":N}`（QoS 1，
-不 retain）。设备重连订阅该主题时服务端补发当前版本。
+#### 帧通知与播放列表
+
+帧版本变化时服务端往 MQTT `printer/{dev}/frame` 发（QoS 1，不 retain）：
+
+```json
+{
+  "ver": 7,
+  "pl": [
+    {"id": "quota", "ver": 7, "secs": 20},
+    {"id": "sales", "ver": 3, "secs": 20}
+  ]
+}
+```
+
+- `pl` 是播放列表，**按优先级排序**。设备在同一条视频流里按 `secs` 轮播，
+  每项用 `GET /api/device/frame?theme=<id>` 取自己的帧包。
+- `ver` 是主主题（`pl[0]`）的版本，单独留给老固件：它只认 `{"ver":N}`、
+  不认 `pl`，照旧取不带 `theme` 的那一个。两个字段永远一致地描述主主题。
+- **服务端不按设备能力裁剪列表长度**：机群里 8MB 和 16MB 的板子可能混着，
+  服务端不知道对面能驻留几个主题。设备自己按
+  `framepack_slots() / FP_SLOTS_PER_THEME` 算出能装几个，**从前往后**留下
+  装得下的那些。所以排在前面的主题优先上屏。
+- `secs` 在 5 秒到 10 分钟之间。只有一项时就是「不轮播」，和加主题之前
+  的行为一致。
+- 一个主题只有在它那一路数据**真的有了**之后才会进列表；主主题例外，
+  它即使没有数据也会出一张「等待上报」的帧，这样新配对的设备有东西可显示。
+
+设备重连订阅该主题时服务端补发当前播放列表。
 
 ### 2.4 `GET /api/device/firmware`
 
@@ -255,7 +290,7 @@ mqtts://mqtt.stickbox.ai:8883
 
 - `printer/{dev}/usage`（QoS 1）
 - `printer/{dev}/pair`（QoS 1）
-- `printer/{dev}/frame`（QoS 1；payload `{"ver":N}`，收到后 GET `/api/device/frame`）
+- `printer/{dev}/frame`（QoS 1；payload `{"ver":N,"pl":[…]}`，见 2.3；收到后按播放列表逐个 GET `/api/device/frame?theme=<id>`）
 
 并每 30 秒发布一次心跳：
 
@@ -505,11 +540,76 @@ agent 上报一次用量。服务端保存为该用户的最新一份，并推�
 错误：`400 bad request`（校验失败，`detail` 说明哪项越界）、
 `401 unauthorized`、`500 server error`。
 
-### 3.6 `GET /api/agent/coredumps`
+### 3.6 `POST /api/data`
+
+agent 上报一次当日经营数据。这是「非 Claude 那一路数据」的通道：路径叫
+`data` 而不是 `sales`，因为指标集合以后会变，路径不该跟着指标名走。
+
+服务端保存为该用户的最新一份，然后标脏重渲帧。**不推 MQTT**：设备不认识
+经营指标，它只取服务端渲好的帧，少一条推送链路就少一处两端状态不一致的来源。
+
+请求：
+
+```json
+{
+  "date": "2026-10-17",
+  "tz": "Asia/Shanghai",
+  "gmv":          {"value": 146000, "goal": 200000},
+  "orders":       {"value": 420,    "goal": 400},
+  "card_revenue": {"value": 8000,   "goal": 10000}
+}
+```
+
+校验：
+
+- `date` 必填，`YYYY-MM-DD`，是这份数据所属的**本地**日期。必须带日期而
+  不是只靠时间戳：跨零点后旧数据不能继续当成「今日」显示。
+- `gmv` / `orders` / `card_revenue` 至少有一个。
+- `value`、`goal` 不能为负。
+- `goal` 为 0 表示这项没设目标：合法，但画不出达成率，不上屏。
+- `value` 不能超过 `goal` 的 100 倍（一般是单位搞错了，比如元写成分，
+  否则环会永远停在 100%）。
+- `tz` 可选，是上报方的 IANA 时区；当日窗口的零点按它算。没有时用
+  `config.json` 的 `default_tz`。无法识别的时区会被忽略并回退，不会让
+  整条上报被拒。
+- 请求体上限 4KB。
+
+成功 `200`：`{"ok":1}`
+
+错误：`400 bad request`（校验失败，`detail` 说明哪项不对）、
+`401 unauthorized`、`500 server error`。
+
+**版面只有两个环，上报可以带三个指标**，默认上屏成交额与订单；权益卡收入
+照样存下来，改服务端 `source.Sales.Show` 就能顶上去。
+
+**哪一路上屏不用配置**：跟着最近一次上报走。只报 `/api/usage` 就看到额度
+看板，只报 `/api/data` 就看到经营看板，两边都报则看最近那次。
+
+### 3.7 `GET /api/agent/data`
+
+读取本用户最新一份经营数据。
+
+成功 `200`：
+
+```json
+{
+  "ts": 1762219400,
+  "date": "2026-10-17",
+  "tz": "Asia/Shanghai",
+  "gmv":          {"value": 146000, "goal": 200000},
+  "orders":       {"value": 420,    "goal": 400},
+  "card_revenue": {"value": 8000,   "goal": 10000}
+}
+```
+
+- `ts` 是服务端收到数据的时间。
+- 还没有任何上报时返回 `404 not found`。
+
+### 3.8 `GET /api/agent/coredumps`
 
 agent 鉴权。列出自己名下设备的崩溃记录（`dev`、`at`、`size`），新的在前。
 
-### 3.7 `POST /api/agent/logout`
+### 3.9 `POST /api/agent/logout`
 
 注销当前 agent 令牌（只影响这一把）。
 
@@ -674,7 +774,26 @@ curl -sS https://mqtt.stickbox.ai/api/agent/devices \
   -H "Authorization: Bearer $AGENTTOK"
 ```
 
-### 6.3 MQTT 心跳与订阅
+### 6.3 上报并读取当日经营数据
+
+```bash
+curl -sS -X POST https://mqtt.stickbox.ai/api/data \
+  -H "Authorization: Bearer $AGENTTOK" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "date":"2026-10-17",
+    "tz":"Asia/Shanghai",
+    "gmv":{"value":146000,"goal":200000},
+    "orders":{"value":420,"goal":400},
+    "card_revenue":{"value":8000,"goal":10000}
+  }'
+# → {"ok":1}
+
+curl -sS https://mqtt.stickbox.ai/api/agent/data \
+  -H "Authorization: Bearer $AGENTTOK"
+```
+
+### 6.4 MQTT 心跳与订阅
 
 ```bash
 # 设备心跳（username 是 dev，password 是完整 device 令牌）
@@ -691,7 +810,7 @@ mosquitto_sub -h mqtt.stickbox.ai -p 8883 --capath /etc/ssl/certs \
 
 agent 令牌不能连 MQTT；设备也不能订阅 `printer/其它dev/...`。
 
-### 6.4 解绑
+### 6.5 解绑
 
 ```bash
 curl -sS -X POST https://mqtt.stickbox.ai/api/agent/unpair \

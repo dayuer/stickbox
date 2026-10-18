@@ -7,6 +7,42 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/usage"
 )
 
+// UsageStore 是 Claude 数据源对用量存储的窄依赖。
+type UsageStore interface {
+	Latest(userID string) (usage.Report, time.Time, bool, error)
+}
+
+// ClaudeSource 是 Claude 用量这一路数据源：按 userID 取最近一次上报、
+// 解析时区，再交给 Claude 做换算。
+//
+// 上报里带的 tz 只是**回退值**，不是最终答案：用户在 App / CLI 里设过时区
+// 就以用户的为准（T29）。优先级由 TZResolver 统一处理。
+type ClaudeSource struct {
+	Store UsageStore
+	// TZ 解析时区：用户设置 > 上报里带的 tz > 服务端默认。
+	TZ TZResolver
+}
+
+// NewClaude 构造 Claude 用量数据源。
+func NewClaude(st UsageStore, tzr TZResolver) ClaudeSource {
+	return ClaudeSource{Store: st, TZ: tzr}
+}
+
+func (ClaudeSource) ID() string { return "claude-usage" }
+
+func (s ClaudeSource) Snapshot(ctx context.Context, userID string, now time.Time) (Snapshot, error) {
+	rep, received, ok, err := s.Store.Latest(userID)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if !ok {
+		// 刚配对、agent 还没上报过：也要出一张「等待上报」的帧。
+		rep, received = usage.Report{}, time.Time{}
+	}
+	loc := s.TZ.Location(userID, rep.TZ)
+	return Claude{Report: rep, ReceivedAt: received}.Snapshot(ctx, now.In(loc))
+}
+
 // Claude 把一次 agent 上报的用量转换成看板快照。
 //
 // report 里的百分比是 0..100，这里换算成 0..1；时间戳保持绝对时刻，

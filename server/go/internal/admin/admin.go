@@ -33,7 +33,8 @@ type Usage interface {
 }
 
 type Frames interface {
-	Current(userID string) (data []byte, ver uint64, ok bool)
+	// themeID 为空表示主主题。admin 只关心「有没有帧、版本多少」。
+	Current(userID, themeID string) (data []byte, ver uint64, ok bool)
 }
 
 // Runtime 是运行中的 broker/tracker 提供的易失状态。
@@ -245,7 +246,7 @@ func (h *Handler) collect(dev string, n int) (Report, error) {
 		}
 	}
 	if h.fr != nil {
-		if _, ver, ok := h.fr.Current(owner); ok {
+		if _, ver, ok := h.fr.Current(owner, ""); ok {
 			rep.Frame = &FrameInfo{Version: ver, Available: true}
 		} else {
 			rep.Frame = &FrameInfo{Available: false}

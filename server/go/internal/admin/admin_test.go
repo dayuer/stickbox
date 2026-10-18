@@ -40,7 +40,7 @@ type fakeFrames struct {
 	ok  bool
 }
 
-func (f fakeFrames) Current(string) ([]byte, uint64, bool) { return nil, f.ver, f.ok }
+func (f fakeFrames) Current(string, string) ([]byte, uint64, bool) { return nil, f.ver, f.ok }
 
 type fakeRuntime struct{}
 

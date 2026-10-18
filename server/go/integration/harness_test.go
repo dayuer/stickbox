@@ -31,6 +31,7 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/httpapi"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
 	"github.com/dayuer/stickbox/server/go/internal/render"
+	"github.com/dayuer/stickbox/server/go/internal/source"
 	"github.com/dayuer/stickbox/server/go/internal/store"
 	"github.com/dayuer/stickbox/server/go/internal/tlsx"
 )
@@ -96,15 +97,21 @@ func startServerAtWith(t *testing.T, dir string, builder frames.Builder) (*env, 
 	api := httpapi.New(cfg, st, v, reg, br)
 	br.SetUsageResender(api.Usage())
 	br.SetPairResender(api)
-	if builder == nil {
-		rr, err := render.New()
-		if err != nil {
-			t.Fatalf("初始化渲染器：%v", err)
-		}
-		builder = frames.RenderBuilder{R: rr}
+	rr, err := render.New()
+	if err != nil {
+		t.Fatalf("初始化渲染器：%v", err)
 	}
-	fs, err := frames.New(cfg.Root, st, api.Usage(), br, builder, frames.Options{
-		DefaultTZ:         "UTC",
+	if builder == nil {
+		builder = frames.ThemeBuilder{}
+	}
+	tzr := source.NewTZResolver(st, "UTC")
+	fs, err := frames.New(cfg.Root, st, []frames.Themed{{
+		Theme: render.Quota{R: rr},
+		Source: source.NewComposite(
+			source.NewClaude(api.Usage(), tzr),
+			source.NewSales(api.Sales(), tzr),
+		),
+	}}, br, builder, frames.Options{
 		Debounce:          100 * time.Millisecond, // 测试里缩短防抖
 		RenderConcurrency: 1,
 		BackfillPerSec:    100,
@@ -262,6 +269,16 @@ func (e *env) reportUsage(agentToken string, body []byte) {
 			"Authorization": "Bearer " + agentToken})
 	if st != 200 {
 		e.t.Fatalf("上报用量 = %d %s", st, b)
+	}
+}
+
+func (e *env) reportData(agentToken, body string) {
+	e.t.Helper()
+	st, b := e.req("POST", "/api/data", body,
+		map[string]string{"Content-Type": "application/json",
+			"Authorization": "Bearer " + agentToken})
+	if st != 200 {
+		e.t.Fatalf("上报经营数据 = %d %s", st, b)
 	}
 }
 

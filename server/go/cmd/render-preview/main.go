@@ -56,13 +56,14 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	th := render.Quota{R: rr}
 
 	now := time.Date(2026, 10, 17, 12, 47, 0, 0, previewZone)
 	for _, sc := range scenarios {
 		snap := snapshot(sc, now)
 
 		// 设计稿参考：直接渲染的整帧（自适应质量，≤120KB 预览）
-		full, err := rr.Render(snap)
+		full, err := render.EncodeFrame(th.FullImage(snap))
 		if err != nil {
 			fatal(fmt.Errorf("%s: %w", sc.name, err))
 		}
@@ -72,7 +73,7 @@ func main() {
 		}
 
 		// 设备实际会拿到的包：底帧 + 图集 + 元数据 + 当前时间拼接帧
-		b, err := frame.Build(rr, snap)
+		b, err := frame.Build(th, snap)
 		if err != nil {
 			fatal(fmt.Errorf("%s: %w", sc.name, err))
 		}

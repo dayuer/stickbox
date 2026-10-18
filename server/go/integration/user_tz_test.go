@@ -9,6 +9,7 @@ import (
 
 	"github.com/dayuer/stickbox/server/go/internal/frame"
 	"github.com/dayuer/stickbox/server/go/internal/source"
+	"github.com/dayuer/stickbox/server/go/internal/theme"
 )
 
 // recBuilder 记录每次渲染用的快照，同时复用 tinyBuilder 产出合法帧包。
@@ -19,12 +20,12 @@ type recBuilder struct {
 	calls int
 }
 
-func (b *recBuilder) Build(s source.Snapshot) (*frame.Bundle, error) {
+func (b *recBuilder) Build(th theme.Theme, s source.Snapshot) (*frame.Bundle, error) {
 	b.mu.Lock()
 	b.last = s
 	b.calls++
 	b.mu.Unlock()
-	return b.tinyBuilder.Build(s)
+	return b.tinyBuilder.Build(th, s)
 }
 
 func (b *recBuilder) snapshot() source.Snapshot {
@@ -114,4 +115,6 @@ func TestUserTZSetAndClearRerendersImmediately(t *testing.T) {
 	}
 }
 
-func quoted(v uint64) string { return fmt.Sprintf(`"%d"`, v) }
+// ETag 带主题名（见 frames.Service.ETag）：各主题版本各自递增，
+// 光一个版本号会让切主题的设备收到假 304。
+func quoted(v uint64) string { return fmt.Sprintf(`"quota-%d"`, v) }

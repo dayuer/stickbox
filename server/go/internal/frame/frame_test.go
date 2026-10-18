@@ -13,6 +13,7 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/jpegrestart"
 	"github.com/dayuer/stickbox/server/go/internal/render"
 	"github.com/dayuer/stickbox/server/go/internal/source"
+	"github.com/dayuer/stickbox/server/go/internal/theme"
 )
 
 var testNow = time.Date(2026, 10, 17, 12, 47, 0, 0, time.FixedZone("CST", 8*3600))
@@ -24,19 +25,35 @@ type state struct {
 	rem5 time.Duration
 	u7   float64
 	rem7 time.Duration
+	// dir 为 Target 时换成「当日目标」口径的两个窗口：结论句、预测句、
+	// 速度建议的措辞都不一样，底帧字数变了就要重新确认装得进槽位。
+	dir source.Direction
 }
 
 var states = []state{
-	{"超速", true, .02, 4*time.Hour + 15*time.Minute + 30*time.Second, .34, 4*24*time.Hour + 18*time.Hour + 13*time.Minute},
-	{"安全", true, .38, 2*time.Hour + 24*time.Minute + 2*time.Second, .20, 4*24*time.Hour + 18*time.Hour + 13*time.Minute},
-	{"危险", true, .92, time.Hour + 4*time.Minute + 55*time.Second, .34, 4*24*time.Hour + 18*time.Hour + 13*time.Minute},
-	{"用满", true, 1, 42*time.Minute + 15*time.Second, .364, 4*24*time.Hour + 16*time.Hour},
-	{"无数据", false, 0, 0, 0, 0},
+	{"超速", true, .02, 4*time.Hour + 15*time.Minute + 30*time.Second, .34, 4*24*time.Hour + 18*time.Hour + 13*time.Minute, source.Budget},
+	{"安全", true, .38, 2*time.Hour + 24*time.Minute + 2*time.Second, .20, 4*24*time.Hour + 18*time.Hour + 13*time.Minute, source.Budget},
+	{"危险", true, .92, time.Hour + 4*time.Minute + 55*time.Second, .34, 4*24*time.Hour + 18*time.Hour + 13*time.Minute, source.Budget},
+	{"用满", true, 1, 42*time.Minute + 15*time.Second, .364, 4*24*time.Hour + 16*time.Hour, source.Budget},
+	{"无数据", false, 0, 0, 0, 0, source.Budget},
+	{"目标落后", true, .28, 11 * time.Hour, .41, 11 * time.Hour, source.Target},
+	{"目标达成", true, 1.06, 11 * time.Hour, .93, 11 * time.Hour, source.Target},
+	{"目标无数据", false, 0, 0, 0, 0, source.Target},
 }
 
 func snapshot(st state, now time.Time) source.Snapshot {
 	s := source.Snapshot{Now: now, LastUpdate: now.Add(-3 * time.Minute), DeviceIP: "192.168.3.14"}
+	s.Dir = st.dir
 	if !st.has {
+		return s
+	}
+	if st.dir == source.Target {
+		s.Windows = []source.Window{
+			{Label: "今日成交额", Length: 24 * time.Hour, UsedPercentage: st.u5,
+				ResetsAt: now.Add(st.rem5), Dir: source.Target},
+			{Label: "今日订单", Length: 24*time.Hour + time.Second, UsedPercentage: st.u7,
+				ResetsAt: now.Add(st.rem7), Dir: source.Target},
+		}
 		return s
 	}
 	s.Windows = []source.Window{
@@ -51,10 +68,11 @@ func TestSpliceMatchesFull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	th := render.Quota{R: rr}
 	for _, st := range states {
 		t.Run(st.name, func(t *testing.T) {
 			snap := snapshot(st, testNow)
-			b, err := Build(rr, snap)
+			b, err := Build(th, snap)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -62,7 +80,7 @@ func TestSpliceMatchesFull(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			full, err := jpegrestart.Encode(rr.FullImage(snap), jpegrestart.Options{
+			full, err := jpegrestart.Encode(th.FullImage(snap), jpegrestart.Options{
 				Quality: Quality, RestartInterval: DRI,
 			})
 			if err != nil {
@@ -83,8 +101,9 @@ func TestSpliceArbitraryClock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	th := render.Quota{R: rr}
 	snap := snapshot(states[0], testNow)
-	b, err := Build(rr, snap)
+	b, err := Build(th, snap)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,8 +115,9 @@ func TestSpliceArbitraryClock(t *testing.T) {
 		got := decodeJPEG(t, spliced)
 
 		clockNow := time.Date(2026, 10, 17, hm[0], hm[1], 0, 0, testNow.Location())
-		want := decodeJPEG(t, encodeFull(t, rr, snapshot(states[0], clockNow)))
-		band := image.Rect(0, render.ClockBandRow0*16, Width, render.ClockBandRow1*16)
+		want := decodeJPEG(t, encodeFull(t, th, snapshot(states[0], clockNow)))
+		g := th.Geometry()
+		band := image.Rect(0, g.BandRow0*16, Width, g.BandRow1*16)
 		if diff := maxDiff(got, want, band); diff != 0 {
 			t.Errorf("%02d:%02d: 时钟带最大像素差 %d", hm[0], hm[1], diff)
 		}
@@ -109,8 +129,9 @@ func TestBundleFitsSlot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	th := render.Quota{R: rr}
 	for _, st := range states {
-		b, err := Build(rr, snapshot(st, testNow))
+		b, err := Build(th, snapshot(st, testNow))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -168,7 +189,8 @@ func TestSpliceDecodesWithLibjpeg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := Build(rr, snapshot(states[0], testNow))
+	th := render.Quota{R: rr}
+	b, err := Build(th, snapshot(states[0], testNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,9 +227,9 @@ func TestValidateBandSize(t *testing.T) {
 	}
 }
 
-func encodeFull(t *testing.T, rr *render.Renderer, s source.Snapshot) []byte {
+func encodeFull(t *testing.T, th theme.Theme, s source.Snapshot) []byte {
 	t.Helper()
-	res, err := jpegrestart.Encode(rr.FullImage(s), jpegrestart.Options{
+	res, err := jpegrestart.Encode(th.FullImage(s), jpegrestart.Options{
 		Quality: Quality, RestartInterval: DRI,
 	})
 	if err != nil {

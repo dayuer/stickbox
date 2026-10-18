@@ -11,7 +11,9 @@ import (
 
 	"github.com/dayuer/stickbox/server/go/internal/frame"
 	"github.com/dayuer/stickbox/server/go/internal/frames"
+	"github.com/dayuer/stickbox/server/go/internal/render"
 	"github.com/dayuer/stickbox/server/go/internal/source"
+	"github.com/dayuer/stickbox/server/go/internal/theme"
 	"github.com/dayuer/stickbox/server/go/internal/usage"
 )
 
@@ -20,7 +22,7 @@ import (
 // 测试预算。渲染器本身由 frame/render 的测试和 T13c 集成测试覆盖。
 type tinyBuilder struct{}
 
-func (tinyBuilder) Build(source.Snapshot) (*frame.Bundle, error) {
+func (tinyBuilder) Build(theme.Theme, source.Snapshot) (*frame.Bundle, error) {
 	base := []byte("base")
 	atlas := []byte("atlas")
 	b := &frame.Bundle{Base: base, Atlas: atlas}
@@ -77,14 +79,20 @@ func TestFramesBackfillOnStartup(t *testing.T) {
 	e.reportUsage(agentTok, usageReport(time.Now(), 15))
 
 	pub := &frameRecPub{}
+	rr, err := render.New()
+	if err != nil {
+		t.Fatal(err)
+	}
 	fs, err := frames.New(
 		t.TempDir(), // 全新的 frames 目录，模拟刚部署
 		e.store,
-		usage.NewService(e.store, usageNoopPub{}, time.Now),
+		[]frames.Themed{{
+			Theme:  render.Quota{R: rr},
+			Source: source.NewClaude(usage.NewService(e.store, usageNoopPub{}, time.Now), source.NewFixedTZ("UTC")),
+		}},
 		pub,
 		tinyBuilder{},
 		frames.Options{
-			DefaultTZ:         "UTC",
 			Debounce:          50 * time.Millisecond,
 			RenderConcurrency: 1,
 		},
@@ -100,7 +108,7 @@ func TestFramesBackfillOnStartup(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if _, ver, ok := fs.Current(userID); ok && ver >= 1 {
+		if _, ver, ok := fs.Current(userID, "quota"); ok && ver >= 1 {
 			break
 		}
 		if time.Now().After(deadline) {
