@@ -86,6 +86,11 @@ func (a *API) handlePhotoPost(w http.ResponseWriter, r *http.Request, id auth.Id
 		return
 	}
 
+	// 清单变了才需要通知；重复上传且已在清单里时也发一次，代价很小。
+	if show {
+		a.notifyPlaylist(id.UserID)
+	}
+
 	code := http.StatusCreated
 	if !res.Created {
 		code = http.StatusOK

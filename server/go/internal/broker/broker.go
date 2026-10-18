@@ -335,3 +335,6 @@ func (b *Broker) SetFrameResender(r FrameResender) { b.hook.frame = r }
 
 // SetPairResender 接上「设备订阅 pair 时按密钥状态补发」的回调。
 func (b *Broker) SetPairResender(r PairResender) { b.hook.pair = r }
+
+// SetPhotoStatusSink 接收设备 status.photo；实现必须非阻塞。
+func (b *Broker) SetPhotoStatusSink(s PhotoStatusSink) { b.hook.photo = s }

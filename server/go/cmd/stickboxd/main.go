@@ -22,6 +22,7 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/httpapi"
 	"github.com/dayuer/stickbox/server/go/internal/metrics"
 	"github.com/dayuer/stickbox/server/go/internal/photo"
+	"github.com/dayuer/stickbox/server/go/internal/photostatus"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
 	"github.com/dayuer/stickbox/server/go/internal/render"
 	"github.com/dayuer/stickbox/server/go/internal/source"
@@ -134,8 +135,15 @@ func serve(cfg *config.Config) error {
 	br.SetFrameResender(fs)
 
 	// 照片：文件落 <root>/photos/<user>/，只存缩放/剥元数据后的 JPEG。
-	// 清单里的 board 条目固定指当前主主题（现在只有 quota）。
-	api.SetPhotos(photo.New(cfg.Root, st, "quota"))
+	// 清单里的 board 条目指当前主主题（从 frames 取，不写死）。
+	api.SetPhotos(photo.New(cfg.Root, st, fs.PrimaryTheme()))
+
+	// 设备 status.photo：MQTT 任务只投递，后台 worker 落库；init_done
+	// 用掉 token 时推进 plv 并通知设备重拉清单。
+	photoStatus := photostatus.New(st, fs)
+	photoStatus.Start()
+	defer photoStatus.Close()
+	br.SetPhotoStatusSink(brokerPhotoStatus{ps: photoStatus})
 	dailyCtx, dailyStop := context.WithCancel(context.Background())
 	defer dailyStop()
 	go fs.Run(dailyCtx)
@@ -183,6 +191,7 @@ func serve(cfg *config.Config) error {
 		adminRuntime{br: br, cmd: cmdTracker, api: api})
 	// CLI 改时区要立刻重渲并通知设备；它跑在另一个进程，只能走这里。
 	adminH.SetTZApplier(adminTZ{st: st, fs: fs})
+	adminH.SetPhotoStatus(adminPhoto{ps: photoStatus})
 	adminSrv, err := admin.Serve(cfg.AdminAddr, adminH)
 	if err != nil {
 		br.Close()
@@ -233,6 +242,30 @@ func (a adminRuntime) Pending(dev string) []command.PendingInfo {
 }
 func (a adminRuntime) RegisterQuota(dev string) (int, int, time.Time) {
 	return a.api.RegisterQuota(dev)
+}
+
+// brokerPhotoStatus 把 broker 的解析结果转给 photostatus 的队列。
+type brokerPhotoStatus struct{ ps *photostatus.Service }
+
+func (b brokerPhotoStatus) UpdatePhotoStatus(dev string, st broker.PhotoStatus) {
+	b.ps.Update(dev, photostatus.Status{
+		Cap: st.Cap, Ready: st.Ready, PLV: st.PLV, Have: st.Have,
+		Bad: st.Bad, FreeKB: st.FreeKB, State: st.State, InitDone: st.InitDone,
+	})
+}
+
+// adminPhoto 把 photostatus 的结果转成 admin 的展示类型。
+type adminPhoto struct{ ps *photostatus.Service }
+
+func (a adminPhoto) Get(dev string) (admin.PhotoStatusInfo, bool) {
+	st, ok := a.ps.Get(dev)
+	if !ok {
+		return admin.PhotoStatusInfo{}, false
+	}
+	return admin.PhotoStatusInfo{
+		Cap: st.Cap, Ready: st.Ready, PLV: st.PLV, Have: st.Have,
+		Bad: st.Bad, FreeKB: st.FreeKB, State: st.State, InitDone: st.InitDone,
+	}, true
 }
 
 // adminTZ 让 CLI 的 user tz 经过运行中的进程：写库后同步重渲并通知设备。

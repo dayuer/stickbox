@@ -27,6 +27,7 @@ type fakeStore struct {
 	owners map[string]string
 	keys   map[string]store.Key
 	tzs    map[string]string
+	plv    int64
 	err    error
 }
 
@@ -35,6 +36,13 @@ func (f *fakeStore) UserTZ(userID string) (string, error) {
 		return "", f.err
 	}
 	return f.tzs[userID], nil
+}
+
+func (f *fakeStore) PlaylistVersion(string) (int64, error) {
+	if f.err != nil {
+		return 0, f.err
+	}
+	return f.plv, nil
 }
 
 func (f *fakeStore) DevicesOfUser(userID string) ([]string, error) {

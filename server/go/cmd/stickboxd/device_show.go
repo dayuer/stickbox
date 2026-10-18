@@ -160,6 +160,23 @@ func formatDeviceShow(r admin.Report) string {
 		fmt.Fprintf(&b, "帧版本：v%d\n", r.Frame.Version)
 	}
 
+	if r.Photo == nil {
+		if r.Bound {
+			b.WriteString("照片：设备未上报（老固件或无 SD 构建）\n")
+		}
+	} else {
+		fmt.Fprintf(&b, "照片：cap=%v ready=%v state=%s plv=%d 已缓存=%d 剩余=%.1fGB",
+			r.Photo.Cap, r.Photo.Ready, r.Photo.State, r.Photo.PLV,
+			r.Photo.Have, float64(r.Photo.FreeKB)/1024/1024)
+		if r.Photo.InitDone != "" {
+			fmt.Fprintf(&b, "（已用初始化 token %s）", r.Photo.InitDone)
+		}
+		b.WriteString("\n")
+		if len(r.Photo.Bad) > 0 {
+			fmt.Fprintf(&b, "  跳过：%s\n", strings.Join(r.Photo.Bad, ", "))
+		}
+	}
+
 	fmt.Fprintf(&b, "注册配额：剩余 %d/%d", r.RegisterQuota.Remaining, r.RegisterQuota.Limit)
 	if r.RegisterQuota.ResetAt != nil {
 		fmt.Fprintf(&b, "（%s 恢复一个名额）", r.RegisterQuota.ResetAt.Local().Format("15:04:05"))
