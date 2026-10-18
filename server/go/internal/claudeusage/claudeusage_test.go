@@ -3,6 +3,7 @@ package claudeusage
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -113,5 +114,19 @@ func TestTailTextAndExecError(t *testing.T) {
 	err = ExecError(errors.New("killed"), true, 2*time.Second, "")
 	if !strings.Contains(err.Error(), "超时") {
 		t.Fatalf("超时错误 = %v", err)
+	}
+}
+
+func TestExecErrorExitCode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh 不在 Windows 上")
+	}
+	runErr := exec.Command("sh", "-c", "exit 3").Run()
+	var rf *RunFailure
+	if !errors.As(ExecError(runErr, false, 0, ""), &rf) || rf.ExitCode != 3 {
+		t.Fatalf("ExitCode = %+v", rf)
+	}
+	if !errors.As(ExecError(errors.New("killed"), true, time.Second, ""), &rf) || rf.ExitCode != -1 {
+		t.Fatalf("超时 ExitCode = %+v", rf)
 	}
 }

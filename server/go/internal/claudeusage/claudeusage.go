@@ -192,6 +192,12 @@ func WorkDir(baseDir string) (string, error) {
 	return work, nil
 }
 
+// ProcessStats 是子进程退出后的资源统计。
+type ProcessStats struct {
+	ExitCode     int
+	PeakRSSBytes int64 // 内核记账（rusage），不是采样值；平台不支持时为 0
+}
+
 // Config 是执行一次 claude 的输入。
 type Config struct {
 	ClaudePath string        // 已解析的 claude 可执行文件
@@ -200,9 +206,14 @@ type Config struct {
 	Env        []string      // 原始环境；内部按白名单过滤
 	// OnStart 在进程启动后调用，可用来采样峰值内存。
 	OnStart func(pid int)
+	// OnExit 在子进程退出（无论成败）后调用一次。
+	OnExit func(ProcessStats)
 }
 
 // Run 执行一次 `claude -p /usage`，返回原始 stdout 和 stderr 末尾。
+//
+// 子进程单独成组。超时或 ctx 取消时整组 SIGKILL，避免 claude 派生的
+// 辅助进程变成孤儿；正常退出后也补一刀清理同组残留。
 func Run(ctx context.Context, cfg Config) (stdout []byte, stderrTail string, err error) {
 	if cfg.ClaudePath == "" {
 		return nil, "", errors.New("没有 claude 可执行文件")
@@ -215,13 +226,30 @@ func Run(ctx context.Context, cfg Config) (stdout []byte, stderrTail string, err
 		ctx, cancel = context.WithTimeout(ctx, cfg.Timeout)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(ctx, cfg.ClaudePath,
+
+	// stdout/stderr 直接接临时文件而不是管道：如果 claude 派生的进程
+	// 继承了管道写端，cmd.Wait 会等到管道关闭才返回，超时也救不回来。
+	outFile, err := os.CreateTemp("", "claudeusage-stdout-*")
+	if err != nil {
+		return nil, "", fmt.Errorf("创建 stdout 临时文件失败：%w", err)
+	}
+	defer os.Remove(outFile.Name())
+	defer outFile.Close()
+	errFile, err := os.CreateTemp("", "claudeusage-stderr-*")
+	if err != nil {
+		return nil, "", fmt.Errorf("创建 stderr 临时文件失败：%w", err)
+	}
+	defer os.Remove(errFile.Name())
+	defer errFile.Close()
+
+	cmd := exec.Command(cfg.ClaudePath,
 		"-p", "/usage",
 		"--setting-sources", "project",
 		"--no-session-persistence",
 		"--output-format", "stream-json",
 		"--verbose",
 	)
+	configureProcessGroup(cmd)
 	cmd.Env = FilterEnv(cfg.Env)
 	cmd.Dir = cfg.WorkDir
 
@@ -232,25 +260,59 @@ func Run(ctx context.Context, cfg Config) (stdout []byte, stderrTail string, err
 	}
 	defer devNull.Close()
 	cmd.Stdin = devNull
-
-	stderr := &tailWriter{max: 64 << 10}
-	cmd.Stderr = stderr
-	var out bytes.Buffer
-	cmd.Stdout = &out
+	cmd.Stdout = outFile
+	cmd.Stderr = errFile
 
 	if err := cmd.Start(); err != nil {
 		return nil, "", fmt.Errorf("启动 claude 失败：%w", err)
 	}
+	pid := cmd.Process.Pid
 	if cfg.OnStart != nil {
-		cfg.OnStart(cmd.Process.Pid)
+		cfg.OnStart(pid)
 	}
+	waitDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			killProcessGroup(pid)
+		case <-waitDone:
+		}
+	}()
 	waitErr := cmd.Wait()
-	tail := TailText(stderr.buf, 600)
+	close(waitDone)
+	killProcessGroup(pid) // 正常退出也清理同组遗留
+
+	if ps := cmd.ProcessState; ps != nil && cfg.OnExit != nil {
+		cfg.OnExit(ProcessStats{ExitCode: ps.ExitCode(), PeakRSSBytes: processPeakRSS(ps)})
+	}
+	out, _ := os.ReadFile(outFile.Name())
+	tail := fileTail(errFile, 600)
 	if waitErr != nil {
-		return out.Bytes(), tail, ExecError(waitErr, errors.Is(ctx.Err(), context.DeadlineExceeded),
+		return out, tail, ExecError(waitErr, errors.Is(ctx.Err(), context.DeadlineExceeded),
 			cfg.Timeout, tail)
 	}
-	return out.Bytes(), tail, nil
+	return out, tail, nil
+}
+
+// fileTail 从打开的文件末尾读 n 字节。
+func fileTail(f *os.File, n int) string {
+	st, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+	size := st.Size()
+	if size == 0 {
+		return ""
+	}
+	n64 := int64(n)
+	if n64 > size {
+		n64 = size
+	}
+	if _, err := f.Seek(size-n64, io.SeekStart); err != nil {
+		return ""
+	}
+	b, _ := io.ReadAll(io.LimitReader(f, n64))
+	return TailText(b, n)
 }
 
 // Collect 是 Run + ParseStream。
@@ -263,30 +325,42 @@ func Collect(ctx context.Context, cfg Config) (Report, string, error) {
 	return ParseStream(bytes.NewReader(out))
 }
 
+// RunFailure 是 claude 未正常退出时的错误，带退出码方便实验记录。
+type RunFailure struct {
+	Err        error
+	TimedOut   bool
+	Timeout    time.Duration
+	StderrTail string
+	ExitCode   int // 超时或信号退出为 -1
+}
+
+func (e *RunFailure) Error() string {
+	suffix := ""
+	if e.StderrTail != "" {
+		suffix = "；stderr 末尾：" + e.StderrTail
+	}
+	if e.TimedOut {
+		return fmt.Sprintf("claude 执行超时（%s）%s", e.Timeout, suffix)
+	}
+	return fmt.Sprintf("claude 执行失败：%v%s", e.Err, suffix)
+}
+
+func (e *RunFailure) Unwrap() error { return e.Err }
+
 // ExecError 把 claude 的退出错误变成可读的中文错误。
 func ExecError(err error, timedOut bool, timeout time.Duration, stderrTail string) error {
-	suffix := ""
-	if stderrTail != "" {
-		suffix = "；stderr 末尾：" + stderrTail
+	code := -1
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		code = ee.ExitCode()
 	}
-	if timedOut {
-		return fmt.Errorf("claude 执行超时（%s）%s", timeout, suffix)
+	return &RunFailure{
+		Err:        err,
+		TimedOut:   timedOut,
+		Timeout:    timeout,
+		StderrTail: stderrTail,
+		ExitCode:   code,
 	}
-	return fmt.Errorf("claude 执行失败：%v%s", err, suffix)
-}
-
-// TailWriter 只保留最后 max 字节，避免异常输出把内存吃光。
-type tailWriter struct {
-	buf []byte
-	max int
-}
-
-func (w *tailWriter) Write(p []byte) (int, error) {
-	w.buf = append(w.buf, p...)
-	if len(w.buf) > w.max {
-		w.buf = w.buf[len(w.buf)-w.max:]
-	}
-	return len(p), nil
 }
 
 // TailText 取末尾 n 个字节，并保证是合法 UTF-8 边界附近的可读文本。
