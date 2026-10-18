@@ -215,10 +215,14 @@ static void play_task(void *arg)
 
 /* ------------------------------------------------------------ 对外 */
 
+/* 幂等；由照片开机门打开时调用，避免调度任务栈在首帧取帧期间占堆。 */
 void photo_play_start(void)
 {
+    static volatile bool started;
+    if (__atomic_test_and_set(&started, __ATOMIC_SEQ_CST)) return;
     if (xTaskCreate(play_task, "photo_play", PLAY_STACK, NULL, PLAY_PRIO, NULL)
         != pdPASS) {
+        __atomic_clear(&started, __ATOMIC_SEQ_CST);
         ESP_LOGE(TAG, "播放调度任务创建失败，照片不播，看板照常");
     }
 }

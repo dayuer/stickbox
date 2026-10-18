@@ -1140,9 +1140,15 @@ static void boot_heap_log(const char *what)
              (unsigned)in.minimum_free_bytes);
 }
 
+static esp_timer_handle_t s_boot_timer;
+static volatile bool s_boot_wait_done;
+static int s_boot_wait_ticks;
+
 static void boot_gate_open(void)
 {
     boot_heap_log("打开照片门");
+    /* 调度任务也等到这里才建：首帧取帧期间不占 4KB 栈。 */
+    photo_play_start();
     __atomic_store_n(&s_boot_mount, true, __ATOMIC_RELEASE);
     __atomic_store_n(&s_boot_gate_open, true, __ATOMIC_RELEASE);
     kick();
@@ -1151,11 +1157,14 @@ static void boot_gate_open(void)
 static void boot_delay_task(void *arg)
 {
     (void)arg;
-    int64_t t0 = esp_timer_get_time();
-    ESP_LOGI(TAG, "开机照片任务延后：等 MQTT + 首帧完成");
-    while (esp_timer_get_time() - t0 < BOOT_WAIT_MAX_US) {
-        if (cloud_connected() && framefetch_first_done()) break;
-        vTaskDelay(pdMS_TO_TICKS(1000));
+    /* 定时器已经等到条件了；只有定时器创建失败的后备路径才在这里等。 */
+    if (!s_boot_wait_done) {
+        int64_t t0 = esp_timer_get_time();
+        ESP_LOGI(TAG, "开机照片任务延后：等 MQTT + 首帧完成");
+        while (esp_timer_get_time() - t0 < BOOT_WAIT_MAX_US) {
+            if (cloud_connected() && framefetch_first_done()) break;
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
     }
     boot_heap_log("启动条件");
 
@@ -1201,15 +1210,35 @@ static void boot_delay_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* 1 秒周期的轻量等待：在 esp_timer 任务里只做布尔判断和一次 xTaskCreate。
+ * 这样首帧取帧期间没有 photo_boot 的 3KB 栈，也没有 photo_play 的 4KB 栈。 */
+static void boot_wait_cb(void *arg)
+{
+    (void)arg;
+    if ((cloud_connected() && framefetch_first_done()) ||
+        ++s_boot_wait_ticks >= (int)(BOOT_WAIT_MAX_US / 1000000)) {
+        if (s_boot_timer) esp_timer_stop(s_boot_timer);
+        s_boot_wait_done = true;
+        if (xTaskCreate(boot_delay_task, "photo_boot", 3072, NULL, 1, NULL)
+            != pdPASS) boot_gate_open();
+    }
+}
+
 void photo_sync_boot_mount(void)
 {
-    if (xTaskCreate(boot_delay_task, "photo_boot", 3072, NULL, 1, NULL)
-        != pdPASS) {
-        ESP_LOGW(TAG, "开机延迟任务创建失败，立即开门");
-        __atomic_store_n(&s_boot_mount, true, __ATOMIC_RELEASE);
-        __atomic_store_n(&s_boot_gate_open, true, __ATOMIC_RELEASE);
-        kick();
+    const esp_timer_create_args_t a = {
+        .callback = boot_wait_cb,
+        .name = "photo_bootwait",
+    };
+    if (esp_timer_create(&a, &s_boot_timer) == ESP_OK &&
+        esp_timer_start_periodic(s_boot_timer, 1000000) == ESP_OK) {
+        ESP_LOGI(TAG, "开机照片任务延后：等 MQTT + 首帧（1s 定时器）");
+        return;
     }
+    s_boot_timer = NULL;
+    ESP_LOGW(TAG, "开机等待定时器创建失败，用任务等待");
+    if (xTaskCreate(boot_delay_task, "photo_boot", 3072, NULL, 1, NULL)
+        != pdPASS) boot_gate_open();
 }
 
 int photo_sync_status_json(char *out, size_t cap)
