@@ -225,6 +225,13 @@ static void test_status(void)
     char small[64];
     check(photo_status_json(&s, small, sizeof small) == -1, "缓冲不足返回 -1");
 
+    photo_status_t big = s;
+    big.free_kb = 244140625ULL;   /* 256GB 卡约 2.3 亿 KB */
+    char bbuf[512];
+    check(photo_status_json(&big, bbuf, sizeof bbuf) > 0 &&
+          strstr(bbuf, "\"free_kb\":244140625") != NULL,
+          "free_kb 大值不截断");
+
     check(strcmp(photo_state_name(PHOTO_ABSENT), "absent") == 0 &&
           strcmp(photo_state_name(PHOTO_UNINIT), "uninit") == 0 &&
           strcmp(photo_state_name(PHOTO_READY), "ok") == 0 &&

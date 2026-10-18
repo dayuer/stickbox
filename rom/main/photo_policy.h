@@ -53,7 +53,7 @@ typedef struct {
     bool ready;
     int  plv;
     int  have;
-    uint32_t free_kb;
+    uint64_t free_kb;        /* KB；256GB 卡约 2.4 亿，uint32 也够，但别留截断隐患 */
     const char *state;       /* ok / uninit / fault / absent */
     const char *init_done;   /* token 前 8 位，没有则空串 */
     const photo_bad_t *bad;

@@ -114,8 +114,8 @@ int photo_status_json(const photo_status_t *s, char *out, size_t cap)
         }
     }
     int k = snprintf(out + n, cap - (size_t)n,
-                     "],\"free_kb\":%u,\"state\":\"%s\",\"init_done\":\"%s\"}",
-                     (unsigned)s->free_kb, state, done);
+                     "],\"free_kb\":%llu,\"state\":\"%s\",\"init_done\":\"%s\"}",
+                     (unsigned long long)s->free_kb, state, done);
     if (k < 0 || (size_t)k >= cap - (size_t)n) return -1;
     return n + k;
 }
