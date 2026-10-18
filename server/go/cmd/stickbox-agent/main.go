@@ -858,7 +858,8 @@ func cmdRun(args []string) error {
 
 	log.Printf("stickbox-agent %s 启动，每 %s 上报一次（未配对或令牌失效时 %s 后重试）",
 		version, usageInterval, authRetryInterval)
-	return runDaemon(ctx, logf, daemonRound(logf), sleepCtx)
+	tracker := newFailureTracker(systemNotify, logf)
+	return runDaemon(ctx, logf, withFailureNotify(daemonRound(logf), tracker), sleepCtx)
 }
 
 // daemonRound 每轮重新读配置：用户重新 pair 之后不用重启服务。
