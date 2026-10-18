@@ -95,10 +95,13 @@ func startServerAt(t *testing.T, dir string) (*env, func()) {
 	if err != nil {
 		t.Fatalf("初始化渲染器：%v", err)
 	}
-	fs, err := frames.New(cfg.Root, st, source.NewComposite(
-		source.NewClaude(api.Usage(), "UTC"),
-		source.NewSales(api.Sales(), "UTC"),
-	), br, frames.ThemeBuilder{T: render.Quota{R: rr}}, frames.Options{
+	fs, err := frames.New(cfg.Root, st, []frames.Themed{{
+		Theme: render.Quota{R: rr},
+		Source: source.NewComposite(
+			source.NewClaude(api.Usage(), "UTC"),
+			source.NewSales(api.Sales(), "UTC"),
+		),
+	}}, br, frames.ThemeBuilder{}, frames.Options{
 		Debounce:          100 * time.Millisecond, // 测试里缩短防抖
 		RenderConcurrency: 1,
 		BackfillPerSec:    100,

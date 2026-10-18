@@ -54,8 +54,12 @@ var (
 	ErrNotPaired = errors.New("frames: device not paired")
 	// ErrNoFrame 表示设备已配对，但还没有可下发的帧。
 	ErrNoFrame = errors.New("frames: frame not ready")
+	// ErrNoTheme 表示请求的主题这台服务端不认识。
+	ErrNoTheme = errors.New("frames: unknown theme")
 
 	errNoDevices = errors.New("frames: no devices")
+	// errNoThemeData 表示这个非主主题那一路还没有数据，这一轮不出它的帧。
+	errNoThemeData = errors.New("frames: theme has no data")
 )
 
 // Store 是帧服务对 store 的窄依赖。
@@ -74,20 +78,37 @@ type Publisher interface {
 	PublishFrame(dev string, payload []byte) error
 }
 
-// Builder 把快照渲染成帧包。单测里换成假实现，避免真的跑渲染器。
+// Builder 把某个主题的快照渲染成帧包。单测里换成假实现，避免真的跑渲染器。
 type Builder interface {
-	Build(source.Snapshot) (*frame.Bundle, error)
+	Build(theme.Theme, source.Snapshot) (*frame.Bundle, error)
 }
 
-// ThemeBuilder 把一个主题接到帧服务上。
+// ThemeBuilder 是生产用的 Builder：直接走 frame.Build。
+type ThemeBuilder struct{}
+
+func (ThemeBuilder) Build(th theme.Theme, s source.Snapshot) (*frame.Bundle, error) {
+	return frame.Build(th, s)
+}
+
+// Themed 把一个主题和它吃的那一路数据绑在一起。
 //
-// 现在一个服务只接一个主题；播放列表轮播要等帧服务能按主题存多份帧包，
-// 那时这里会变成「一组主题」。
-type ThemeBuilder struct{ T theme.Theme }
-
-func (b ThemeBuilder) Build(s source.Snapshot) (*frame.Bundle, error) {
-	return frame.Build(b.T, s)
+// 顺序就是播放列表的优先级：第一个是主主题，设备装不下全部时从前往后留，
+// 老固件也只认它那一个版本号。
+type Themed struct {
+	Theme  theme.Theme
+	Source source.Source
 }
+
+// packKey 是帧包的取用键：一个用户的一个主题一份帧包。
+//
+// 落盘是 <root>/frames/<user>/<theme>.cache——按用户分目录而不是把主题
+// 拼进目录名，这样解绑时删掉整个用户目录就能连带清掉它的全部主题。
+type packKey struct {
+	user  string
+	theme string
+}
+
+func (k packKey) String() string { return k.user + "/" + k.theme }
 
 type Options struct {
 	Debounce          time.Duration // 同一用户多次标脏的合并窗口
@@ -100,7 +121,9 @@ type Options struct {
 	MemoryMaxBytes int64
 	// BackfillPerSec 是启动补帧速率（用户/秒）。
 	BackfillPerSec int
-	Now            func() time.Time
+	// Dwell 是播放列表里每个主题的停留时长。只有一个主题时没有意义。
+	Dwell time.Duration
+	Now   func() time.Time
 	// After 是防抖计时器；测试注入假时钟，默认 time.After。
 	After func(time.Duration) <-chan time.Time
 }
@@ -122,13 +145,13 @@ type worker struct {
 
 // memNode 记录 LRU 节点入账时的帧包大小，避免替换/命中时 memBytes 漂移。
 type memNode struct {
-	id   string
+	k    packKey
 	size int64
 }
 
 // evicted 是磁盘淘汰的用户，用于在锁外删目录并写版本墓碑。
 type evicted struct {
-	id  string
+	k   packKey
 	ver uint64
 }
 
@@ -136,7 +159,7 @@ type evicted struct {
 type Service struct {
 	root    string
 	store   Store
-	src     source.Source
+	themes  []Themed
 	pub     Publisher
 	builder Builder
 	opt     Options
@@ -153,11 +176,11 @@ type Service struct {
 	commitMu  sync.Mutex // 串行提交，保证版本号按提交顺序递增
 
 	mu    sync.RWMutex
-	cache map[string]*cached
+	cache map[packKey]*cached
 
 	// 常驻内存 LRU：cache 里的 data 只有最近用过的用户才有。
-	memLRU    *list.List // 值 = userID；front 最近使用
-	memIndex  map[string]*list.Element
+	memLRU    *list.List // 值 = *memNode；front 最近使用
+	memIndex  map[packKey]*list.Element
 	memBytes  int64
 	diskBytes int64
 
@@ -167,13 +190,22 @@ type Service struct {
 	backfillSet map[string]struct{}
 }
 
-func New(root string, st Store, src source.Source, pub Publisher, b Builder, opt Options) (*Service, error) {
+func New(root string, st Store, themes []Themed, pub Publisher, b Builder, opt Options) (*Service, error) {
 	if root == "" {
 		return nil, errors.New("frames: root 为空")
 	}
-	if st == nil || src == nil || pub == nil || b == nil {
+	if st == nil || len(themes) == 0 || pub == nil || b == nil {
 		return nil, errors.New("frames: 缺依赖")
 	}
+	for i, t := range themes {
+		if t.Theme == nil || t.Source == nil {
+			return nil, fmt.Errorf("frames: 第 %d 个主题缺主题或数据源", i)
+		}
+		if !safeID(t.Theme.ID()) {
+			return nil, fmt.Errorf("frames: 主题 ID %q 不能用作文件名", t.Theme.ID())
+		}
+	}
+	opt.Dwell = theme.ClampDwell(opt.Dwell)
 	if opt.Debounce <= 0 {
 		opt.Debounce = 2 * time.Second
 	}
@@ -206,13 +238,13 @@ func New(root string, st Store, src source.Source, pub Publisher, b Builder, opt
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
-		root: root, store: st, src: src, pub: pub, builder: b, opt: opt,
+		root: root, store: st, themes: themes, pub: pub, builder: b, opt: opt,
 		ctx: ctx, cancel: cancel,
 		workers:     map[string]*worker{},
 		renderSem:   make(chan struct{}, opt.RenderConcurrency),
-		cache:       map[string]*cached{},
+		cache:       map[packKey]*cached{},
 		memLRU:      list.New(),
-		memIndex:    map[string]*list.Element{},
+		memIndex:    map[packKey]*list.Element{},
 		backfillSet: map[string]struct{}{},
 	}
 	if err := os.MkdirAll(s.dir(), 0o700); err != nil {
@@ -239,12 +271,15 @@ func (s *Service) Close() {
 
 func (s *Service) dir() string              { return filepath.Join(s.root, "frames") }
 func (s *Service) userDir(id string) string { return filepath.Join(s.dir(), id) }
-func (s *Service) cacheFile(id string) string {
-	return filepath.Join(s.userDir(id), "frame.cache")
+func (s *Service) cacheFile(k packKey) string {
+	return filepath.Join(s.userDir(k.user), k.theme+".cache")
 }
 
 // safeUserID 只挡路径分隔符和越界长度；store 生成的是 32 位十六进制。
-func safeUserID(id string) bool {
+func safeUserID(id string) bool { return safeID(id) }
+
+// safeID 是能安全拼进路径的标识符：用户 ID 和主题 ID 共用这一套。
+func safeID(id string) bool {
 	if id == "" || len(id) > 64 {
 		return false
 	}
@@ -272,18 +307,32 @@ func (s *Service) load() {
 		if !e.IsDir() || !safeUserID(e.Name()) {
 			continue
 		}
-		path := filepath.Join(s.dir(), e.Name(), "frame.cache")
-		c, err := readCacheHeader(path)
+		files, err := os.ReadDir(filepath.Join(s.dir(), e.Name()))
 		if err != nil {
-			slog.Warn("帧缓存损坏，忽略", "user", e.Name(), "err", err)
 			continue
 		}
-		s.cache[e.Name()] = c
-		s.diskBytes += c.size + cacheHeader
+		for _, f := range files {
+			name := f.Name()
+			if f.IsDir() || !strings.HasSuffix(name, ".cache") {
+				continue // 还包括 commit 留下的 .frame-*.tmp
+			}
+			id := strings.TrimSuffix(name, ".cache")
+			if !safeID(id) {
+				continue
+			}
+			k := packKey{user: e.Name(), theme: id}
+			c, err := readCacheHeader(s.cacheFile(k))
+			if err != nil {
+				slog.Warn("帧缓存损坏，忽略", "pack", k, "err", err)
+				continue
+			}
+			s.cache[k] = c
+			s.diskBytes += c.size + cacheHeader
+		}
 	}
 	// 启动时磁盘已超限：按 used 淘汰。
 	s.mu.Lock()
-	victims := s.evictDiskLocked("", s.opt.CacheMaxBytes)
+	victims := s.evictDiskLocked(packKey{}, s.opt.CacheMaxBytes)
 	s.mu.Unlock()
 	s.finishEvictions(victims)
 }
@@ -403,38 +452,70 @@ func (s *Service) Rebuild(userID string) error {
 		return errNoDevices
 	}
 	now := s.opt.Now()
-	snap, err := s.src.Snapshot(s.ctx, userID, now)
-	if err != nil {
-		return fmt.Errorf("frames: 取 %s 数据：%w", s.src.ID(), err)
-	}
 
-	bun, err := s.builder.Build(snap)
+	// 每个主题吃自己那一路数据，各渲一个帧包。一个主题挂了不影响别的：
+	// 它保留上一张好帧，播放列表里照样有它。全挂了才算这次重建失败。
+	var firstErr error
+	built := 0
+	for i, t := range s.themes {
+		if err := s.rebuildTheme(userID, t, now, i == 0); err != nil {
+			// 「这一路还没数据」不是错误，是正常的「这个主题先不上屏」。
+			if firstErr == nil && !errors.Is(err, errNoThemeData) {
+				firstErr = err
+			}
+			continue
+		}
+		built++
+	}
+	// 有主题成功就算这一轮成功：失败的那个保留上一张好帧，照样在列表里。
+	if built == 0 {
+		return firstErr
+	}
+	// 通知放在全部主题渲完之后发一次：播放列表是一个整体，中途发会让
+	// 设备按只有一半主题的列表去取包。
+	s.notify(userID)
+	return nil
+}
+
+// primary 为真时无论有没有数据都出帧：新配对的设备总得有东西可显示
+// （那张「等待上报」的帧）。非主主题要等它那一路真有数据才进轮播——
+// 否则只报了一路的用户会看到一块空白看板在那轮流上屏。
+func (s *Service) rebuildTheme(userID string, t Themed, now time.Time, primary bool) error {
+	snap, err := t.Source.Snapshot(s.ctx, userID, now)
 	if err != nil {
-		slog.Warn("渲染帧失败，保留旧帧", "user", userID, "err", err)
-		return fmt.Errorf("frames: 渲染：%w", err)
+		return fmt.Errorf("frames: 取 %s 数据：%w", t.Source.ID(), err)
+	}
+	if !primary && !snap.HasData() {
+		return errNoThemeData
+	}
+	bun, err := s.builder.Build(t.Theme, snap)
+	if err != nil {
+		slog.Warn("渲染帧失败，保留旧帧", "user", userID, "theme", t.Theme.ID(), "err", err)
+		return fmt.Errorf("frames: 渲染 %s：%w", t.Theme.ID(), err)
 	}
 	data, err := Pack(bun)
 	if err != nil {
-		slog.Warn("打包帧失败，保留旧帧", "user", userID, "err", err)
-		return fmt.Errorf("frames: 打包：%w", err)
+		slog.Warn("打包帧失败，保留旧帧", "user", userID, "theme", t.Theme.ID(), "err", err)
+		return fmt.Errorf("frames: 打包 %s：%w", t.Theme.ID(), err)
 	}
-	return s.commit(userID, data, now, snap.LastUpdate, snap.HasData())
+	k := packKey{user: userID, theme: t.Theme.ID()}
+	return s.commit(k, data, now, snap.LastUpdate, snap.HasData())
 }
 
 // commit 写临时文件（含 fsync）在提交锁内、读锁外；内存里只做 rename 和替换。
 // 比当前帧更旧的快照直接丢弃，避免并发上报时旧数据覆盖新数据。
-func (s *Service) commit(userID string, data []byte, now time.Time, received time.Time, hasUsage bool) error {
+func (s *Service) commit(k packKey, data []byte, now time.Time, received time.Time, hasUsage bool) error {
 	s.commitMu.Lock()
 	defer s.commitMu.Unlock()
 
 	s.mu.RLock()
-	cur := s.cache[userID]
+	cur := s.cache[k]
 	s.mu.RUnlock()
 	if cur != nil && hasUsage && received.Unix() < cur.received {
 		return nil
 	}
 	// 渲染期间可能刚好被解绑：名下没设备就不要再把缓存写回来。
-	devs, err := s.store.DevicesOfUser(userID)
+	devs, err := s.store.DevicesOfUser(k.user)
 	if err != nil {
 		return err
 	}
@@ -445,7 +526,7 @@ func (s *Service) commit(userID string, data []byte, now time.Time, received tim
 	ver := uint64(1)
 	if cur != nil {
 		ver = cur.ver + 1
-	} else if gone, ok := s.readGoneVer(userID); ok {
+	} else if gone, ok := s.readGoneVer(k); ok {
 		// 帧被磁盘 LRU 淘汰过：从墓碑接着递增，绝不回到 1。
 		// 固件拿版本号做等值比较，回退会让它误以为手里已是最新帧。
 		ver = gone + 1
@@ -456,46 +537,45 @@ func (s *Service) commit(userID string, data []byte, now time.Time, received tim
 	}
 	c := &cached{data: data, ver: ver, at: now.Unix(), received: rec}
 
-	tmp, err := s.writeTemp(userID, c)
+	tmp, err := s.writeTemp(k, c)
 	if err != nil {
 		return fmt.Errorf("frames: 写缓存：%w", err)
 	}
 
 	s.mu.Lock()
-	if err := os.Rename(tmp, s.cacheFile(userID)); err != nil {
+	if err := os.Rename(tmp, s.cacheFile(k)); err != nil {
 		s.mu.Unlock()
 		os.Remove(tmp)
 		return err
 	}
 	c.used = now.Unix()
 	c.size = int64(len(data))
-	s.cache[userID] = c
+	s.cache[k] = c
 	if cur != nil {
 		s.diskBytes += c.size - cur.size
 	} else {
 		s.diskBytes += c.size + cacheHeader
 	}
-	s.touchMemLocked(userID, c)
-	victims := s.evictDiskLocked(userID, s.opt.CacheMaxBytes)
+	s.touchMemLocked(k, c)
+	victims := s.evictDiskLocked(k, s.opt.CacheMaxBytes)
 	s.mu.Unlock()
 
 	// 这次提交成功后墓碑就过时了（版本已经重新建立在它之上）。
-	os.Remove(s.goneFile(userID))
+	os.Remove(s.goneFile(k))
 	s.finishEvictions(victims)
-	if err := syncDir(s.userDir(userID)); err != nil {
-		slog.Warn("同步帧缓存目录失败", "user", userID, "err", err)
+	if err := syncDir(s.userDir(k.user)); err != nil {
+		slog.Warn("同步帧缓存目录失败", "user", k.user, "err", err)
 	}
-	s.notify(userID, ver)
 	return nil
 }
 
 // touchMemLocked 把用户帧包放进常驻内存 LRU，并淘汰最久没被取用的。
 // 要求持有 s.mu。
-func (s *Service) touchMemLocked(userID string, c *cached) {
+func (s *Service) touchMemLocked(k packKey, c *cached) {
 	if c.data == nil {
 		return
 	}
-	if e, ok := s.memIndex[userID]; ok {
+	if e, ok := s.memIndex[k]; ok {
 		n := e.Value.(*memNode)
 		if n.size != c.size {
 			s.memBytes += c.size - n.size
@@ -504,16 +584,16 @@ func (s *Service) touchMemLocked(userID string, c *cached) {
 		s.memLRU.MoveToFront(e)
 		return
 	}
-	n := &memNode{id: userID, size: c.size}
-	s.memIndex[userID] = s.memLRU.PushFront(n)
+	n := &memNode{k: k, size: c.size}
+	s.memIndex[k] = s.memLRU.PushFront(n)
 	s.memBytes += c.size
 	for s.memBytes > s.opt.MemoryMaxBytes && s.memLRU.Len() > 1 {
 		back := s.memLRU.Back()
 		node := back.Value.(*memNode)
 		s.memLRU.Remove(back)
-		delete(s.memIndex, node.id)
+		delete(s.memIndex, node.k)
 		s.memBytes -= node.size
-		if old, ok := s.cache[node.id]; ok {
+		if old, ok := s.cache[node.k]; ok {
 			old.data = nil
 		}
 	}
@@ -522,32 +602,33 @@ func (s *Service) touchMemLocked(userID string, c *cached) {
 // evictDiskLocked 按 used 从旧到新删除，直到磁盘总量回到上限内。
 // 返回需要删除目录的用户及其版本（版本写墓碑，保证不倒退）；
 // 要求持有 s.mu。
-func (s *Service) evictDiskLocked(keep string, max int64) []evicted {
+func (s *Service) evictDiskLocked(keep packKey, max int64) []evicted {
 	var victims []evicted
 	for s.diskBytes > max {
-		var oldestID string
+		var oldestK packKey
 		var oldest int64
-		for id, c := range s.cache {
-			if id == keep {
+		found := false
+		for k, c := range s.cache {
+			if k == keep {
 				continue
 			}
-			if oldestID == "" || c.used < oldest {
-				oldestID, oldest = id, c.used
+			if !found || c.used < oldest {
+				oldestK, oldest, found = k, c.used, true
 			}
 		}
-		if oldestID == "" {
+		if !found {
 			break
 		}
-		old := s.cache[oldestID]
-		delete(s.cache, oldestID)
+		old := s.cache[oldestK]
+		delete(s.cache, oldestK)
 		s.diskBytes -= old.size + cacheHeader
-		if e, ok := s.memIndex[oldestID]; ok {
+		if e, ok := s.memIndex[oldestK]; ok {
 			node := e.Value.(*memNode)
 			s.memLRU.Remove(e)
-			delete(s.memIndex, oldestID)
+			delete(s.memIndex, oldestK)
 			s.memBytes -= node.size
 		}
-		victims = append(victims, evicted{id: oldestID, ver: old.ver})
+		victims = append(victims, evicted{k: oldestK, ver: old.ver})
 	}
 	return victims
 }
@@ -561,25 +642,31 @@ func (s *Service) finishEvictions(victims []evicted) {
 	for _, v := range victims {
 		if err := os.MkdirAll(s.goneDir(), 0o700); err != nil {
 			slog.Warn("创建版本墓碑目录失败", "err", err)
-		} else if err := os.WriteFile(s.goneFile(v.id),
+		} else if err := os.WriteFile(s.goneFile(v.k),
 			[]byte(strconv.FormatUint(v.ver, 10)), 0o600); err != nil {
-			slog.Warn("写版本墓碑失败", "user", v.id, "err", err)
+			slog.Warn("写版本墓碑失败", "pack", v.k, "err", err)
 		}
-		if err := os.RemoveAll(s.userDir(v.id)); err != nil {
-			slog.Warn("淘汰帧缓存失败", "user", v.id, "err", err)
+		// 只删这一个主题的帧包，不能动整个用户目录：同一个用户的别的
+		// 主题还在用，而且 drop 才是「这个用户整个没了」的那条路。
+		if err := os.Remove(s.cacheFile(v.k)); err != nil && !os.IsNotExist(err) {
+			slog.Warn("淘汰帧缓存失败", "pack", v.k, "err", err)
 		}
+		// 这个用户的最后一个主题也被淘汰了就把空目录收掉，别留一地空壳。
+		// 目录还有别的主题时 Remove 自然失败，正好是想要的语义。
+		// 与 commit 不会打架：两边都在 commitMu 里。
+		os.Remove(s.userDir(v.k.user))
 	}
 }
 
 func (s *Service) goneDir() string { return filepath.Join(s.dir(), ".gone") }
 
-func (s *Service) goneFile(id string) string {
-	return filepath.Join(s.goneDir(), id)
+func (s *Service) goneFile(k packKey) string {
+	return filepath.Join(s.goneDir(), k.user+"."+k.theme)
 }
 
-// readGoneVer 读被杀用户的版本墓碑；没有墓碑表示从未淘汰过。
-func (s *Service) readGoneVer(id string) (uint64, bool) {
-	raw, err := os.ReadFile(s.goneFile(id))
+// readGoneVer 读被淘汰帧包的版本墓碑；没有墓碑表示从未淘汰过。
+func (s *Service) readGoneVer(k packKey) (uint64, bool) {
+	raw, err := os.ReadFile(s.goneFile(k))
 	if err != nil {
 		return 0, false
 	}
@@ -590,8 +677,8 @@ func (s *Service) readGoneVer(id string) (uint64, bool) {
 	return v, true
 }
 
-func (s *Service) writeTemp(userID string, c *cached) (string, error) {
-	dir := s.userDir(userID)
+func (s *Service) writeTemp(k packKey, c *cached) (string, error) {
+	dir := s.userDir(k.user)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
@@ -626,11 +713,31 @@ func (s *Service) writeTemp(userID string, c *cached) (string, error) {
 	return name, nil
 }
 
-// notify 把新版本发给该用户名下所有设备。失败不影响帧本身，
+// Playlist 是这个用户当前的轮播表，按主题的注册顺序（即优先级）排。
+//
+// 只收已经有帧包的主题：没渲出来的主题进了列表，设备会去取一个 404。
+// 不按设备能力裁剪长度——服务端不知道对面那块板的 flash 有多大，
+// 设备自己从前往后留下装得下的那些。见 theme.Playlist 的说明。
+func (s *Service) Playlist(userID string) theme.Playlist {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	secs := int(s.opt.Dwell / time.Second)
+	pl := make(theme.Playlist, 0, len(s.themes))
+	for _, t := range s.themes {
+		c, ok := s.cache[packKey{user: userID, theme: t.Theme.ID()}]
+		if !ok {
+			continue
+		}
+		pl = append(pl, theme.Slot{ID: t.Theme.ID(), Ver: c.ver, Secs: secs})
+	}
+	return pl
+}
+
+// notify 把当前播放列表发给该用户名下所有设备。失败不影响帧本身，
 // 设备重连订阅时会由 Resend 补上。
-func (s *Service) notify(userID string, ver uint64) {
-	// 并发重建时，旧版本的通知可能比新版本晚到；只发当前版本。
-	if cur, ok := s.cachedVersion(userID); !ok || cur != ver {
+func (s *Service) notify(userID string) {
+	pl := s.Playlist(userID)
+	if len(pl) == 0 {
 		return
 	}
 	devs, err := s.store.DevicesOfUser(userID)
@@ -638,29 +745,49 @@ func (s *Service) notify(userID string, ver uint64) {
 		slog.Warn("列设备失败，跳过帧通知", "user", userID, "err", err)
 		return
 	}
-	payload := versionPayload(ver)
+	payload := playlistPayload(pl)
 	for _, dev := range devs {
 		if err := s.pub.PublishFrame(dev, payload); err != nil {
-			slog.Warn("推送帧版本失败", "dev", dev, "ver", ver, "err", err)
+			slog.Warn("推送播放列表失败", "dev", dev, "err", err)
 		}
 	}
 }
 
-func versionPayload(ver uint64) []byte {
+// playlistPayload 是 frame 主题的消息体。
+//
+// ver 是主主题的版本，单独留着给老固件：它只认 {"ver":N}，不认 pl。
+// 新固件读 pl，忽略 ver。两个字段必须一致地描述主主题，否则老固件会
+// 取到一个它以为是最新、实际是别的主题的包。
+func playlistPayload(pl theme.Playlist) []byte {
+	primary, _ := pl.Primary()
 	b, _ := json.Marshal(struct {
-		Ver uint64 `json:"ver"`
-	}{ver})
+		Ver uint64         `json:"ver"`
+		PL  theme.Playlist `json:"pl"`
+	}{primary.Ver, pl})
 	return b
 }
 
-func (s *Service) cachedVersion(userID string) (uint64, bool) {
+func (s *Service) cachedVersion(k packKey) (uint64, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	c, ok := s.cache[userID]
+	c, ok := s.cache[k]
 	if !ok {
 		return 0, false
 	}
 	return c.ver, true
+}
+
+// primaryTheme 是主主题的 ID：老固件不带 theme 参数时给它这一个。
+func (s *Service) primaryTheme() string { return s.themes[0].Theme.ID() }
+
+// ETag 是取帧响应的实体标签。必须带主题名：各主题的版本各自递增，
+// 两个主题都到 v7 时，只用版本号会让切换主题的设备收到假 304。
+// themeID 为空表示主主题（老固件的请求）。
+func (s *Service) ETag(themeID string, ver uint64) string {
+	if themeID == "" {
+		themeID = s.primaryTheme()
+	}
+	return themeID + "-" + strconv.FormatUint(ver, 10)
 }
 
 // Current 返回用户的当前帧包与版本。返回的字节是共享缓存，调用方不要改。
@@ -670,16 +797,17 @@ func (s *Service) cachedVersion(userID string) (uint64, bool) {
 // 读文件时不持锁。期间 commit 可能把文件换成 v2，而 v2 的 data 又立刻被
 // 内存 LRU 淘汰——如果不比对文件里的版本，就会把 v1 的字节挂到 v2 名下。
 // 所以 readPackFile 连版本一起返回，和内存里的 c.ver 不一致就丢弃重读。
-func (s *Service) Current(userID string) (data []byte, ver uint64, ok bool) {
+func (s *Service) Current(userID, themeID string) (data []byte, ver uint64, ok bool) {
+	k := packKey{user: userID, theme: themeID}
 	for attempt := 0; attempt < 3; attempt++ {
 		s.mu.Lock()
-		c, ok := s.cache[userID]
+		c, ok := s.cache[k]
 		if !ok {
 			s.mu.Unlock()
 			return nil, 0, false
 		}
 		if c.data != nil {
-			if e, ok := s.memIndex[userID]; ok {
+			if e, ok := s.memIndex[k]; ok {
 				s.memLRU.MoveToFront(e)
 			}
 			c.used = s.opt.Now().Unix()
@@ -689,14 +817,14 @@ func (s *Service) Current(userID string) (data []byte, ver uint64, ok bool) {
 		}
 		s.mu.Unlock()
 
-		got, fileVer, err := readPackFile(s.cacheFile(userID))
+		got, fileVer, err := readPackFile(s.cacheFile(k))
 		if err != nil {
-			slog.Warn("读帧缓存失败", "user", userID, "err", err)
+			slog.Warn("读帧缓存失败", "pack", k, "err", err)
 			return nil, 0, false
 		}
 
 		s.mu.Lock()
-		c, ok = s.cache[userID]
+		c, ok = s.cache[k]
 		if !ok {
 			s.mu.Unlock()
 			return nil, 0, false
@@ -709,9 +837,9 @@ func (s *Service) Current(userID string) (data []byte, ver uint64, ok bool) {
 		if c.data == nil {
 			c.data = got
 			c.size = int64(len(got))
-			s.touchMemLocked(userID, c)
+			s.touchMemLocked(k, c)
 		}
-		if e, ok := s.memIndex[userID]; ok {
+		if e, ok := s.memIndex[k]; ok {
 			s.memLRU.MoveToFront(e)
 		}
 		c.used = s.opt.Now().Unix()
@@ -737,22 +865,49 @@ func readPackFile(path string) ([]byte, uint64, error) {
 
 // CurrentForKey 按令牌自己的 KeyID 判权：未配对、已吊销、角色不对、
 // dev 不符或没有 user_id 都返回 ErrNotPaired。不要按 dev 反查主人。
-func (s *Service) CurrentForKey(keyID, dev string) ([]byte, uint64, error) {
-	k, found, err := s.store.KeyByID(keyID)
+// themeID 为空表示老固件没带 theme 参数，给它主主题。
+func (s *Service) CurrentForKey(keyID, dev, themeID string) ([]byte, uint64, error) {
+	key, found, err := s.store.KeyByID(keyID)
 	if err != nil {
 		return nil, 0, err
 	}
-	if !found || k.Disabled || k.Pending || k.Role != "device" ||
-		k.Dev != dev || k.UserID == "" {
+	if !found || key.Disabled || key.Pending || key.Role != "device" ||
+		key.Dev != dev || key.UserID == "" {
 		return nil, 0, ErrNotPaired
 	}
-	data, ver, ok := s.Current(k.UserID)
+	if themeID == "" {
+		themeID = s.primaryTheme()
+	} else if !s.hasTheme(themeID) {
+		return nil, 0, ErrNoTheme
+	}
+	data, ver, ok := s.Current(key.UserID, themeID)
 	if !ok {
 		// 懒加载：设备第一次取帧时才为这个用户渲染，不在启动时全量补帧。
-		s.MarkDirty(k.UserID)
+		s.MarkDirty(key.UserID)
 		return nil, 0, ErrNoFrame
 	}
 	return data, ver, nil
+}
+
+// hasAnyPack 报告这个用户有没有任何一个主题的帧包。
+func (s *Service) hasAnyPack(userID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, t := range s.themes {
+		if _, ok := s.cache[packKey{user: userID, theme: t.Theme.ID()}]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) hasTheme(id string) bool {
+	for _, t := range s.themes {
+		if t.Theme.ID() == id {
+			return true
+		}
+	}
+	return false
 }
 
 // Resend 在设备订阅 frame 主题时补发当前版本。
@@ -761,14 +916,14 @@ func (s *Service) Resend(dev string) {
 	if err != nil || !bound {
 		return
 	}
-	ver, ok := s.cachedVersion(owner)
-	if !ok {
+	pl := s.Playlist(owner)
+	if len(pl) == 0 {
 		// 设备订阅了 frame 但还没有帧：懒加载，不等启动补帧队列。
 		s.MarkDirty(owner)
 		return
 	}
-	if err := s.pub.PublishFrame(dev, versionPayload(ver)); err != nil {
-		slog.Warn("补发帧版本失败", "dev", dev, "err", err)
+	if err := s.pub.PublishFrame(dev, playlistPayload(pl)); err != nil {
+		slog.Warn("补发播放列表失败", "dev", dev, "err", err)
 	}
 }
 
@@ -787,22 +942,29 @@ func (s *Service) drop(userID string) {
 	s.commitMu.Lock()
 	defer s.commitMu.Unlock()
 
+	// 这个用户整个没了：它的每一个主题都要清掉。
+	var gone []packKey
 	s.mu.Lock()
-	c, had := s.cache[userID]
-	if had {
+	for k, c := range s.cache {
+		if k.user != userID {
+			continue
+		}
 		s.diskBytes -= c.size + cacheHeader
-		delete(s.cache, userID)
-	}
-	if e, ok := s.memIndex[userID]; ok {
-		node := e.Value.(*memNode)
-		s.memLRU.Remove(e)
-		delete(s.memIndex, userID)
-		s.memBytes -= node.size
+		delete(s.cache, k)
+		if e, ok := s.memIndex[k]; ok {
+			node := e.Value.(*memNode)
+			s.memLRU.Remove(e)
+			delete(s.memIndex, k)
+			s.memBytes -= node.size
+		}
+		gone = append(gone, k)
 	}
 	s.mu.Unlock()
 
 	// 解绑/删除用户后墓碑也没有意义了。
-	os.Remove(s.goneFile(userID))
+	for _, k := range gone {
+		os.Remove(s.goneFile(k))
+	}
 
 	s.workersMu.Lock()
 	if w, ok := s.workers[userID]; ok {
@@ -835,14 +997,16 @@ func (s *Service) Run(ctx context.Context) {
 }
 
 func (s *Service) checkStale(now time.Time) {
+	// 按用户遍历而不是按帧包：MarkDirty 和 drop 都是用户级的，
+	// 一个用户的任何一个主题该重渲，整个用户重渲一轮就行。
 	s.mu.RLock()
-	ids := make([]string, 0, len(s.cache))
-	for id := range s.cache {
-		ids = append(ids, id)
+	cachedUsers := make(map[string]struct{}, len(s.cache))
+	for k := range s.cache {
+		cachedUsers[k.user] = struct{}{}
 	}
 	s.mu.RUnlock()
 
-	for _, id := range ids {
+	for id := range cachedUsers {
 		devs, err := s.store.DevicesOfUser(id)
 		if err != nil {
 			continue
@@ -851,28 +1015,7 @@ func (s *Service) checkStale(now time.Time) {
 			s.drop(id)
 			continue
 		}
-		// 只为了拿时区与上报时刻；换算很便宜，不值得给 Source 再开一个方法。
-		snap, err := s.src.Snapshot(s.ctx, id, now)
-		if err != nil {
-			continue
-		}
-		loc := snap.Now.Location()
-
-		s.mu.RLock()
-		c := s.cache[id]
-		s.mu.RUnlock()
-		if c == nil {
-			continue
-		}
-		built := time.Unix(c.at, 0).In(loc)
-		if built.Format("2006-01-02") != now.In(loc).Format("2006-01-02") {
-			s.MarkDirty(id) // 跨天：日期/星期变了
-			continue
-		}
-		// 超过 15 分钟没上报：重渲一次，让「更新 X 分前」和告警色跟上；
-		// 之后每 15 分钟一次（帧的 at 会更新）。
-		if snap.HasData() && now.Sub(snap.LastUpdate) >= s.opt.StaleAfter &&
-			now.Sub(time.Unix(c.at, 0)) >= s.opt.StaleAfter {
+		if s.userNeedsRebuild(id, now) {
 			s.MarkDirty(id)
 		}
 	}
@@ -890,10 +1033,7 @@ func (s *Service) checkStale(now time.Time) {
 		if u.Disabled {
 			continue
 		}
-		s.mu.RLock()
-		_, cached := s.cache[u.ID]
-		s.mu.RUnlock()
-		if cached {
+		if s.hasAnyPack(u.ID) {
 			continue
 		}
 		devs, err := s.store.DevicesOfUser(u.ID)
@@ -906,6 +1046,38 @@ func (s *Service) checkStale(now time.Time) {
 }
 
 // enqueueBackfill 把缺帧用户放进限速队列，去重。
+// userNeedsRebuild 判断这个用户要不要重渲一轮：跨天，或者任何一个主题的
+// 数据已经旧到该把「更新 X 分前」和告警色刷一遍了。
+//
+// 每个主题各问自己那一路数据源要时区和上报时刻。这里一分钟跑一次、
+// 每个主题各一次，所以 Source 的实现必须是便宜的本地读。
+func (s *Service) userNeedsRebuild(userID string, now time.Time) bool {
+	for _, t := range s.themes {
+		s.mu.RLock()
+		c := s.cache[packKey{user: userID, theme: t.Theme.ID()}]
+		s.mu.RUnlock()
+		if c == nil {
+			continue
+		}
+		snap, err := t.Source.Snapshot(s.ctx, userID, now)
+		if err != nil {
+			continue
+		}
+		loc := snap.Now.Location()
+		built := time.Unix(c.at, 0).In(loc)
+		if built.Format("2006-01-02") != now.In(loc).Format("2006-01-02") {
+			return true // 跨天：日期/星期变了
+		}
+		// 超过 15 分钟没上报：重渲一次，让「更新 X 分前」和告警色跟上；
+		// 之后每 15 分钟一次（帧的 at 会更新）。
+		if snap.HasData() && now.Sub(snap.LastUpdate) >= s.opt.StaleAfter &&
+			now.Sub(time.Unix(c.at, 0)) >= s.opt.StaleAfter {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) enqueueBackfill(ids []string) {
 	s.backfillMu.Lock()
 	defer s.backfillMu.Unlock()
@@ -945,10 +1117,7 @@ func (s *Service) backfillLoop(ctx context.Context) {
 		if id == "" {
 			continue
 		}
-		s.mu.RLock()
-		_, cached := s.cache[id]
-		s.mu.RUnlock()
-		if cached {
+		if s.hasAnyPack(id) {
 			continue
 		}
 		s.MarkDirty(id)

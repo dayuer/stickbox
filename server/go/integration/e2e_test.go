@@ -358,7 +358,7 @@ func TestEndToEndFrameDistribution(t *testing.T) {
 	if st != 200 {
 		t.Fatalf("GET frame = %d %s", st, body)
 	}
-	if want := fmt.Sprintf(`"%d"`, ver2); etag != want {
+	if want := fmt.Sprintf(`"quota-%d"`, ver2); etag != want {
 		t.Errorf("ETag = %q，期望 %q", etag, want)
 	}
 	if len(body) < 16 || string(body[:4]) != "SBF1" {

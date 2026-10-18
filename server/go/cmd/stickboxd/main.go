@@ -98,15 +98,19 @@ func serve(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("初始化渲染器：%w", err)
 	}
-	// 两路数据源：Claude 额度（消耗型）与当日经营数据（达成型）。
-	// 时区都由各自那路数据自带（agent 机器 / 上报方的时区）。
-	// 看板形态不配置，按有数据的源的数量来：报一路就独占两个环，
-	// 报两路就各占一个环。
-	src := source.NewComposite(
-		source.NewClaude(api.Usage(), cfg.DefaultTZ),
-		source.NewSales(api.Sales(), cfg.DefaultTZ),
-	)
-	fs, err := frames.New(cfg.Root, st, src, br, frames.ThemeBuilder{T: render.Quota{R: rr}}, frames.Options{
+	// 主题表：顺序就是播放列表的优先级，第一个是主主题（老固件只认它）。
+	//
+	// 现在只有额度看板一个主题，它的数据源是 Composite：两路数据都挤进
+	// 这一块板（有数据的源几个就怎么分环）。等经营看板那个主题落地，
+	// 它会成为第二项、吃自己那一路，播放列表就真的开始轮播了。
+	themes := []frames.Themed{{
+		Theme: render.Quota{R: rr},
+		Source: source.NewComposite(
+			source.NewClaude(api.Usage(), cfg.DefaultTZ),
+			source.NewSales(api.Sales(), cfg.DefaultTZ),
+		),
+	}}
+	fs, err := frames.New(cfg.Root, st, themes, br, frames.ThemeBuilder{}, frames.Options{
 		CacheMaxBytes:  cfg.FrameCacheMaxBytes,
 		MemoryMaxBytes: cfg.FrameMemoryMaxBytes,
 		BackfillPerSec: cfg.BackfillPerSec,

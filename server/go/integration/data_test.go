@@ -53,7 +53,7 @@ func TestEndToEndDataDistribution(t *testing.T) {
 	if st != 200 {
 		t.Fatalf("取经营看板帧 = %d %s", st, frameData)
 	}
-	if want := fmt.Sprintf(`"%d"`, verData); etag != want {
+	if want := fmt.Sprintf(`"quota-%d"`, verData); etag != want {
 		t.Errorf("ETag = %q，期望 %q", etag, want)
 	}
 	if string(frameData[:4]) != "SBF1" {

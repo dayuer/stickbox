@@ -16,6 +16,7 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/frame"
 	"github.com/dayuer/stickbox/server/go/internal/source"
 	"github.com/dayuer/stickbox/server/go/internal/store"
+	"github.com/dayuer/stickbox/server/go/internal/theme"
 	"github.com/dayuer/stickbox/server/go/internal/usage"
 )
 
@@ -129,13 +130,25 @@ type fakeBuilder struct {
 	payload      string
 	extra        int
 	lastSnapshot source.Snapshot
+	perTheme     map[string]int
 }
 
-func (f *fakeBuilder) Build(s source.Snapshot) (*frame.Bundle, error) {
+// themeCalls 是某个主题被渲了几次。
+func (f *fakeBuilder) themeCalls(id string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.perTheme[id]
+}
+
+func (f *fakeBuilder) Build(th theme.Theme, s source.Snapshot) (*frame.Bundle, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
 	f.lastSnapshot = s
+	if f.perTheme == nil {
+		f.perTheme = map[string]int{}
+	}
+	f.perTheme[th.ID()]++
 	if f.failErr != nil {
 		return nil, f.failErr
 	}
@@ -185,6 +198,15 @@ func testBundleN(payload string, extra int) *frame.Bundle {
 
 func testBundle(payload string) *frame.Bundle { return testBundleN(payload, 0) }
 
+// themed 是这些测试默认的主题表：一个主题，吃 Claude 那一路。
+// 要验播放列表/多主题的用例自己传两项（见 playlist_test.go）。
+func (f *fixture) themed() []Themed {
+	return []Themed{{
+		Theme:  stubTheme{id: "quota", src: "claude-usage"},
+		Source: source.NewClaude(f.us, "UTC"),
+	}}
+}
+
 type fixture struct {
 	t    *testing.T
 	root string
@@ -231,7 +253,7 @@ func newFixture(t *testing.T) *fixture {
 		b:   &fakeBuilder{},
 		now: time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC),
 	}
-	svc, err := New(f.root, f.st, source.NewClaude(f.us, "UTC"), f.pub, f.b, Options{
+	svc, err := New(f.root, f.st, f.themed(), f.pub, f.b, Options{
 		Debounce:          5 * time.Millisecond,
 		RenderConcurrency: 1,
 		BackfillPerSec:    1000,
@@ -266,7 +288,7 @@ func (f *fixture) rebuild(userID string) {
 
 func (f *fixture) version(userID string) uint64 {
 	f.t.Helper()
-	_, ver, ok := f.svc.Current(userID)
+	_, ver, ok := f.svc.Current(userID, "quota")
 	if !ok {
 		f.t.Fatalf("%s 没有帧", userID)
 	}
@@ -277,7 +299,7 @@ func (f *fixture) waitVersion(userID string, want uint64, timeout time.Duration)
 	f.t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if _, ver, ok := f.svc.Current(userID); ok && ver >= want {
+		if _, ver, ok := f.svc.Current(userID, "quota"); ok && ver >= want {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -299,7 +321,7 @@ func TestRebuildIncrementsVersionAndNotifies(t *testing.T) {
 	if ver, ok := f.pub.last("d2"); !ok || ver != 1 {
 		t.Errorf("d2 通知 = %d,%v，期望 ver=1", ver, ok)
 	}
-	data, _, ok := f.svc.Current("u1")
+	data, _, ok := f.svc.Current("u1", "quota")
 	if !ok {
 		t.Fatal("没有帧")
 	}
@@ -323,14 +345,14 @@ func TestRebuildIncrementsVersionAndNotifies(t *testing.T) {
 func TestBuildFailureKeepsOldFrame(t *testing.T) {
 	f := newFixture(t)
 	f.rebuild("u1")
-	old, oldVer, _ := f.svc.Current("u1")
+	old, oldVer, _ := f.svc.Current("u1", "quota")
 	oldCopy := append([]byte(nil), old...)
 
 	f.b.setFail(errors.New("band cap exceeded"))
 	if err := f.svc.Rebuild("u1"); err == nil {
 		t.Fatal("构建失败应返回错误")
 	}
-	now, ver, ok := f.svc.Current("u1")
+	now, ver, ok := f.svc.Current("u1", "quota")
 	if !ok || ver != oldVer || string(now) != string(oldCopy) {
 		t.Errorf("构建失败后帧变了：ver %d→%d", oldVer, ver)
 	}
@@ -481,7 +503,7 @@ func TestDebounceMaxWait(t *testing.T) {
 	clock.waitTimer(t)
 
 	clock.Advance(19 * time.Millisecond) // 累计 29ms，还没到上限
-	if _, ver, ok := f.svc.Current("u1"); ok {
+	if _, ver, ok := f.svc.Current("u1", "quota"); ok {
 		t.Fatalf("maxWait 之前就渲染了 v%d", ver)
 	}
 	clock.Advance(1 * time.Millisecond) // 累计 30ms，必须渲染
@@ -548,7 +570,7 @@ func TestCheckStaleAfter15Minutes(t *testing.T) {
 	// 刚重渲过，再检查不应该继续每 tick 都重渲 u1（其他用户首次补帧不算）。
 	f.svc.checkStale(f.currentTime())
 	time.Sleep(50 * time.Millisecond)
-	if _, ver, _ := f.svc.Current("u1"); ver != 2 {
+	if _, ver, _ := f.svc.Current("u1", "quota"); ver != 2 {
 		t.Errorf("u1 在同一时刻被重复重渲，版本 = %d", ver)
 	}
 }
@@ -556,11 +578,11 @@ func TestCheckStaleAfter15Minutes(t *testing.T) {
 func TestPersistenceAcrossRestart(t *testing.T) {
 	f := newFixture(t)
 	f.rebuild("u1")
-	want, ver, _ := f.svc.Current("u1")
+	want, ver, _ := f.svc.Current("u1", "quota")
 	f.svc.Close() // 停掉 worker
 
 	b2 := &fakeBuilder{failErr: errors.New("不该重新渲染")}
-	svc2, err := New(f.root, f.st, source.NewClaude(f.us, "UTC"), f.pub, b2, Options{
+	svc2, err := New(f.root, f.st, f.themed(), f.pub, b2, Options{
 		Debounce:          5 * time.Millisecond,
 		RenderConcurrency: 1, Now: f.currentTime,
 	})
@@ -568,25 +590,25 @@ func TestPersistenceAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(svc2.Close)
-	got, gotVer, ok := svc2.Current("u1")
+	got, gotVer, ok := svc2.Current("u1", "quota")
 	if !ok || gotVer != ver || string(got) != string(want) {
 		t.Fatalf("重启后帧 = ver %d ok=%v，期望 ver %d", gotVer, ok, ver)
 	}
 	if b2.count() != 0 {
 		t.Errorf("重启后重新渲染了 %d 次", b2.count())
 	}
-	if _, _, err := svc2.CurrentForKey("k1", "d1"); err != nil {
+	if _, _, err := svc2.CurrentForKey("k1", "d1", ""); err != nil {
 		t.Errorf("重启后设备取帧失败：%v", err)
 	}
 }
 
 func TestCurrentForKey(t *testing.T) {
 	f := newFixture(t)
-	if _, _, err := f.svc.CurrentForKey("k1", "d1"); !errors.Is(err, ErrNoFrame) {
+	if _, _, err := f.svc.CurrentForKey("k1", "d1", ""); !errors.Is(err, ErrNoFrame) {
 		t.Errorf("还没帧时 = %v，期望 ErrNoFrame", err)
 	}
 	f.rebuild("u1")
-	if _, _, err := f.svc.CurrentForKey("k1", "d1"); err != nil {
+	if _, _, err := f.svc.CurrentForKey("k1", "d1", ""); err != nil {
 		t.Errorf("k1 取帧失败：%v", err)
 	}
 	for _, c := range []struct {
@@ -599,7 +621,7 @@ func TestCurrentForKey(t *testing.T) {
 		{"没有 user_id", "kn", "d1"},
 		{"不存在", "nope", "d1"},
 	} {
-		if _, _, err := f.svc.CurrentForKey(c.keyID, c.dev); !errors.Is(err, ErrNotPaired) {
+		if _, _, err := f.svc.CurrentForKey(c.keyID, c.dev, ""); !errors.Is(err, ErrNotPaired) {
 			t.Errorf("%s = %v，期望 ErrNotPaired", c.name, err)
 		}
 	}
@@ -626,12 +648,12 @@ func TestResend(t *testing.T) {
 func TestDeviceRemovedDropsCache(t *testing.T) {
 	f := newFixture(t)
 	f.rebuild("u1")
-	if _, _, ok := f.svc.Current("u1"); !ok {
+	if _, _, ok := f.svc.Current("u1", "quota"); !ok {
 		t.Fatal("没有帧")
 	}
 	f.st.devs["u1"] = nil
 	f.svc.DeviceRemoved("u1")
-	if _, _, ok := f.svc.Current("u1"); ok {
+	if _, _, ok := f.svc.Current("u1", "quota"); ok {
 		t.Error("名下无设备后帧缓存还在")
 	}
 	if _, err := os.Stat(filepath.Join(f.root, "frames", "u1")); !os.IsNotExist(err) {
@@ -685,12 +707,12 @@ func TestCorruptCacheIsIgnored(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "frame.cache"), []byte("garbage"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	svc, err := New(f.root, f.st, source.NewClaude(f.us, "UTC"), f.pub, f.b, Options{})
+	svc, err := New(f.root, f.st, f.themed(), f.pub, f.b, Options{})
 	if err != nil {
 		t.Fatalf("损坏的缓存不该让 New 失败：%v", err)
 	}
 	t.Cleanup(svc.Close)
-	if _, _, ok := svc.Current("u1"); ok {
+	if _, _, ok := svc.Current("u1", "quota"); ok {
 		t.Error("损坏的缓存不该被加载")
 	}
 }
@@ -701,7 +723,7 @@ func TestLoadKeepsFrameDataOnDisk(t *testing.T) {
 	f.rebuild("u1")
 	f.svc.Close()
 
-	svc2, err := New(f.root, f.st, source.NewClaude(f.us, "UTC"), f.pub, f.b, Options{
+	svc2, err := New(f.root, f.st, f.themed(), f.pub, f.b, Options{
 		Debounce:          5 * time.Millisecond,
 		RenderConcurrency: 1, Now: f.currentTime,
 	})
@@ -710,16 +732,16 @@ func TestLoadKeepsFrameDataOnDisk(t *testing.T) {
 	}
 	t.Cleanup(svc2.Close)
 	svc2.mu.RLock()
-	c := svc2.cache["u1"]
+	c := svc2.cache[packKey{user: "u1", theme: "quota"}]
 	svc2.mu.RUnlock()
 	if c == nil || c.data != nil {
 		t.Fatalf("启动时不该把帧包读进内存：%+v", c)
 	}
-	if _, _, ok := svc2.Current("u1"); !ok {
+	if _, _, ok := svc2.Current("u1", "quota"); !ok {
 		t.Fatal("首次取用应从磁盘读到帧包")
 	}
 	svc2.mu.RLock()
-	resident := svc2.cache["u1"].data != nil
+	resident := svc2.cache[packKey{user: "u1", theme: "quota"}].data != nil
 	svc2.mu.RUnlock()
 	if !resident {
 		t.Error("取用后帧包应进入常驻内存")
@@ -738,23 +760,23 @@ func TestDiskLRUEvictsLeastRecentlyUsed(t *testing.T) {
 	f.rebuild("u2")
 	// u1 最近被取用过，u2 没有：淘汰应落在 u2。
 	f.setNow(t1.Add(90 * time.Second))
-	if _, _, ok := f.svc.Current("u1"); !ok {
+	if _, _, ok := f.svc.Current("u1", "quota"); !ok {
 		t.Fatal("u1 没有帧")
 	}
 
 	f.setNow(t1.Add(2 * time.Minute))
 	f.rebuild("u3")
 
-	if _, _, ok := f.svc.Current("u2"); ok {
+	if _, _, ok := f.svc.Current("u2", "quota"); ok {
 		t.Error("磁盘超限后 u2 仍存在，LRU 没淘汰最久未取用的")
 	}
 	if _, err := os.Stat(filepath.Join(f.root, "frames", "u2")); !os.IsNotExist(err) {
 		t.Errorf("u2 的磁盘缓存没删：%v", err)
 	}
-	if _, _, ok := f.svc.Current("u1"); !ok {
+	if _, _, ok := f.svc.Current("u1", "quota"); !ok {
 		t.Error("最近取用过的 u1 被误删")
 	}
-	if _, _, ok := f.svc.Current("u3"); !ok {
+	if _, _, ok := f.svc.Current("u3", "quota"); !ok {
 		t.Error("刚提交的 u3 被误删")
 	}
 }
@@ -772,7 +794,7 @@ func TestVersionMonotonicAfterEviction(t *testing.T) {
 	f.svc.opt.CacheMaxBytes = 1
 	f.setNow(t1.Add(time.Minute))
 	f.rebuild("u2")
-	if _, _, ok := f.svc.Current("u1"); ok {
+	if _, _, ok := f.svc.Current("u1", "quota"); ok {
 		t.Fatal("u1 应已被淘汰")
 	}
 
@@ -797,7 +819,7 @@ func TestMemoryCapEvictsFrames(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("常驻内存用户数 = %d，期望 1", n)
 	}
-	if _, _, ok := f.svc.Current("u1"); !ok {
+	if _, _, ok := f.svc.Current("u1", "quota"); !ok {
 		t.Fatal("u1 无法从磁盘按需读回")
 	}
 	f.svc.mu.RLock()
@@ -826,7 +848,7 @@ func TestStartupBackfillIsQueuedNotRendered(t *testing.T) {
 // 设备第一次 GET 还没帧时，应触发懒加载渲染。
 func TestLazyGetTriggersRender(t *testing.T) {
 	f := newFixture(t)
-	if _, _, err := f.svc.CurrentForKey("k1", "d1"); !errors.Is(err, ErrNoFrame) {
+	if _, _, err := f.svc.CurrentForKey("k1", "d1", ""); !errors.Is(err, ErrNoFrame) {
 		t.Fatalf("首次取帧 = %v，期望 ErrNoFrame", err)
 	}
 	f.waitVersion("u1", 1, 2*time.Second)

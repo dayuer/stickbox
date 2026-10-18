@@ -180,13 +180,46 @@ device 鉴权，且密钥必须已配对（pending 密钥返回 `403`）。
 三个长度都是大端。`base` / `atlas` 是 `FRAME.md` 约定的 DRI=8 JPEG 底帧与
 字形图集；`meta` 是 `FRAME.md` 的 JSON 索引。
 
-- `ETag` 是帧版本号（形如 `"7"`），同时返回 `X-Frame-Version`。
-- 带 `If-None-Match` 且版本没变时返回 `304`，无 body。
+**查询参数 `theme`**：取哪个主题的帧包，例如
+`GET /api/device/frame?theme=sales`。省略时给**主主题**（播放列表第一项）
+——老固件不带这个参数。主题名非法返回 `400`，服务端不认识这个主题返回
+`404 not found`。
+
+- `ETag` 形如 `"quota-7"`：**主题名 + 版本号**。各主题的版本是各自递增的，
+  两个主题可能都到 v7，ETag 只放版本号会让切换主题的设备收到假 `304`，
+  屏幕就一直停在上一个主题的画面上。`X-Frame-Version` 仍是纯版本号。
+- 带 `If-None-Match` 且没变时返回 `304`，无 body。
 - 还没出过帧时返回 `404 frame not ready`，带 `Retry-After: 30`。
 - 未配对返回 `403 forbidden`。
 
-帧版本变化时服务端往 MQTT `printer/{dev}/frame` 发 `{"ver":N}`（QoS 1，
-不 retain）。设备重连订阅该主题时服务端补发当前版本。
+#### 帧通知与播放列表
+
+帧版本变化时服务端往 MQTT `printer/{dev}/frame` 发（QoS 1，不 retain）：
+
+```json
+{
+  "ver": 7,
+  "pl": [
+    {"id": "quota", "ver": 7, "secs": 20},
+    {"id": "sales", "ver": 3, "secs": 20}
+  ]
+}
+```
+
+- `pl` 是播放列表，**按优先级排序**。设备在同一条视频流里按 `secs` 轮播，
+  每项用 `GET /api/device/frame?theme=<id>` 取自己的帧包。
+- `ver` 是主主题（`pl[0]`）的版本，单独留给老固件：它只认 `{"ver":N}`、
+  不认 `pl`，照旧取不带 `theme` 的那一个。两个字段永远一致地描述主主题。
+- **服务端不按设备能力裁剪列表长度**：机群里 8MB 和 16MB 的板子可能混着，
+  服务端不知道对面能驻留几个主题。设备自己按
+  `framepack_slots() / FP_SLOTS_PER_THEME` 算出能装几个，**从前往后**留下
+  装得下的那些。所以排在前面的主题优先上屏。
+- `secs` 在 5 秒到 10 分钟之间。只有一项时就是「不轮播」，和加主题之前
+  的行为一致。
+- 一个主题只有在它那一路数据**真的有了**之后才会进列表；主主题例外，
+  它即使没有数据也会出一张「等待上报」的帧，这样新配对的设备有东西可显示。
+
+设备重连订阅该主题时服务端补发当前播放列表。
 
 ### 2.4 `GET /api/device/firmware`
 
@@ -252,7 +285,7 @@ mqtts://mqtt.stickbox.ai:8883
 
 - `printer/{dev}/usage`（QoS 1）
 - `printer/{dev}/pair`（QoS 1）
-- `printer/{dev}/frame`（QoS 1；payload `{"ver":N}`，收到后 GET `/api/device/frame`）
+- `printer/{dev}/frame`（QoS 1；payload `{"ver":N,"pl":[…]}`，见 2.3；收到后按播放列表逐个 GET `/api/device/frame?theme=<id>`）
 
 并每 30 秒发布一次心跳：
 
