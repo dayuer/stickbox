@@ -7,8 +7,11 @@ SD 链路已实机验证（`experiments/sd-bare-sector-round1.md`）。本文同
 
 2026-10-18 集成方裁决（已写进正文）：
 - SD 是**专用整卡、从扇区 0 开始**；没有合法超级块时设备只上报 `uninit`，
-  **不写卡**。只有用户执行 `stickbox-agent photo init` 且服务端在清单里
-  返回 `init_ok: true` 后，设备才允许格式化。卡级损坏也绝不自动格式化。
+  **不写卡**。用户执行 `stickbox-agent photo init` 后，服务端生成一次性
+  `init_token`（10 分钟有效）放进清单；设备只在这种卡上格式化，成功后把
+  token 前 8 位放进 `status.photo.init_done`，服务端立即清除授权。卡级损坏
+  绝不自动格式化；只有 `photo init --force` 生成的 token 才允许格式化
+  「魔数存在但 CRC 都坏」的卡。
 - 读缓冲 **4KB**；下载与读卡互斥，取帧排在下照片之前，按队列顺序而非并发。
 - 设备**不存离线 JSON 清单**；64B 索引项带 `duration_s` 和 `order`，断网照常播。
 - 照片留白用**纯黑 #000000**；支持 JPEG/PNG，HEIC 服务端 415。
@@ -79,11 +82,15 @@ AVI 的 `00dc` 块头要先写帧长再写字节——照片长度从清单（�
 
 代价（产品上要接受，也要对用户说清楚）：
 - **SD 卡是专用整卡，从扇区 0 开始**，卡上原有数据会被覆盖；不能插卡直接拷照片。
-- **初始化必须由用户显式授权**：用户执行 `stickbox-agent photo init`，服务端记录，
-  清单里带 `init_ok: true`。设备在「超级块不合法 + `init_ok=true`」时执行**一次**
-  格式化（用户已经明确发起），成功后上报 `state=ok`；不是每次看到 `init_ok` 都格式化。
-  没有 `init_ok` 时只上报 `state=uninit`，**绝不写卡**。
-- **卡级损坏（读失败/初始化超时）永不自动格式化**，只上报 `state=fault`，看板照常。
+- **初始化用一次性 token**：用户执行 `stickbox-agent photo init`，服务端生成随机
+  `init_token`（10 分钟有效）放进清单（`init_force` 表示是否允许 force）。
+  设备仅在以下条件同时成立时格式化：
+  - 两个超级块都**没有 `SBPH` 魔数**（空白/别的文件系统）；或 `init_force=true`
+    且魔数存在但两个 CRC 都坏；
+  - 清单里带着未过期、未使用的 token。
+  格式化成功后把 token 前 8 位放进 `status.photo.init_done`，服务端据此立即清除授权；
+  超时也清除。清单里没有 token 时**绝不格式化**。
+- **卡级读失败（读不出/初始化超时）永不格式化**，只上报 `state=fault`，看板照常。
 - 真实拔电可能让卡对板子不可用（实验已复现），恢复靠用户重新格式化；产品行为同上。
 
 **堆**：sdmmc 驱动 + **4KB 读缓冲**（不是 512B，也不是 8–13KB）+ 按需读索引项。
@@ -104,7 +111,8 @@ AVI 的 `00dc` 块头要先写帧长再写字节——照片长度从清单（�
 数据区      照片本体，按 4KB 对齐，连续存放
 ```
 
-- **专用整卡**：从扇区 0 开始，不保留实验区、不识别 FAT；`init_ok` 才允许首次格式化。
+- **专用整卡**：从扇区 0 开始，不保留实验区、不识别 FAT；只有清单带未过期
+  `init_token` 时才允许首次格式化（详见第 3 节）。
 - **内容寻址**：以 sha256 为键。重复上传不占第二份；改顺序、改时长、改名一个字节都
   不用重传（那些是清单属性）；校验内生
 - **项目上限 256**，总用量只占数据区一小段（200 张 ≈ 50MB），**其余容量不用**
@@ -145,7 +153,8 @@ AVI 的 `00dc` 块头要先写帧长再写字节——照片长度从清单（�
 ```json
 {
   "plv": 7,
-  "init_ok": true,
+  "init_token": "3f2a9c01d4e5b6a7",
+  "init_force": false,
   "entries": [
     {"kind": "board", "theme": "quota", "ver": 12, "duration_s": 20, "order": 0},
     {"kind": "photo", "sha256": "3f2a…", "size": 198432,
@@ -166,8 +175,9 @@ AVI 的 `00dc` 块头要先写帧长再写字节——照片长度从清单（�
 - `kind: "photo"`：`sha256` 64 位小写十六进制，`size` 与实际字节一致，
   `url` 是**相对路径**（设备用运行期 API base 拼接）。
 - `duration_s` 停留秒数，5–600。
-- `init_ok`：用户已通过 `stickbox-agent photo init` 授权初始化整卡；设备无合法
-  超级块且 `init_ok=true` 时执行一次格式化。
+- `init_token` / `init_force`：用户通过 `stickbox-agent photo init` 生成的一次性
+  授权（10 分钟有效）。设备格式化成功后把 token 前 8 位写进
+  `status.photo.init_done`，服务端立即清除；超时也清除。没有 token 时不格式化。
 - 上限：1 个 board + 200 张照片；整份响应控制在 **64KB** 以内（约 25–30KB），
   设备流式解析。响应带 `Content-Length`（设备也能读 chunked，但服务端固定提供）。
 
@@ -193,13 +203,16 @@ AVI 的 `00dc` 块头要先写帧长再写字节——照片长度从清单（�
 ```json
 {"photo": {
   "cap": true, "ready": true, "plv": 7, "have": 12,
-  "bad": ["a1b2c3d4"], "free_kb": 1234, "state": "ok"
+  "bad": ["a1b2c3d4"], "free_kb": 1234, "state": "ok",
+  "init_done": "3f2a9c01"
 }}
 ```
 
 - `cap`：编译期有 SD 驱动；`ready`：卡已初始化且可用；`state`：
   `ok | uninit | fault | absent`。
 - `bad`：最多 8 项，每项是 sha256 前 8 位十六进制；整条 status 消息 ≤512B。
+- `init_done`：本次格式化用掉的 `init_token` 前 8 位；服务端看到后立即清除授权，
+  同一 token 不能再次使用。
 - `cap=false` 或字段缺失 = 只显示看板（老固件/无卡设备）。
 - 服务端**不按设备过滤清单**（完整清单由设备过滤），这些字段用于诊断、
   `device show`、以及未来排障；服务端不需要为每台设备单独生成版本号。
@@ -269,7 +282,7 @@ SHA 太贵）。开机只校验索引项 CRC 与大小；只有在推流时读�
 | 方法 | 路径 | 角色 | 说明 |
 |---|---|---|---|
 | POST | `/api/photo?show=1&secs=8` | agent | 上传原图。`show=1`（默认）成功后自动追加到清单末尾并递增 `plv`；`show=0` 只上传 |
-| POST | `/api/photo/init` | agent | 授权初始化 SD 整卡；之后清单带 `init_ok: true` |
+| POST | `/api/photo/init` | agent | 生成一次性初始化 token（默认 10 分钟）；`{"force":true}` 允许格式化 CRC 损坏的卡 |
 | GET | `/api/agent/photos` | agent | 列出本用户照片（sha256、字节、上传时间、是否在清单里、`duration_s`） |
 | DELETE | `/api/photo/{sha256}` | agent | 删除；同时从清单移除并递增 `plv` |
 | PUT | `/api/playlist` | agent | 完整期望状态：重排、改时长、增删条目（含 board 位置） |
@@ -301,8 +314,11 @@ SHA 太贵）。开机只校验索引项 CRC 与大小；只有在推流时读�
   422 压不到 250KB；409 配额满。
 
 **`POST /api/photo/init`**（agent）
-- 请求体可省略。记录本用户已授权初始化整卡；成功后清单 `init_ok=true`。
-- 成功 `200`：`{"init_ok":true}`。重复调用幂等。
+- 请求体 `{"force":false}`（可省略）。生成随机 `init_token`，10 分钟有效；
+  `force=true` 时设备也允许格式化「魔数存在但 CRC 都坏」的卡。
+- 成功 `200`：`{"init_token":"...","force":false,"expires_at":<unix>}`。
+- 再次调用会替换旧 token；设备用 `init_done` 上报后立即失效；
+  超时后清单不再带 token。
 
 **`GET /api/agent/photos`**（agent）
 - `{"photos":[{"sha256","size","width","height","uploaded_at",
@@ -334,12 +350,14 @@ SHA 太贵）。开机只校验索引项 CRC 与大小；只有在推流时读�
 stickbox-agent photo add [--no-show] <file...>   # 上传；默认自动上屏（show=1）
 stickbox-agent photo ls                          # sha 前缀、大小、时长、是否在清单
 stickbox-agent photo rm <sha256|前缀>            # 删除（前缀需唯一）
-stickbox-agent photo init                        # 授权初始化 SD 整卡
+stickbox-agent photo init [--force]              # 生成一次性初始化授权（10 分钟）
 ```
 
 - `add` 在 macOS 上先尝试用 `sips` 把 HEIC 转成 JPEG、并尝试 `sips -m` 预转 sRGB；
   没有 `sips` 或转换失败时提示用户先转格式。服务端仍做缩放/方向校正/剥元数据。
 - `rm` 接受完整 sha256 或唯一前缀，agent 先 `GET /api/agent/photos` 解析再 DELETE。
+- `init` 只生成一次性授权；`init --force` 执行前必须二次确认，提示
+  “会清空 SD 卡内所有数据”，确认后才调服务端。
 
 ### 9.4 服务端必须做的处理
 
@@ -419,7 +437,7 @@ stickbox-agent photo init                        # 授权初始化 SD 整卡
 ## 12. 开放问题
 
 已关闭：板子选型 → D8；FAT/裸扇区 → D9；照片是否叠时钟 → D10；初始化入口 →
-`stickbox-agent photo init` + `init_ok`。
+`stickbox-agent photo init` + 一次性 `init_token`。
 
 仍开放：
 1. **照片模式的帧率** —— USB-TV 用 `tvcheck -fps 1` / `0.5` 在电视上测，结果回填第 11 节。

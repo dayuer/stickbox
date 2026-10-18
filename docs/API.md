@@ -86,6 +86,7 @@ agent / user 令牌不能连 MQTT；设备不能调 agent/user 的 HTTP 端点�
 | POST | `/api/agent/logout` | agent | 注销当前 agent 令牌 |
 | GET | `/api/user/tz` | agent/user | 当前生效时区及来源 |
 | PUT | `/api/user/tz` | agent/user | 设置/清除用户级时区，立即换帧 |
+| POST | `/api/photo` | agent/user | 上传照片：缩放 1080p、剥元数据、内容寻址；可自动上屏 |
 | GET | `/healthz` | 无 | 健康检查，只返回 200/503 |
 <!-- endpoints:end -->
 
