@@ -15,15 +15,16 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
+
 	"crypto/tls"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/dayuer/stickbox/server/go/internal/claudeusage"
 	"io"
 	"log"
 	"net"
@@ -60,169 +61,22 @@ type agentConfig struct {
 }
 
 // ---- 用量解析 ----
-
-// usageWindow 与服务端 internal/usage.Window 的字段一致。
-type usageWindow struct {
-	UsedPercentage float64 `json:"used_percentage"`
-	ResetsAt       int64   `json:"resets_at"` // Unix 秒
-}
-
-type usagePayload struct {
-	FiveHour *usageWindow    `json:"five_hour,omitempty"`
-	SevenDay *usageWindow    `json:"seven_day,omitempty"`
-	Limits   json.RawMessage `json:"limits,omitempty"`
-	// TZ 是本机 IANA 时区，服务端按它渲染日期/星期和跨天重建。
-	TZ string `json:"tz,omitempty"`
-}
-
-// usageReportWire 对应 claude stream-json 里 assistant 事件的 usage_report。
-type usageReportWire struct {
-	RateLimits *rateLimitsWire `json:"rate_limits"`
-}
-
-type rateLimitsWire struct {
-	Limits json.RawMessage `json:"limits"`
-}
-
-// limitRow 是 /usage 的 rate_limits.limits[] 一行。
-// percent / resets_at 的准确名字取自 CLI 内置 schema（2.1.296）。
-type limitRow struct {
-	Kind     string  `json:"kind"`
-	Group    string  `json:"group"`
-	Percent  float64 `json:"percent"`
-	ResetsAt *string `json:"resets_at"`
-	Severity string  `json:"severity"`
-	IsActive bool    `json:"is_active"`
-}
-
-func (r limitRow) window() (*usageWindow, error) {
-	if r.ResetsAt == nil || strings.TrimSpace(*r.ResetsAt) == "" {
-		return nil, errors.New("resets_at 缺失")
-	}
-	ts, err := parseResetsAt(*r.ResetsAt)
-	if err != nil {
-		return nil, err
-	}
-	return &usageWindow{UsedPercentage: r.Percent, ResetsAt: ts}, nil
-}
-
-// parseUsageStream 从 `claude ... --output-format stream-json` 的逐行输出里
-// 取最后一个带 usage_report 的事件。
 //
-// 返回的 skipReason 非空表示「本轮不报」——冷却期、没有限额行等，都不是错误。
+// 实现在 internal/claudeusage：agent 与本地模式共用。这里保留同名入口，
+// 现有调用与测试不用改。
+
+type usageWindow = claudeusage.Window
+type usagePayload = claudeusage.Report
+
 func parseUsageStream(r io.Reader) (usagePayload, string, error) {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64<<10), 16<<20)
-
-	var report *usageReportWire
-	for sc.Scan() {
-		line := bytes.TrimSpace(sc.Bytes())
-		if len(line) == 0 || line[0] != '{' {
-			continue
-		}
-		var ev struct {
-			Type        string           `json:"type"`
-			UsageReport *usageReportWire `json:"usage_report"`
-		}
-		if err := json.Unmarshal(line, &ev); err != nil {
-			continue // 非 JSON 的诊断行，忽略
-		}
-		if ev.UsageReport != nil {
-			report = ev.UsageReport
-		}
-	}
-	if err := sc.Err(); err != nil {
-		return usagePayload{}, "", fmt.Errorf("读取 claude 输出失败：%w", err)
-	}
-	if report == nil {
-		return usagePayload{}, "", errors.New("claude 输出里没有 usage_report（/usage 的输出格式可能变了）")
-	}
-	if report.RateLimits == nil {
-		return usagePayload{}, "用量接口暂时不可用（rate_limits 为 null，通常是刚触发过 429 冷却），本轮跳过", nil
-	}
-	return mapRateLimits(report.RateLimits.Limits)
+	return claudeusage.ParseStream(r)
 }
 
-func mapRateLimits(raw json.RawMessage) (usagePayload, string, error) {
-	var rep usagePayload
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return rep, "claude 没有返回限额行（rate_limits.limits 为 null），本轮跳过", nil
-	}
-	var rows []limitRow
-	if err := json.Unmarshal(trimmed, &rows); err != nil {
-		return rep, "", fmt.Errorf("解析 rate_limits.limits 失败：%w", err)
-	}
-	if len(rows) == 0 {
-		return rep, "claude 返回的限额行为空，本轮跳过", nil
-	}
-	for _, row := range rows {
-		switch row.Kind {
-		case "session":
-			if rep.FiveHour == nil {
-				if w, err := row.window(); err == nil {
-					rep.FiveHour = w
-				}
-			}
-		case "weekly_all":
-			if rep.SevenDay == nil {
-				if w, err := row.window(); err == nil {
-					rep.SevenDay = w
-				}
-			}
-		}
-	}
-	if rep.FiveHour == nil && rep.SevenDay == nil {
-		return rep, "限额行里没有可用的 session / weekly_all 窗口，本轮跳过", nil
-	}
-	rep.Limits = raw // 原始 limits 一并上报，服务端存给 App 看
-	return rep, "", nil
-}
+func parseResetsAt(s string) (int64, error) { return claudeusage.ParseResetsAt(s) }
 
-// parseResetsAt 解析 ISO 8601；RFC3339Nano 同时接受小数秒、Z 和 +00:00。
-func parseResetsAt(s string) (int64, error) {
-	t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(s))
-	if err != nil {
-		return 0, fmt.Errorf("无法解析 resets_at %q：%w", s, err)
-	}
-	return t.Unix(), nil
-}
+func filterEnv(env []string) []string { return claudeusage.FilterEnv(env) }
 
-// filterEnv 只透传白名单变量。
-//
-// 黑名单挡不住：Claude 桌面版会往子进程环境里塞其他变量，实测只剔除
-// ANTHROPIC_* / CLAUDE_* 时 /usage 仍返回 rate_limits=null。
-func filterEnv(env []string) []string {
-	out := make([]string, 0, len(env))
-	for _, kv := range env {
-		name, _, _ := strings.Cut(kv, "=")
-		if envNameAllowed(runtime.GOOS, name) {
-			out = append(out, kv)
-		}
-	}
-	return out
-}
-
-func envNameAllowed(goos, name string) bool {
-	up := strings.ToUpper(name)
-	if strings.HasPrefix(up, "LC_") {
-		return true
-	}
-	switch up {
-	case "HOME", "USER", "LOGNAME", "PATH", "SHELL", "TMPDIR", "TERM", "LANG",
-		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", // 大小写两种写法都靠 ToUpper 命中
-		"SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS":
-		return true
-	}
-	if goos == "windows" {
-		switch up {
-		case "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SYSTEMROOT", "COMSPEC",
-			"PATHEXT", "USERNAME", "TEMP", "TMP":
-			return true
-		}
-	}
-	return false
-}
+func envNameAllowed(goos, name string) bool { return claudeusage.EnvNameAllowed(goos, name) }
 
 // ---- 配置 ----
 
@@ -497,12 +351,7 @@ func prepareWorkDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	work := filepath.Join(dir, "work")
-	if err := os.MkdirAll(work, 0o700); err != nil {
-		return "", fmt.Errorf("创建 claude 工作目录失败：%w", err)
-	}
-	_ = os.Chmod(work, 0o700) // Windows 上忽略
-	return work, nil
+	return claudeusage.WorkDir(dir)
 }
 
 func collectUsage(c *agentConfig) (usagePayload, string, error) {
@@ -514,77 +363,20 @@ func collectUsage(c *agentConfig) (usagePayload, string, error) {
 	if err != nil {
 		return usagePayload{}, "", err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), claudeTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, claude,
-		"-p", "/usage",
-		"--setting-sources", "project",
-		"--no-session-persistence",
-		"--output-format", "stream-json",
-		"--verbose",
-	)
-	cmd.Env = filterEnv(os.Environ())
-	cmd.Dir = work
-
-	// 显式接 /dev/null：launchd 下继承的 stdin 可能是个不关闭的管道。
-	devNull, err := os.Open(os.DevNull)
-	if err != nil {
-		return usagePayload{}, "", fmt.Errorf("打开 %s 失败：%w", os.DevNull, err)
-	}
-	defer devNull.Close()
-	cmd.Stdin = devNull
-
-	// 单独收 stderr：超时被杀时没有 ExitError，只能靠这里留线索。
-	stderr := &tailWriter{max: 64 << 10}
-	cmd.Stderr = stderr
-
-	out, err := cmd.Output()
-	if err != nil {
-		tail := tailText(stderr.buf, 600)
-		return usagePayload{}, "", claudeExecError(err, errors.Is(ctx.Err(), context.DeadlineExceeded), tail)
-	}
-	return parseUsageStream(bytes.NewReader(out))
+	return claudeusage.Collect(context.Background(), claudeusage.Config{
+		ClaudePath: claude,
+		WorkDir:    work,
+		Timeout:    claudeTimeout,
+		Env:        os.Environ(),
+	})
 }
 
+// 兼容入口：实现已移到 internal/claudeusage；现有测试继续用这些名字。
 func claudeExecError(err error, timedOut bool, stderrTail string) error {
-	suffix := ""
-	if stderrTail != "" {
-		suffix = "；stderr 末尾：" + stderrTail
-	}
-	if timedOut {
-		return fmt.Errorf("claude 执行超时（%s）%s", claudeTimeout, suffix)
-	}
-	return fmt.Errorf("claude 执行失败：%v%s", err, suffix)
+	return claudeusage.ExecError(err, timedOut, claudeTimeout, stderrTail)
 }
 
-// tailWriter 只保留最后 max 字节，避免异常输出把内存吃光。
-type tailWriter struct {
-	buf []byte
-	max int
-}
-
-func (w *tailWriter) Write(p []byte) (int, error) {
-	if w.max <= 0 {
-		return len(p), nil
-	}
-	w.buf = append(w.buf, p...)
-	if len(w.buf) > w.max {
-		copy(w.buf, w.buf[len(w.buf)-w.max:])
-		w.buf = w.buf[:w.max]
-	}
-	return len(p), nil
-}
-
-func tailText(b []byte, n int) string {
-	if n <= 0 || len(b) == 0 {
-		return ""
-	}
-	if len(b) > n {
-		b = b[len(b)-n:]
-	}
-	return strings.ToValidUTF8(strings.TrimSpace(string(b)), "�")
-}
+func tailText(b []byte, n int) string { return claudeusage.TailText(b, n) }
 
 // runRound 执行一轮：取用量 → 上报。skip 不是错误。
 func runRound(c *agentConfig, logf func(string, ...any)) error {
