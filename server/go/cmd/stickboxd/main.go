@@ -21,6 +21,7 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/frames"
 	"github.com/dayuer/stickbox/server/go/internal/httpapi"
 	"github.com/dayuer/stickbox/server/go/internal/metrics"
+	"github.com/dayuer/stickbox/server/go/internal/photo"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
 	"github.com/dayuer/stickbox/server/go/internal/render"
 	"github.com/dayuer/stickbox/server/go/internal/source"
@@ -131,6 +132,10 @@ func serve(cfg *config.Config) error {
 	defer fs.Close()
 	api.SetFrames(fs)
 	br.SetFrameResender(fs)
+
+	// 照片：文件落 <root>/photos/<user>/，只存缩放/剥元数据后的 JPEG。
+	// 清单里的 board 条目固定指当前主主题（现在只有 quota）。
+	api.SetPhotos(photo.New(cfg.Root, st, "quota"))
 	dailyCtx, dailyStop := context.WithCancel(context.Background())
 	defer dailyStop()
 	go fs.Run(dailyCtx)

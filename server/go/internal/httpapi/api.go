@@ -17,6 +17,7 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/config"
 	"github.com/dayuer/stickbox/server/go/internal/frames"
+	"github.com/dayuer/stickbox/server/go/internal/photo"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
 	"github.com/dayuer/stickbox/server/go/internal/sales"
 	"github.com/dayuer/stickbox/server/go/internal/store"
@@ -42,6 +43,8 @@ type API struct {
 	sales *sales.Service
 	// frames 在 main 里构造后注入；测试里可以为 nil。
 	frames *frames.Service
+	// photos 在 main 里构造后注入；测试里可以为 nil。
+	photos *photo.Service
 
 	// health 由 main 接上（broker 是否在监听）；测试里可以为 nil。
 	health HealthChecker
@@ -94,6 +97,9 @@ func (a *API) Sales() *sales.Service { return a.sales }
 // SetFrames 注入帧服务。构造 API 时还没有渲染器，所以用 setter。
 func (a *API) SetFrames(f *frames.Service) { a.frames = f }
 
+// SetPhotos 注入照片服务。
+func (a *API) SetPhotos(s *photo.Service) { a.photos = s }
+
 // HealthChecker 是 /healthz 对 broker 的窄依赖。
 type HealthChecker interface{ Healthy() bool }
 
@@ -128,6 +134,9 @@ func (a *API) Handler() http.Handler {
 	// 用户级时区：agent 或（将来的）user 令牌都可以设置。
 	mux.Handle("GET /api/user/tz", a.requireUser(a.handleUserTZGet))
 	mux.Handle("PUT /api/user/tz", a.requireUser(a.handleUserTZPut))
+
+	// 照片：上传原图，服务端缩放/剥元数据/内容寻址。
+	mux.Handle("POST /api/photo", a.requireUser(a.handlePhotoPost))
 
 	return drainBody(mux)
 }

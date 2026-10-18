@@ -73,6 +73,36 @@ CREATE TABLE IF NOT EXISTS sales(
   body     TEXT NOT NULL,
   received INTEGER NOT NULL DEFAULT 0
 );
+
+-- 照片库（P1）：只存缩放、方向校正、剥元数据后的最终 JPEG。
+-- 文件在 <root>/photos/<user_id>/<sha256>.jpg，这里只放元数据。
+CREATE TABLE IF NOT EXISTS photos(
+  user_id  TEXT NOT NULL,
+  sha256   TEXT NOT NULL,
+  size     INTEGER NOT NULL,
+  width    INTEGER NOT NULL,
+  height   INTEGER NOT NULL,
+  created  INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(user_id, sha256)
+);
+CREATE INDEX IF NOT EXISTS photos_user ON photos(user_id);
+
+-- 播放清单：pos 0 固定是 board，照片从 1 开始。plv 是清单版本，
+-- 任何增删改都递增；设备拿它和 MQTT 通知比对。
+CREATE TABLE IF NOT EXISTS playlist_entries(
+  user_id    TEXT NOT NULL,
+  pos        INTEGER NOT NULL,
+  kind       TEXT NOT NULL,
+  theme      TEXT NOT NULL DEFAULT '',
+  sha256     TEXT NOT NULL DEFAULT '',
+  duration_s INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(user_id, pos)
+);
+CREATE TABLE IF NOT EXISTS playlist_meta(
+  user_id TEXT PRIMARY KEY,
+  plv     INTEGER NOT NULL DEFAULT 0,
+  updated INTEGER NOT NULL DEFAULT 0
+);
 `
 
 // 打印退役时一次性清掉的旧表。
