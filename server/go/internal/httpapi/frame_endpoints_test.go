@@ -13,7 +13,9 @@ import (
 
 	"github.com/dayuer/stickbox/server/go/internal/frame"
 	"github.com/dayuer/stickbox/server/go/internal/frames"
+	"github.com/dayuer/stickbox/server/go/internal/render"
 	"github.com/dayuer/stickbox/server/go/internal/source"
+	"github.com/dayuer/stickbox/server/go/internal/theme"
 	"github.com/dayuer/stickbox/server/go/internal/usage"
 )
 
@@ -47,7 +49,7 @@ type fakeFrameBuilder struct {
 	fail  error
 }
 
-func (b *fakeFrameBuilder) Build(s source.Snapshot) (*frame.Bundle, error) {
+func (b *fakeFrameBuilder) Build(_ theme.Theme, s source.Snapshot) (*frame.Bundle, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.calls++
@@ -90,8 +92,15 @@ func newFrameAPI(t *testing.T) (http.Handler, *testDeps, *frames.Service, *fakeF
 	t.Helper()
 	h, dep := newTestAPI(t)
 	b := &fakeFrameBuilder{}
-	fs, err := frames.New(dep.cfg.Root, dep.store, fakeFrameUsage{}, fakeFramePub{}, b, frames.Options{
-		DefaultTZ:         "UTC",
+	rr, err := render.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	themes := []frames.Themed{{
+		Theme:  render.Quota{R: rr},
+		Source: source.NewClaude(fakeFrameUsage{}, source.NewFixedTZ("UTC")),
+	}}
+	fs, err := frames.New(dep.cfg.Root, dep.store, themes, fakeFramePub{}, b, frames.Options{
 		Debounce:          5 * time.Millisecond, // 测试里缩短防抖
 		RenderConcurrency: 1,
 		Now:               time.Now,
@@ -108,7 +117,7 @@ func waitFrameVersion(t *testing.T, fs *frames.Service, userID string, want uint
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if _, ver, ok := fs.Current(userID); ok && ver >= want {
+		if _, ver, ok := fs.Current(userID, "quota"); ok && ver >= want {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -120,7 +129,7 @@ func waitNoFrame(t *testing.T, fs *frames.Service, userID string, timeout time.D
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if _, _, ok := fs.Current(userID); !ok {
+		if _, _, ok := fs.Current(userID, "quota"); !ok {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -158,9 +167,11 @@ func TestDeviceFrameETagAnd304(t *testing.T) {
 	if ct := rr.Header().Get("Content-Type"); ct != "application/octet-stream" {
 		t.Errorf("Content-Type = %q", ct)
 	}
+	// ETag 带主题名：各主题版本各自递增，光一个版本号会让切主题的设备
+	// 收到假 304。
 	etag := rr.Header().Get("ETag")
-	if etag != `"1"` {
-		t.Errorf("ETag = %q，期望 \"1\"", etag)
+	if etag != `"quota-1"` {
+		t.Errorf("ETag = %q，期望 \"quota-1\"", etag)
 	}
 	if ver := rr.Header().Get("X-Frame-Version"); ver != "1" {
 		t.Errorf("X-Frame-Version = %q", ver)
@@ -186,7 +197,7 @@ func TestDeviceFrameETagAnd304(t *testing.T) {
 	waitFrameVersion(t, fs, userID, 2, 2*time.Second)
 
 	rr3 := get(h, "/api/device/frame", bearer(devTok))
-	if rr3.Code != 200 || rr3.Header().Get("ETag") != `"2"` {
+	if rr3.Code != 200 || rr3.Header().Get("ETag") != `"quota-2"` {
 		t.Errorf("上报后取帧 = %d ETag=%q", rr3.Code, rr3.Header().Get("ETag"))
 	}
 	hdr["If-None-Match"] = etag
@@ -242,7 +253,7 @@ func TestDeviceFrameNoFrame(t *testing.T) {
 	for b.count() == 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if _, _, ok := fs.Current(userID); ok {
+	if _, _, ok := fs.Current(userID, "quota"); ok {
 		t.Fatal("渲染失败却出了帧")
 	}
 	if rr := get(h, "/api/device/frame", bearer(devTok)); rr.Code != http.StatusNotFound {

@@ -58,54 +58,16 @@ func New() (*Renderer, error) {
 	return &Renderer{r: &renderer{fonts: fonts}}, nil
 }
 
-// Render 出一帧 JPEG。质量从 90 起逐级下降，直到不超过 TargetFrameBytes；
-// 最低质量仍超过 HardMaxFrameBytes 时返回错误——宁可不出帧，也不能写爆槽位。
-func (rr *Renderer) Render(s source.Snapshot) ([]byte, error) {
+// EncodeFrame 把一幅画面编成 JPEG。质量从 90 起逐级下降，直到不超过
+// TargetFrameBytes；最低质量仍超过 HardMaxFrameBytes 时返回错误——
+// 宁可不出帧，也不能写爆设备的槽位。
+//
+// 与主题无关：各主题只管画，装不下由这里统一降质量。
+func EncodeFrame(img *image.RGBA) ([]byte, error) {
 	start := time.Now()
-	b, err := encodeJPEG(rr.FullImage(s))
+	b, err := encodeJPEG(img)
 	metrics.ObserveRender(time.Since(start), err == nil)
 	return b, err
-}
-
-// FullImage 是带当前时钟数字的完整画面（预览、对照、非局部刷新路径用）。
-func (rr *Renderer) FullImage(s source.Snapshot) *image.RGBA {
-	img := image.NewRGBA(image.Rect(0, 0, 1920, 1080))
-	rr.paint(img, s, true)
-	return img
-}
-
-// BaseImage 是写进 flash 的底帧：四张数字卡片留空，由设备换入字形图集。
-func (rr *Renderer) BaseImage(s source.Snapshot) *image.RGBA {
-	img := image.NewRGBA(image.Rect(0, 0, 1920, 1080))
-	rr.paint(img, s, false)
-	return img
-}
-
-// CardTile 是 128×192 的单张卡片（底 + 铰链 + 数字），用于字形图集。
-func (rr *Renderer) CardTile(digit byte) *image.RGBA {
-	img := image.NewRGBA(image.Rect(0, 0, clockCardW, clockCardH))
-	rr.r.drawClockCard(img, 0, 0, clockCardW, clockCardH, string(digit), true)
-	return img
-}
-
-func (rr *Renderer) paint(dst *image.RGBA, s source.Snapshot, drawDigits bool) {
-	fillRect(dst, 0, 0, 1920, 1080, colBG)
-	// 120px 网格，偏移 (72,40)
-	for x := 72; x < 1920; x += 120 {
-		vline(dst, x, 0, 1080, colGrid)
-	}
-	for y := 40; y < 1080; y += 120 {
-		hline(dst, 0, 1920, y, colGrid)
-	}
-
-	main, secondary := views(s)
-	r := rr.r
-	r.drawHeader(dst, s, main)
-	r.drawClock(dst, s.Now, drawDigits)
-	r.drawMain(dst, main)
-	r.drawSecondary(dst, secondary)
-	r.drawLegend(dst)
-	r.drawFooter(dst, s, main, secondary)
 }
 
 func encodeJPEG(img image.Image) ([]byte, error) {

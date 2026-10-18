@@ -23,6 +23,7 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/metrics"
 	"github.com/dayuer/stickbox/server/go/internal/registry"
 	"github.com/dayuer/stickbox/server/go/internal/render"
+	"github.com/dayuer/stickbox/server/go/internal/source"
 	"github.com/dayuer/stickbox/server/go/internal/store"
 	"github.com/dayuer/stickbox/server/go/internal/tlsx"
 	"github.com/dayuer/stickbox/server/go/internal/version"
@@ -103,8 +104,22 @@ func serve(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("初始化渲染器：%w", err)
 	}
-	fs, err := frames.New(cfg.Root, st, api.Usage(), br, frames.RenderBuilder{R: rr}, frames.Options{
-		DefaultTZ:      cfg.DefaultTZ,
+	// 时区解析：用户设置 > 这一路数据自带 > 服务端默认（T29 的优先级）。
+	// 各数据源共用这一个解析器。
+	tzr := source.NewTZResolver(st, cfg.DefaultTZ)
+	// 主题表：顺序就是播放列表的优先级，第一个是主主题（老固件只认它）。
+	//
+	// 现在只有额度看板一个主题，它的数据源是 Composite：两路数据都挤进
+	// 这一块板（有数据的源几个就怎么分环）。等经营看板那个主题落地，
+	// 它会成为第二项、吃自己那一路，播放列表就真的开始轮播了。
+	themes := []frames.Themed{{
+		Theme: render.Quota{R: rr},
+		Source: source.NewComposite(
+			source.NewClaude(api.Usage(), tzr),
+			source.NewSales(api.Sales(), tzr),
+		),
+	}}
+	fs, err := frames.New(cfg.Root, st, themes, br, frames.ThemeBuilder{}, frames.Options{
 		CacheMaxBytes:  cfg.FrameCacheMaxBytes,
 		MemoryMaxBytes: cfg.FrameMemoryMaxBytes,
 		BackfillPerSec: cfg.BackfillPerSec,

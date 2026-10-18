@@ -10,20 +10,32 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/frames"
 )
 
-// handleDeviceFrame：GET /api/device/frame
+// handleDeviceFrame：GET /api/device/frame[?theme=<id>]
 //
 // 设备用注册时拿到的密钥取自己在用户名下的帧包。未配对的密钥 403；
-// 已配对但还没出过帧 404。ETag 是帧版本号，支持 If-None-Match/304。
+// 已配对但还没出过帧 404；主题不认识 404。
+//
+// theme 省略时给主主题——老固件不带这个参数。
+// ETag 带主题名（"quota-7"）而不是光一个版本号：各主题的版本是各自递增的，
+// 两个主题可能都到 v7，只用版本号会让切换主题的设备收到假 304。
 func (a *API) handleDeviceFrame(w http.ResponseWriter, r *http.Request, id auth.Identity) {
 	if a.frames == nil {
 		fail(w, 503, "frame not ready", "")
 		return
 	}
+	themeID := r.URL.Query().Get("theme")
+	if themeID != "" && !safeThemeID(themeID) {
+		fail(w, 400, "bad request", "主题名非法")
+		return
+	}
 	// 用令牌自己的 KeyID 判权：pending/已吊销的密钥拿不到别人 MAC 的帧。
-	data, ver, err := a.frames.CurrentForKey(id.KeyID, id.Dev)
+	data, ver, err := a.frames.CurrentForKey(id.KeyID, id.Dev, themeID)
 	switch {
 	case errors.Is(err, frames.ErrNotPaired):
 		fail(w, 403, "forbidden", "设备尚未配对")
+		return
+	case errors.Is(err, frames.ErrNoTheme):
+		fail(w, 404, "not found", "没有这个主题")
 		return
 	case errors.Is(err, frames.ErrNoFrame):
 		w.Header().Set("Retry-After", "30")
@@ -34,7 +46,7 @@ func (a *API) handleDeviceFrame(w http.ResponseWriter, r *http.Request, id auth.
 		return
 	}
 
-	etag := `"` + strconv.FormatUint(ver, 10) + `"`
+	etag := `"` + a.frames.ETag(themeID, ver) + `"`
 	w.Header().Set("ETag", etag)
 	w.Header().Set("X-Frame-Version", strconv.FormatUint(ver, 10))
 	w.Header().Set("Cache-Control", "no-cache")
@@ -46,6 +58,23 @@ func (a *API) handleDeviceFrame(w http.ResponseWriter, r *http.Request, id auth.
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+// safeThemeID 和 frames 那边的 safeID 一致：只让能安全拼进路径的字符过。
+func safeThemeID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'z',
+			c >= 'A' && c <= 'Z', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // etagMatches 支持 "*"、弱校验前缀和逗号分隔的列表。

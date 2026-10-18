@@ -64,6 +64,15 @@ CREATE TABLE IF NOT EXISTS usage(
   body     TEXT NOT NULL,
   received INTEGER NOT NULL DEFAULT 0
 );
+
+-- 当日经营数据（第二路数据源），同样每个用户只留最新一份。
+-- body 是 sales.Report 的 JSON，自带所属本地日期；跨零点算不算今天由
+-- 数据源判断，不在这里过期，否则「更新 X 前」就没的说了。
+CREATE TABLE IF NOT EXISTS sales(
+  user_id  TEXT PRIMARY KEY,
+  body     TEXT NOT NULL,
+  received INTEGER NOT NULL DEFAULT 0
+);
 `
 
 // 打印退役时一次性清掉的旧表。

@@ -39,6 +39,7 @@ static fp_index_t     s_index;
 static bool           s_active;
 static uint32_t       s_seq;
 static int            s_slot = -1;
+static int            s_slots;      /* 运行时算出的槽数，0 = 还没初始化 */
 static char           s_ver[32];
 
 static uint32_t be32(const uint8_t *p)
@@ -154,12 +155,18 @@ static bool ensure_part(void)
         ESP_LOGW(TAG, "没有 frames 分区，退回预置页");
         return false;
     }
-    if (s_part->size < (size_t)FP_SLOT_COUNT * FP_SLOT_SIZE) {
-        ESP_LOGE(TAG, "frames 分区只有 %u 字节，装不下 %d 个槽",
-                 (unsigned)s_part->size, FP_SLOT_COUNT);
+    /* 槽数按分区实际大小算，不写死：换 16MB 模组只改分区表，固件不用动。 */
+    s_slots = (int)(s_part->size / FP_SLOT_SIZE);
+    if (s_slots > FP_MAX_SLOTS) s_slots = FP_MAX_SLOTS;
+    if (s_slots < FP_MIN_SLOTS) {
+        ESP_LOGE(TAG, "frames 分区只有 %u 字节，放不下 %d 个槽",
+                 (unsigned)s_part->size, FP_MIN_SLOTS);
         s_part = NULL;
+        s_slots = 0;
         return false;
     }
+    ESP_LOGI(TAG, "frames 分区 %u 字节 = %d 槽，可驻留 %d 个主题",
+             (unsigned)s_part->size, s_slots, s_slots / FP_SLOTS_PER_THEME);
     return true;
 }
 
@@ -170,7 +177,7 @@ bool framepack_init(void)
     int best = -1;
     uint32_t best_seq = 0, best_len = 0;
     char best_ver[32] = { 0 };
-    for (int i = 0; i < FP_SLOT_COUNT; i++) {
+    for (int i = 0; i < s_slots; i++) {
         uint32_t seq, len, crc;
         char ver[32];
         if (!read_slot_header(i, &seq, &len, &crc, ver, sizeof ver)) continue;
@@ -208,7 +215,7 @@ const char *framepack_version(void) { return s_active ? s_ver : ""; }
 static void erase_all_slots(void)
 {
     /* 只擦每个槽的第一个扇区（含 magic+header），整槽擦除没必要还费寿命。 */
-    for (int i = 0; i < FP_SLOT_COUNT; i++) {
+    for (int i = 0; i < s_slots; i++) {
         const size_t off = (size_t)i * FP_SLOT_SIZE;
         esp_err_t err = esp_partition_erase_range(s_part, off, 4096);
         if (err != ESP_OK) {
@@ -266,7 +273,7 @@ bool fp_write_begin(fp_writer_t *w, uint32_t pack_len, const char *ver)
         return false;
     }
     /* 写下一个槽，不覆盖当前激活的那个——新帧落盘失败时还得靠它出画面。 */
-    int slot = (s_slot + 1) % FP_SLOT_COUNT;
+    int slot = (s_slot + 1) % s_slots;
     size_t off = (size_t)slot * FP_SLOT_SIZE;
     if (esp_partition_erase_range(s_part, off, FP_SLOT_SIZE) != ESP_OK) {
         ESP_LOGE(TAG, "擦槽 %d 失败", slot);

@@ -51,7 +51,7 @@ func main() {
 		},
 	}
 
-	b, err := frame.Build(rr, snap)
+	b, err := frame.Build(render.Quota{R: rr}, snap)
 	if err != nil {
 		fatal(err)
 	}

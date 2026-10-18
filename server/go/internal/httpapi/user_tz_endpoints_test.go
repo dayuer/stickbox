@@ -15,8 +15,10 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/frame"
 	"github.com/dayuer/stickbox/server/go/internal/frames"
+	"github.com/dayuer/stickbox/server/go/internal/render"
 	"github.com/dayuer/stickbox/server/go/internal/source"
 	"github.com/dayuer/stickbox/server/go/internal/store"
+	"github.com/dayuer/stickbox/server/go/internal/theme"
 )
 
 func put(h http.Handler, path, body string, hdr map[string]string) *httptest.ResponseRecorder {
@@ -171,7 +173,7 @@ type recBuilder struct {
 	n    int
 }
 
-func (b *recBuilder) Build(s source.Snapshot) (*frame.Bundle, error) {
+func (b *recBuilder) Build(_ theme.Theme, s source.Snapshot) (*frame.Bundle, error) {
 	b.mu.Lock()
 	b.last = s
 	b.n++
@@ -218,8 +220,19 @@ func TestUserTZTriggersImmediateRebuild(t *testing.T) {
 
 	b := &recBuilder{}
 	pub := &recFramePub{}
-	fs, err := frames.New(dep.cfg.Root, dep.store, dep.api.Usage(), pub, b, frames.Options{
-		DefaultTZ: "UTC", Debounce: time.Millisecond, RenderConcurrency: 1,
+	renderer, err := render.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 必须用 NewTZResolver（带用户级查询），不能用 NewFixedTZ——
+	// 这条测试验的就是「用户设置盖过 agent 上报」。
+	tzr := source.NewTZResolver(dep.store, "UTC")
+	themes := []frames.Themed{{
+		Theme:  render.Quota{R: renderer},
+		Source: source.NewClaude(dep.api.Usage(), tzr),
+	}}
+	fs, err := frames.New(dep.cfg.Root, dep.store, themes, pub, b, frames.Options{
+		Debounce: time.Millisecond, RenderConcurrency: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -238,7 +251,7 @@ func TestUserTZTriggersImmediateRebuild(t *testing.T) {
 	if loc := b.snapshot().Now.Location().String(); loc != "Asia/Tokyo" {
 		t.Fatalf("初始时区 = %s", loc)
 	}
-	_, v1, ok := fs.Current(userID)
+	_, v1, ok := fs.Current(userID, "")
 	if !ok {
 		t.Fatal("没有初始帧")
 	}
@@ -250,7 +263,7 @@ func TestUserTZTriggersImmediateRebuild(t *testing.T) {
 	if loc := b.snapshot().Now.Location().String(); loc != "Pacific/Kiritimati" {
 		t.Fatalf("PUT 后没有用新时区重渲：%s", loc)
 	}
-	_, v2, _ := fs.Current(userID)
+	_, v2, _ := fs.Current(userID, "")
 	if v2 <= v1 {
 		t.Fatalf("帧版本没有前进：v1=%d v2=%d", v1, v2)
 	}
