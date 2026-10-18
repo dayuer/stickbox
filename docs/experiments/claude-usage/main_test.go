@@ -1,9 +1,32 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestSnapshotDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a"), []byte("12345"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(dir, "sub")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "b"), []byte("123"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	du := snapshotDir(dir)
+	if du.Err != "" || du.Bytes != 8 || du.Files != 2 {
+		t.Fatalf("du = %+v", du)
+	}
+	if du := snapshotDir(filepath.Join(dir, "missing")); du.Err == "" {
+		t.Fatal("不存在的目录应返回错误")
+	}
+}
 
 func TestParseResult(t *testing.T) {
 	stream := `{"type":"system","subtype":"init"}

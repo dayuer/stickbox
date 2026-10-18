@@ -285,11 +285,14 @@ func Run(ctx context.Context, cfg Config) (stdout []byte, stderrTail string, err
 	if ps := cmd.ProcessState; ps != nil && cfg.OnExit != nil {
 		cfg.OnExit(ProcessStats{ExitCode: ps.ExitCode(), PeakRSSBytes: processPeakRSS(ps)})
 	}
-	out, _ := os.ReadFile(outFile.Name())
+	out, readErr := os.ReadFile(outFile.Name())
 	tail := fileTail(errFile, 600)
 	if waitErr != nil {
 		return out, tail, ExecError(waitErr, errors.Is(ctx.Err(), context.DeadlineExceeded),
 			cfg.Timeout, tail)
+	}
+	if readErr != nil {
+		return out, tail, fmt.Errorf("读取 claude 输出失败：%w", readErr)
 	}
 	return out, tail, nil
 }

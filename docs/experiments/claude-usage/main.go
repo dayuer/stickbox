@@ -61,6 +61,9 @@ type sample struct {
 	ProjectsBytes int64     `json:"projects_bytes"`
 	ProjectsFiles int64     `json:"projects_files"`
 	ProjectsErr   string    `json:"projects_err,omitempty"`
+	WorkdirBytes  int64     `json:"workdir_bytes"`
+	WorkdirFiles  int64     `json:"workdir_files"`
+	WorkdirErr    string    `json:"workdir_err,omitempty"`
 }
 
 type resultEvent struct {
@@ -157,24 +160,24 @@ func loadAvg() (float64, float64, float64, error) {
 	return parseLoadavg(string(out))
 }
 
-// diskUsage 是 ~/.claude/projects 的体量快照。
+// diskUsage 是一个目录的体量快照。
 type diskUsage struct {
 	Bytes int64  `json:"bytes"`
 	Files int64  `json:"files"`
 	Err   string `json:"err,omitempty"`
 }
 
-// snapshotProjects 统计会话 JSONL 所在目录的总字节数和文件数。
-// 只读，不跟随符号链接。
-func snapshotProjects() diskUsage {
-	home, err := os.UserHomeDir()
-	if err != nil {
+// snapshotDir 统计目录的总字节数和文件数。只读，不跟随符号链接。
+func snapshotDir(root string) diskUsage {
+	var du diskUsage
+	if _, err := os.Stat(root); err != nil {
 		return diskUsage{Err: err.Error()}
 	}
-	root := filepath.Join(home, ".claude", "projects")
-	var du diskUsage
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if path == root {
+				return err
+			}
 			return nil // 单个文件读不到不影响整体
 		}
 		if d.IsDir() {
@@ -192,6 +195,15 @@ func snapshotProjects() diskUsage {
 		du.Err = err.Error()
 	}
 	return du
+}
+
+// snapshotProjects 统计 ~/.claude/projects（会话 JSONL）的体量。
+func snapshotProjects() diskUsage {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return diskUsage{Err: err.Error()}
+	}
+	return snapshotDir(filepath.Join(home, ".claude", "projects"))
 }
 
 func main() {
@@ -258,6 +270,7 @@ func main() {
 
 	started := time.Now()
 	projStart := snapshotProjects()
+	workStart := snapshotDir(work)
 	all := make([]sample, 0, 8)
 	ask := ""
 	consecutiveEmpty := 0
@@ -327,6 +340,9 @@ func main() {
 	summary.ProjectsStart = projStart
 	summary.ProjectsEnd = snapshotProjects()
 	summary.ProjectsDeltaBytes = summary.ProjectsEnd.Bytes - summary.ProjectsStart.Bytes
+	summary.WorkdirStart = workStart
+	summary.WorkdirEnd = snapshotDir(work)
+	summary.WorkdirDeltaBytes = summary.WorkdirEnd.Bytes - summary.WorkdirStart.Bytes
 	summaryPath := strings.TrimSuffix(*outPath, ".jsonl") + ".summary.json"
 	if b, err := json.MarshalIndent(summary, "", "  "); err == nil {
 		_ = os.WriteFile(summaryPath, append(b, '\n'), 0o600)
@@ -349,6 +365,11 @@ func runOnce(ctx context.Context, n int, claudePath, work string, timeout time.D
 		s.ProjectsBytes, s.ProjectsFiles = du.Bytes, du.Files
 	} else {
 		s.ProjectsErr = du.Err
+	}
+	if du := snapshotDir(work); du.Err == "" {
+		s.WorkdirBytes, s.WorkdirFiles = du.Bytes, du.Files
+	} else {
+		s.WorkdirErr = du.Err
 	}
 
 	t0 := time.Now()
@@ -426,6 +447,9 @@ type summary struct {
 	ProjectsStart      diskUsage  `json:"projects_start"`
 	ProjectsEnd        diskUsage  `json:"projects_end"`
 	ProjectsDeltaBytes int64      `json:"projects_delta_bytes"`
+	WorkdirStart       diskUsage  `json:"workdir_start"`
+	WorkdirEnd         diskUsage  `json:"workdir_end"`
+	WorkdirDeltaBytes  int64      `json:"workdir_delta_bytes"`
 }
 
 type stat struct {
@@ -529,6 +553,9 @@ func printSummary(s summary) {
 	fmt.Printf("  ~/.claude/projects: %d → %d bytes (%+d)，files %d → %d\n",
 		s.ProjectsStart.Bytes, s.ProjectsEnd.Bytes, s.ProjectsDeltaBytes,
 		s.ProjectsStart.Files, s.ProjectsEnd.Files)
+	fmt.Printf("  harness work dir: %d → %d bytes (%+d)，files %d → %d\n",
+		s.WorkdirStart.Bytes, s.WorkdirEnd.Bytes, s.WorkdirDeltaBytes,
+		s.WorkdirStart.Files, s.WorkdirEnd.Files)
 	if s.FirstErr != "" {
 		fmt.Printf("  first_err=%s\n", s.FirstErr)
 	}
