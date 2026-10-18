@@ -19,6 +19,8 @@ cc -I../../main -Ihoststub -O1 -Wall -o pairtest pairtest.c ../../main/pairband.
 cc $CC_ARGS -o vertest vertest.c ../../main/framepack_ver.c
 # 照片裸扇区存储：板上跑的是同一份 photostore_core.c，掉电/CRC/分配在主机钉死
 cc $CC_ARGS -o photostore_test photostore_test.c ../../main/photostore_core.c ../../main/photosha.c
+# 清单流式解析 + init_token 判决 + status JSON
+cc $CC_ARGS -o photo_core_test photo_core_test.c ../../main/photo_json.c ../../main/photo_policy.c
 
 # 帧包和黄金帧都由 server/go/cmd/packgen 现生成，不依赖任何别人的 worktree
 # ——那些目录会被收敛掉，测试不该因此失效。
@@ -56,3 +58,6 @@ echo "== 6. 槽头版本字段解码 =="
 
 echo "== 7. 照片存储：格式化/掉电/CRC/扫描 =="
 ./photostore_test | tail -3
+
+echo "== 8. 照片清单解析 / 初始化授权 / status.photo =="
+./photo_core_test | tail -3

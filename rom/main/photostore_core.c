@@ -86,7 +86,7 @@ static sb_t sb_decode(const uint8_t b[512], uint32_t card_sectors)
 static bool io_read(photostore_t *st, uint32_t sector, void *buf, uint32_t nsec)
 {
     st->reads++;
-    if (!st->io->read(st->io->ctx, sector, buf, nsec)) {
+    if (!st->io.read(st->io.ctx, sector, buf, nsec)) {
         st->state = PHOTO_FAULT;
         return false;
     }
@@ -96,7 +96,7 @@ static bool io_read(photostore_t *st, uint32_t sector, void *buf, uint32_t nsec)
 static bool io_write(photostore_t *st, uint32_t sector, const void *buf, uint32_t nsec)
 {
     st->writes++;
-    if (!st->io->write(st->io->ctx, sector, buf, nsec)) {
+    if (!st->io.write(st->io.ctx, sector, buf, nsec)) {
         st->state = PHOTO_FAULT;
         return false;
     }
@@ -129,13 +129,14 @@ bool photostore_open(photostore_t *st, const photo_io_t *io, uint8_t *buf4k,
 {
     memset(st, 0, sizeof *st);
     st->cache_sector = -1;
-    st->io = io;
     st->buf = buf4k;
     st->buf_len = buf_len;
     if (!io || !io->read || !io->write || !buf4k || buf_len < 4096) {
         st->state = PHOTO_ABSENT;
         return false;
     }
+    /* 拷贝而不是存指针：见 photostore.h 里 io 字段的注释。 */
+    st->io = *io;
     uint32_t ds = 0;
     if (!valid_layout(io->sector_count, &ds)) {
         st->state = PHOTO_ABSENT;
@@ -143,8 +144,8 @@ bool photostore_open(photostore_t *st, const photo_io_t *io, uint8_t *buf4k,
     }
 
     uint8_t a[512], b[512];
-    if (!st->io->read(io->ctx, SB_A_SECTOR, a, 1) ||
-        !st->io->read(io->ctx, SB_B_SECTOR, b, 1)) {
+    if (!st->io.read(st->io.ctx, SB_A_SECTOR, a, 1) ||
+        !st->io.read(st->io.ctx, SB_B_SECTOR, b, 1)) {
         st->state = PHOTO_ABSENT;   /* 读不了卡，不是“未初始化” */
         return false;
     }
@@ -184,7 +185,7 @@ photo_state_t photostore_state(const photostore_t *st) { return st->state; }
 
 photo_format_mode_t photostore_format_mode(const photostore_t *st)
 {
-    if (!st->io || !st->buf) return PHOTO_FMT_UNAVAILABLE;
+    if (!st->io.read || !st->buf) return PHOTO_FMT_UNAVAILABLE;
     if (st->state == PHOTO_READY) return PHOTO_FMT_READY;
     if (st->state == PHOTO_ABSENT) return PHOTO_FMT_UNAVAILABLE;
     if (st->state == PHOTO_UNINIT)
