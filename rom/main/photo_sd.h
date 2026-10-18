@@ -22,5 +22,8 @@ photo_state_t photo_sd_state(void);   /* 当前状态（未挂载 = ABSENT） */
  * READY/UNAVAILABLE 一律拒绝。返回 true 表示格式化完成。 */
 bool photo_sd_format(bool authorized, bool force);
 
+/* 已挂载时返回 BLANK/RESUME/CORRUPT/READY；未挂载返回 UNAVAILABLE。 */
+photo_format_mode_t photo_sd_format_mode(void);
+
 /* 挂载且 READY 时返回存储对象，否则 NULL。 */
 photostore_t *photo_sd_store(void);

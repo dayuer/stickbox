@@ -1,4 +1,5 @@
 #pragma once
+#include <stdbool.h>
 
 /* 取帧与换帧（T13b）。
  *
@@ -22,3 +23,7 @@ void framefetch_notify(const char *ver);
 
 /* 立刻拉一次（幂等，已经在拉就直接返回）。why 只进日志。 */
 void framefetch_request(const char *why);
+
+/* 是否正有一轮取帧在跑（已请求、任务已建但还没结束）。
+ * 照片下载拿它让路：取帧优先。 */
+bool framefetch_busy(void);

@@ -27,6 +27,7 @@
 #include "coredump.h"
 #include "framefetch.h"
 #include "framepack.h"
+#include "photo_sync.h"
 #include "lcd_ui.h"
 #include "ota.h"
 #include "pairband.h"
@@ -467,6 +468,7 @@ static void handle_pair(const char *json, int len)
         /* 刚转正，手里大概还没有帧：配对前 /device/frame 一律 403，设备只能
          * 等。这里主动叫一次，省掉最长 60 秒的兜底轮询。 */
         framefetch_request("配对完成");
+        photo_sync_notify_connected();
         ESP_LOGI(TAG, "配对成功，切到看板");
         if (cid[0]) { cid_remember_pair(cid); send_ack(cid, true, NULL); }
     } else {
@@ -503,7 +505,13 @@ static void handle_frame(const char *json, int len)
     char ver[24] = { 0 };
     if (cJSON_IsNumber(v))      snprintf(ver, sizeof ver, "%lld", (long long)v->valuedouble);
     else if (cJSON_IsString(v)) strlcpy(ver, v->valuestring, sizeof ver);
+    /* plv 是照片清单版本；老服务端不发这个字段，照片链路就不动。 */
+    const cJSON *pv = cJSON_GetObjectItemCaseSensitive(root, "plv");
+    int plv = -1;
+    if (cJSON_IsNumber(pv)) plv = (int)pv->valuedouble;
     cJSON_Delete(root);
+
+    if (plv >= 0) photo_sync_notify_plv(plv);
 
     if (!ver[0]) {
         ESP_LOGW(TAG, "帧通知里没有 ver，忽略");
@@ -516,18 +524,33 @@ static void handle_frame(const char *json, int len)
 static void heartbeat_task(void *arg)
 {
     (void)arg;
-    char p[256];
+    /* 640B：照片字段每次心跳都带，整条必须 ≤512B（docs/PHOTO.md 5.4）。 */
+    char p[640];
     while (1) {
         if (s_mqtt) {
             /* fw 和 reset：服务端不解 ELF，没有版本号的 coredump 还原不了符号；
              * reset 让「设备为什么又上线了」有答案（T10）。 */
             int n = snprintf(p, sizeof p,
                 "{\"dev\":\"%s\",\"state\":\"online\",\"heap\":%u,\"heap_min\":%u,"
-                "\"uptime\":%lld,\"fw\":\"%s\",\"reset\":\"%s\"}",
+                "\"uptime\":%lld,\"fw\":\"%s\",\"reset\":\"%s\"",
                 s_devid, (unsigned)esp_get_free_heap_size(),
                 (unsigned)esp_get_minimum_free_heap_size(),
                 (long long)(esp_timer_get_time() / 1000000),
                 ota_version(), coredump_reset_reason());
+            if (n < 0) n = 0;
+            if ((size_t)n < sizeof p - 2) {
+                p[n++] = ',';
+                int k = photo_sync_status_json(p + n, sizeof p - (size_t)n - 1);
+                if (k > 0) n += k;
+                else n--;
+            }
+            if ((size_t)n < sizeof p - 1) {
+                p[n++] = '}';
+                p[n] = 0;
+            } else {
+                p[sizeof p - 1] = 0;
+                n = (int)sizeof p - 1;
+            }
             esp_mqtt_client_publish(s_mqtt, s_topic_status, p, n, 1, 0);
             ESP_LOGI(TAG, "心跳 heap=%u min=%u",
                      (unsigned)esp_get_free_heap_size(),
@@ -656,7 +679,12 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
         esp_mqtt_client_subscribe(s_mqtt, s_topic_pair, 1);
         /* 手里有密钥就直接订用量与帧通知，不等 paired=true——理由见
          * subscribe_paired_topics() 的注释。被拒了会走 SUBACK 分支。 */
-        if (s_devkey[0]) subscribe_paired_topics();
+        if (s_devkey[0]) {
+            subscribe_paired_topics();
+            /* 每次连上都对一次清单：断线期间 plv 可能已经变了，
+             * ETag 会让没变化时只花一个 304。 */
+            photo_sync_notify_connected();
+        }
         break;
 
     case MQTT_EVENT_SUBSCRIBED:

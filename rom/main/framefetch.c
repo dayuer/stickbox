@@ -31,6 +31,7 @@
 #include "cloud_client.h"
 #include "cloud_creds.h"
 #include "framepack.h"
+#include "photo_io.h"
 #include "provision.h"
 #include "statusband.h"
 #include "stream.h"
@@ -303,10 +304,24 @@ done:
 
 /* ------------------------------------------------------------ 任务 */
 
+bool framefetch_busy(void)
+{
+    return __atomic_load_n(&s_fetching, __ATOMIC_ACQUIRE);
+}
+
 static void fetch_task(void *arg)
 {
     (void)arg;
-    fetch_r r = fetch_once();
+    /* 与照片下载/读卡互斥。取帧优先级高，但锁已经被照片任务拿着时，
+     * 照片每 4KB 会让一次，所以这里最多等一小段。 */
+    fetch_r r;
+    if (photo_io_lock(120000)) {
+        r = fetch_once();
+        photo_io_unlock();
+    } else {
+        ESP_LOGW(TAG, "等照片任务放锁超时，本轮取帧跳过");
+        r = FETCH_FAIL;
+    }
 
     switch (r) {
     case FETCH_OK:
