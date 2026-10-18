@@ -20,11 +20,14 @@ const (
 	// RoleAgent 是用户电脑上的 stickbox-agent：上报用量、管理名下的屏。
 	// 它不能连 MQTT。
 	RoleAgent Role = "agent"
+	// RoleUser 预留给直接代表用户的令牌（例如将来的 App/网页端）。
+	// 与 agent 一样只能走 HTTP，不能连 MQTT。
+	RoleUser Role = "user"
 )
 
 type Identity struct {
 	Dev    string // device 角色专用
-	UserID string // agent 角色专用；不要用它判定设备的数据权限
+	UserID string // agent / user 角色专用；不要用它判定设备的数据权限
 	Role   Role
 	KeyID  string
 	// Pending 表示这把 device 密钥还没完成配对。待配对密钥可以连 MQTT

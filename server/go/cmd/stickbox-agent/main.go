@@ -321,6 +321,7 @@ var errText = map[string]string{
 	"not found":    "服务端没有这条数据",
 	"forbidden":    "无权操作这台设备",
 	"bad request":  "服务端拒绝了请求",
+	"bad tz":       "时区不合法",
 }
 
 func (e *apiError) Error() string {
@@ -1006,6 +1007,89 @@ func cmdLogout(args []string) error {
 	return nil
 }
 
+// ---- 用户时区 ----
+
+type tzState struct {
+	TZ     string `json:"tz"`
+	Source string `json:"source"`
+}
+
+func tzSourceLabel(src string) string {
+	switch src {
+	case "user":
+		return "用户设置"
+	case "agent":
+		return "agent 上报"
+	case "default":
+		return "服务端默认"
+	default:
+		return src
+	}
+}
+
+func printTZ(out tzState) {
+	fmt.Printf("当前时区：%s（%s）\n", out.TZ, tzSourceLabel(out.Source))
+}
+
+// cmdTZ：stickbox-agent tz set <tz> | show | clear
+//
+// 时区存在服务端（用户级），与本机所在时区无关；清除后服务端按
+// agent 上报 > default_tz 回退。
+func cmdTZ(args []string) error {
+	if len(args) == 0 {
+		return errors.New("用法：stickbox-agent tz set <时区> | tz show | tz clear")
+	}
+	c, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	if err := requireToken(c); err != nil {
+		return err
+	}
+	cl, err := newAPIClient(c)
+	if err != nil {
+		return err
+	}
+
+	var out tzState
+	switch args[0] {
+	case "show":
+		if len(args) != 1 {
+			return errors.New("用法：stickbox-agent tz show")
+		}
+		if err := cl.call("GET", "/api/user/tz", true, nil, &out); err != nil {
+			return fmt.Errorf("读取时区失败：%w", err)
+		}
+		printTZ(out)
+		return nil
+
+	case "set":
+		if len(args) != 2 || strings.TrimSpace(args[1]) == "" {
+			return errors.New("用法：stickbox-agent tz set Asia/Jakarta（也接受 +07:00）")
+		}
+		if err := cl.call("PUT", "/api/user/tz", true,
+			map[string]string{"tz": args[1]}, &out); err != nil {
+			return fmt.Errorf("设置时区失败：%w", err)
+		}
+		printTZ(out)
+		return nil
+
+	case "clear":
+		if len(args) != 1 {
+			return errors.New("用法：stickbox-agent tz clear")
+		}
+		if err := cl.call("PUT", "/api/user/tz", true,
+			map[string]string{"tz": ""}, &out); err != nil {
+			return fmt.Errorf("清除时区失败：%w", err)
+		}
+		printTZ(out)
+		return nil
+
+	default:
+		return fmt.Errorf("未知的 tz 子命令 %q（set / show / clear）", args[0])
+	}
+}
+
 // ---- 后台服务 ----
 
 func installService(exe, configDir string) error {
@@ -1313,11 +1397,15 @@ func usage() {
   stickbox-agent status
   stickbox-agent doctor
   stickbox-agent logout
+  stickbox-agent tz set <时区>         设置用户时区（如 Asia/Jakarta、+07:00）
+  stickbox-agent tz show               查看生效时区及来源
+  stickbox-agent tz clear              清除用户设置，回退 agent/默认
 
 示例：
   stickbox-agent pair 123456
   stickbox-agent run --once
   stickbox-agent install
+  stickbox-agent tz set Asia/Jakarta
 `)
 }
 
@@ -1355,6 +1443,8 @@ func main() {
 		err = cmdDoctor(args)
 	case "logout":
 		err = cmdLogout(args)
+	case "tz":
+		err = cmdTZ(args)
 	case "version", "-v", "--version":
 		fmt.Println(version)
 		return

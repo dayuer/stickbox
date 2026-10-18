@@ -355,6 +355,59 @@ func TestPostUsage(t *testing.T) {
 	}
 }
 
+func TestTZCommands(t *testing.T) {
+	var gotMethod, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/user/tz" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		gotMethod = r.Method
+		if r.Method == http.MethodPut {
+			var in map[string]string
+			json.NewDecoder(r.Body).Decode(&in)
+			gotBody = in["tz"]
+			if gotBody == "" {
+				fmt.Fprint(w, `{"tz":"Asia/Tokyo","source":"agent"}`)
+			} else {
+				fmt.Fprint(w, `{"tz":"Etc/GMT-7","source":"user"}`)
+			}
+			return
+		}
+		fmt.Fprint(w, `{"tz":"Asia/Jakarta","source":"user"}`)
+	}))
+	defer srv.Close()
+
+	t.Setenv("STICKBOX_CONFIG_DIR", t.TempDir())
+	if err := saveConfig(&agentConfig{Server: srv.URL, Token: "k.s"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cmdTZ([]string{"set", "+07:00"}); err != nil {
+		t.Fatalf("tz set: %v", err)
+	}
+	if gotMethod != http.MethodPut || gotBody != "+07:00" {
+		t.Fatalf("set 请求 = %s %q", gotMethod, gotBody)
+	}
+
+	if err := cmdTZ([]string{"show"}); err != nil {
+		t.Fatalf("tz show: %v", err)
+	}
+	if gotMethod != http.MethodGet {
+		t.Fatalf("show 请求 = %s", gotMethod)
+	}
+
+	if err := cmdTZ([]string{"clear"}); err != nil {
+		t.Fatalf("tz clear: %v", err)
+	}
+	if gotMethod != http.MethodPut || gotBody != "" {
+		t.Fatalf("clear 请求 = %s %q", gotMethod, gotBody)
+	}
+
+	if err := cmdTZ([]string{"bogus"}); err == nil {
+		t.Fatal("未知子命令没有报错")
+	}
+}
+
 // pair：没令牌时不带 Authorization；有令牌时带上，把新屏并入同一用户。
 func TestPairDeviceSendsExistingToken(t *testing.T) {
 	var gotAuth string

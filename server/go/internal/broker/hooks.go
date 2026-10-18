@@ -97,10 +97,10 @@ func (h *Hook) OnConnect(cl *mqtt.Client, pk packets.Packet) error {
 		return packets.ErrServerUnavailable
 	}
 
-	// agent 只走 HTTP，ACL 也不给它任何 topic。
-	if id.Role == auth.RoleAgent {
-		slog.Warn("agent 令牌不允许连 MQTT", "username", user)
-		h.noteAuth(cl, user, 0x05, "agent_role")
+	// 非设备令牌（agent / user）只走 HTTP，ACL 也不给它们任何 topic。
+	if id.Role != auth.RoleDevice {
+		slog.Warn("非设备令牌不允许连 MQTT", "username", user, "role", id.Role)
+		h.noteAuth(cl, user, 0x05, "role")
 		return nil
 	}
 

@@ -352,9 +352,19 @@ docker exec stickboxd /stickboxd -conf /etc/stickbox/config.json device list
 | `device list` | 列出全部密钥（含「待配对」状态） |
 | `device revoke <key_id>` | 吊销一把 |
 | `device unbind <dev>` | **强制解绑**，处理二手转让 |
-| `user list` | 列出用户（没有手机号） |
+| `user list` | 列出用户（没有手机号；含用户时区） |
+| `user tz <user_id> [tz]` | 设置用户时区；省略 tz 表示清除（如 `Asia/Jakarta`、`+07:00`） |
 
 `device unbind` 绕过所有权检查，所以只能在服务器上执行，不暴露为 API。
+
+`user tz` 在服务端运行时走本机 admin 接口（`127.0.0.1:9091`），写库后
+**立即重渲并通知设备换帧**；stickboxd 没运行时退回直接写数据库，修改会在
+下次启动/用量上报后生效。时区优先级：用户设置 > agent 上报 >
+`default_tz`；非法时区直接报错。平时用户自己在电脑上执行
+`stickbox-agent tz set/show/clear`，不需要登服务器。
+
+旧库升级不需要手工迁移：本版首次启动会自动给 `users` 表补上 `tz` 列
+（`ALTER TABLE ... ADD COLUMN tz TEXT NOT NULL DEFAULT ''`）。
 
 ## OTA 下载对 TLS record 大小的依赖
 

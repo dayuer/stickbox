@@ -168,6 +168,90 @@ func TestDeviceReportMethodNotAllowed(t *testing.T) {
 	}
 }
 
+type fakeTZApplier struct {
+	userID string
+	tz     string
+	calls  int
+	err    error
+}
+
+func (f *fakeTZApplier) ApplyUserTZ(userID, tz string) error {
+	f.calls++
+	f.userID, f.tz = userID, tz
+	return f.err
+}
+
+// stickboxd user tz 通过本机 admin 接口让运行中的进程立刻重渲。
+func TestUserTZApplies(t *testing.T) {
+	h := newTestHandler()
+	app := &fakeTZApplier{}
+	h.SetTZApplier(app)
+
+	req := httptest.NewRequest(http.MethodPost, "/user-tz",
+		strings.NewReader(`{"user_id":"u1","tz":"+07:00"}`))
+	req.RemoteAddr = "127.0.0.1:1"
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST = %d %s", rr.Code, rr.Body)
+	}
+	if app.calls != 1 || app.userID != "u1" || app.tz != "Etc/GMT-7" {
+		t.Fatalf("applier = %+v", app)
+	}
+
+	// 空串 = 清除。
+	req = httptest.NewRequest(http.MethodPost, "/user-tz",
+		strings.NewReader(`{"user_id":"u1","tz":""}`))
+	req.RemoteAddr = "127.0.0.1:1"
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || app.tz != "" {
+		t.Fatalf("清除 = %d %s applier=%+v", rr.Code, rr.Body, app)
+	}
+}
+
+func TestUserTZRejectsBadInput(t *testing.T) {
+	h := newTestHandler()
+	app := &fakeTZApplier{}
+	h.SetTZApplier(app)
+
+	cases := []struct {
+		method, body string
+		want         int
+	}{
+		{http.MethodGet, "", http.StatusMethodNotAllowed},
+		{http.MethodPost, `{}`, http.StatusBadRequest},
+		{http.MethodPost, `{"user_id":"u1"}`, http.StatusBadRequest},
+		{http.MethodPost, `{"user_id":"u1","tz":"Mars/Olympus"}`, http.StatusBadRequest},
+		{http.MethodPost, `{"user_id":"u1","tz":"Local"}`, http.StatusBadRequest},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(c.method, "/user-tz", strings.NewReader(c.body))
+		req.RemoteAddr = "127.0.0.1:1"
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != c.want {
+			t.Errorf("%s %s → %d，期望 %d（%s）", c.method, c.body, rr.Code, c.want, rr.Body)
+		}
+	}
+	if app.calls != 0 {
+		t.Fatalf("非法输入调用了 applier：%+v", app)
+	}
+}
+
+func TestUserTZOoopbackOnly(t *testing.T) {
+	h := newTestHandler()
+	h.SetTZApplier(&fakeTZApplier{})
+	req := httptest.NewRequest(http.MethodPost, "/user-tz",
+		strings.NewReader(`{"user_id":"u1","tz":"UTC"}`))
+	req.RemoteAddr = "192.0.2.1:1"
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("非回环 = %d，期望 403", rr.Code)
+	}
+}
+
 func TestServeRejectsNonLoopback(t *testing.T) {
 	h := newTestHandler()
 	for _, addr := range []string{"0.0.0.0:0", "192.0.2.1:0", ":9091"} {

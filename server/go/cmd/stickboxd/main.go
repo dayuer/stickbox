@@ -158,9 +158,12 @@ func serve(cfg *config.Config) error {
 		slog.Info("metrics 监听", "addr", cfg.MetricsAddr)
 	}
 
-	// 设备诊断只监听回环，stickboxd device show 在服务器本机调用它。
-	adminSrv, err := admin.Serve(cfg.AdminAddr, admin.NewHandler(st, api.Usage(), fs,
-		adminRuntime{br: br, cmd: cmdTracker, api: api}))
+	// 设备诊断只监听回环，stickboxd device show / user tz 在服务器本机调用它。
+	adminH := admin.NewHandler(st, api.Usage(), fs,
+		adminRuntime{br: br, cmd: cmdTracker, api: api})
+	// CLI 改时区要立刻重渲并通知设备；它跑在另一个进程，只能走这里。
+	adminH.SetTZApplier(adminTZ{st: st, fs: fs})
+	adminSrv, err := admin.Serve(cfg.AdminAddr, adminH)
 	if err != nil {
 		br.Close()
 		return err
@@ -210,6 +213,27 @@ func (a adminRuntime) Pending(dev string) []command.PendingInfo {
 }
 func (a adminRuntime) RegisterQuota(dev string) (int, int, time.Time) {
 	return a.api.RegisterQuota(dev)
+}
+
+// adminTZ 让 CLI 的 user tz 经过运行中的进程：写库后同步重渲并通知设备。
+type adminTZ struct {
+	st *store.Store
+	fs *frames.Service
+}
+
+func (a adminTZ) ApplyUserTZ(userID, value string) error {
+	found, err := a.st.SetUserTZ(userID, value)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("用户 %s 不存在", userID)
+	}
+	if err := a.fs.Rebuild(userID); err != nil {
+		// 渲染失败不影响设置本身；后台 worker 会再试。
+		a.fs.MarkDirty(userID)
+	}
+	return nil
 }
 
 func envOr(k, def string) string {

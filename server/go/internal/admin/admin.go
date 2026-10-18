@@ -1,7 +1,8 @@
 // Package admin 提供只绑定回环地址的设备诊断 HTTP 接口。
 //
-// stickboxd device show <dev> 在服务器本机调用它。接口只读：密钥材料
-// （hash）永远不进响应，配置层也强制只监听回环地址。
+// stickboxd device show <dev> / user tz 在服务器本机调用它。除
+// POST /user-tz 外接口只读；密钥材料（hash）永远不进响应，配置层也
+// 强制只监听回环地址。
 package admin
 
 import (
@@ -18,6 +19,7 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/broker"
 	"github.com/dayuer/stickbox/server/go/internal/command"
 	"github.com/dayuer/stickbox/server/go/internal/store"
+	"github.com/dayuer/stickbox/server/go/internal/tz"
 	"github.com/dayuer/stickbox/server/go/internal/usage"
 )
 
@@ -42,17 +44,27 @@ type Runtime interface {
 	RegisterQuota(dev string) (left, limit int, reset time.Time)
 }
 
+// TZApplier 由运行中的进程提供：写库、同步重渲并通知设备。
+// CLI 跑在另一个进程，只有通过它才能让修改立刻生效。
+type TZApplier interface {
+	ApplyUserTZ(userID, tz string) error
+}
+
 type Handler struct {
 	st  Store
 	us  Usage
 	fr  Frames
 	rt  Runtime
+	tz  TZApplier
 	now func() time.Time
 }
 
 func NewHandler(st Store, us Usage, fr Frames, rt Runtime) *Handler {
 	return &Handler{st: st, us: us, fr: fr, rt: rt, now: time.Now}
 }
+
+// SetTZApplier 注入时区写入能力；不注入时 POST /user-tz 返回 503。
+func (h *Handler) SetTZApplier(a TZApplier) { h.tz = a }
 
 type Report struct {
 	Dev           string                `json:"dev"`
@@ -99,14 +111,18 @@ type FrameInfo struct {
 const maxRecent = 50
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if !loopbackRemote(r.RemoteAddr) {
 		// 配置已经强制回环监听；这里再挡一层，防止有人把 admin_addr
 		// 改到 0.0.0.0 或前面挂了会改写来源地址的代理。
 		http.Error(w, "loopback only", http.StatusForbidden)
+		return
+	}
+	if r.URL.Path == "/user-tz" {
+		h.serveUserTZ(w, r)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	dev := r.URL.Query().Get("dev")
@@ -131,6 +147,46 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(rep)
+}
+
+// serveUserTZ 是 admin 唯一的写接口：stickboxd user tz 用它让运行中的
+// 进程立刻重渲。只接受回环来源（ServeHTTP 已挡），不做鉴权。
+func (h *Handler) serveUserTZ(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.tz == nil {
+		http.Error(w, "not available", http.StatusServiceUnavailable)
+		return
+	}
+	var in struct {
+		UserID string  `json:"user_id"`
+		TZ     *string `json:"tz"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&in); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(in.UserID) == "" || in.TZ == nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	value := ""
+	if strings.TrimSpace(*in.TZ) != "" {
+		v, err := tz.Normalize(*in.TZ)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		value = v
+	}
+	if err := h.tz.ApplyUserTZ(in.UserID, value); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": 1, "tz": value})
 }
 
 func (h *Handler) collect(dev string, n int) (Report, error) {
