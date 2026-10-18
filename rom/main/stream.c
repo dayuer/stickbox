@@ -11,6 +11,11 @@
 #include "framepack.h"
 #include "stream.h"
 
+#include "photo_io.h"
+#include "photo_play.h"
+#include "photo_sd.h"
+#include "photostore.h"
+
 #include <stdlib.h>
 #include <string.h>
 #include <sys/param.h>
@@ -38,6 +43,10 @@ static const char *TAG = "stream";
  * 0.4~1 秒发完。再多只是多占 Wi-Fi，电视那边早就开始显示了；而 burst
  * 期间这个连接任务是不睡的，会一直占着发送路径。 */
 #define BURST_FRAMES 8
+
+/* 照片从 SD 读出到 socket 的块大小。4KB 与 photostore 内部缓冲同粒度，
+ * 2fps 下吞吐足够；播放一结束这块缓冲就 free，网络期间不占堆。 */
+#define PHOTO_CHUNK 4096
 
 static const frame_t *s_frames;
 static jb_page_t s_pages[4];
@@ -74,6 +83,7 @@ static int s_busy[2];
 static int s_fp_hold;
 static volatile int s_cur;
 static volatile int s_clients;
+static volatile bool s_quiet;
 static volatile uint32_t s_sent;
 static volatile int64_t s_last_us;
 static uint8_t s_hdr[224];
@@ -199,6 +209,8 @@ bool stream_band_publish(uint8_t *buf, size_t len, int page)
     xSemaphoreGive(s_mx);
     return true;
 }
+void stream_quiet(bool on) { s_quiet = on; }
+
 int stream_current(void) { return s_cur; }
 void stream_set(int idx) { s_cur = ((idx % s_n) + s_n) % s_n; }
 int stream_clients(void) { return s_clients; }
@@ -230,6 +242,8 @@ static void build_header(int w, int h, uint32_t maxframe)
     p = pcc(p, "strh"); p = p32(p, 56);
     p = pcc(p, "vids"); p = pcc(p, "MJPG");
     p = p32(p, 0); p = p16(p, 0); p = p16(p, 0);   /* flags, priority, language */
+    /* scale/rate = 1/s_fps。整数 fps；0.5fps 要写成 scale=2/rate=1，
+     * 见 stream.h 的 STREAM_FPS 注释。 */
     p = p32(p, 0); p = p32(p, 1); p = p32(p, s_fps); /* initial frames, scale, rate */
     p = p32(p, 0); p = p32(p, BIG);                /* start, length */
     p = p32(p, maxframe); p = p32(p, 0xFFFFFFFF); p = p32(p, 0); /* buffer, quality, samplesize */
@@ -267,6 +281,7 @@ static const char RESP[] =
 static void client_task(void *arg)
 {
     int fd = (int)(intptr_t)arg;
+    uint8_t *pbuf = NULL;   /* 照片读缓冲，按需分配 */
     char req[512];
     int got = 0;
     while (got < (int)sizeof req - 1) {
@@ -294,8 +309,106 @@ static void client_task(void *arg)
      * due 都比现在早，wait 恒为负，等于再也不睡——整条流会一直全速跑。 */
     int64_t  pace_t0 = t0;
     uint32_t pace_n0 = 0;
+    bool last_photo = false;
     bool ok = send_all(fd, s_hdr, s_hdr_len);
     while (ok) {
+        /* 网络维护窗口：不发新帧，让发送缓冲释放。last_active 继续前进，
+         * supervisor 不会当成本连接掉了。 */
+        if (s_quiet) {
+            s_last_us = esp_timer_get_time();
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+        int64_t frame_t0 = esp_timer_get_time();
+        /* ── 第四种模式：照片 ──
+         *
+         * 只在帧边界决定这一帧发 board 还是照片。照片的 00dc 块长度取自
+         * 索引 size，字节从 SD 边读边发：拿 store 锁读 8KB → 放锁 →
+         * send_all。send 不持锁；取帧也只拿 net 锁，所以照片播放不会挡
+         * 取帧。
+         *
+         * 读失败分两种：写 00dc 头之前失败，本帧改发 board；已经写了头
+         * 之后失败，绝不能补短块（电视会错位），只能关连接。 */
+        photo_play_frame_t pf;
+        if (photo_play_frame(&pf)) {
+            if (!pbuf) pbuf = malloc(PHOTO_CHUNK);
+            bool read_fail = false;
+            bool first_read_err = false;
+            photostore_t *store = photo_sd_store();
+
+            if (pbuf && store && photo_io_store_lock(1000)) {
+                photo_file_t file = {
+                    .start_sector = pf.start_sector,
+                    .size = pf.size,
+                    .offset = 0,
+                    .valid = true,
+                };
+                int first = photostore_read(store, &file, pbuf, PHOTO_CHUNK);
+                photo_io_store_unlock();
+
+                if (first > 0) {
+                    uint8_t pch[8];
+                    pcc(pch, "00dc");
+                    p32(pch + 4, pf.size);
+                    ok = send_all(fd, pch, 8) &&
+                         send_all(fd, pbuf, (size_t)first);
+                    uint32_t sent = (uint32_t)first;
+                    while (ok && sent < pf.size) {
+                        uint32_t want = pf.size - sent;
+                        if (want > PHOTO_CHUNK) want = PHOTO_CHUNK;
+                        int r;
+                        if (!photo_io_store_lock(1000)) {
+                            read_fail = true;
+                            break;
+                        }
+                        r = photostore_read(store, &file, pbuf, want);
+                        photo_io_store_unlock();
+                        if (r <= 0) {
+                            read_fail = true;
+                            break;
+                        }
+                        if (!send_all(fd, pbuf, (size_t)r)) break;
+                        sent += (uint32_t)r;
+                    }
+                    static const uint8_t zero = 0;
+                    if (ok && (pf.size & 1)) ok = send_all(fd, &zero, 1);
+
+                    if (read_fail) {
+                        photo_play_frame_done(&pf);
+                        photo_play_mark_bad(pf.sha256, "read");
+                        break;   /* 半张不能补短块，关连接 */
+                    }
+                    if (!ok) {
+                        photo_play_frame_done(&pf);
+                        break;   /* 电视断开 */
+                    }
+                    photo_play_frame_ok(pf.sha256);
+                    photo_play_frame_done(&pf);
+                    n++;
+                    s_sent++;
+                    s_last_us = esp_timer_get_time();
+                    last_photo = true;
+                    /* 照片不进起播 burst；按本帧起点算节拍，保证最多
+                     * 1/fps 一张，发送更快就等。 */
+                    if (n < BURST_FRAMES + 1) n = BURST_FRAMES + 1;
+                    int64_t interval = 1000000 / s_fps;
+                    int64_t elapsed = esp_timer_get_time() - frame_t0;
+                    if (elapsed < interval)
+                        vTaskDelay(pdMS_TO_TICKS((interval - elapsed) / 1000));
+                    continue;
+                }
+                if (first < 0) first_read_err = true;
+            }
+
+            /* 第一块读不出来（或缓冲/锁拿不到）：本帧回 board，不断流。 */
+            photo_play_frame_done(&pf);
+            if (first_read_err) photo_play_mark_bad(pf.sha256, "first-read");
+        } else if (pbuf) {
+            /* 回到 board（或维护暂停）：照片读缓冲还给堆。 */
+            free(pbuf);
+            pbuf = NULL;
+        }
+
         /* 每帧只在这一个临界区里看一次共享状态，拿到的东西（模式、底帧
          * 地址、哪块带）全部快照进局部变量和 segs[]；往下的 send_all 再
          * 也不回头看。
@@ -394,6 +507,13 @@ static void client_task(void *arg)
         if (!ok) break;
         n++; s_sent++; s_last_us = esp_timer_get_time();
 
+        /* 从照片切回 board：节拍原点重置，否则首帧会按很久以前的 due
+         * 立即发送。 */
+        if (last_photo) {
+            last_photo = false;
+            pace_t0 = esp_timer_get_time();
+            pace_n0 = n;
+        }
         if (n < BURST_FRAMES) continue;        /* burst 期间完全不睡 */
         if (n == BURST_FRAMES) {
             pace_t0 = esp_timer_get_time();
@@ -409,6 +529,7 @@ static void client_task(void *arg)
     ESP_LOGW(TAG, "流断开：发了 %lu 帧，%.0f 秒", (unsigned long)n,
              (esp_timer_get_time() - t0) / 1e6);
 out:
+    free(pbuf);
     shutdown(fd, SHUT_RDWR);
     close(fd);
     vTaskDelete(NULL);

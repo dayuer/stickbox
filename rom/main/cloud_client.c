@@ -14,6 +14,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_random.h"
@@ -552,8 +553,10 @@ static void heartbeat_task(void *arg)
                 n = (int)sizeof p - 1;
             }
             esp_mqtt_client_publish(s_mqtt, s_topic_status, p, n, 1, 0);
-            ESP_LOGI(TAG, "心跳 heap=%u min=%u",
+            ESP_LOGI(TAG, "心跳 heap=%u largest=%u min=%u",
                      (unsigned)esp_get_free_heap_size(),
+                     (unsigned)heap_caps_get_largest_free_block(
+                         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
                      (unsigned)esp_get_minimum_free_heap_size());
         }
         vTaskDelay(pdMS_TO_TICKS(HEARTBEAT_S * 1000));
@@ -684,6 +687,8 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
             /* 每次连上都对一次清单：断线期间 plv 可能已经变了，
              * ETag 会让没变化时只花一个 304。 */
             photo_sync_notify_connected();
+            /* MQTT 离线期间取帧被挡住，连上后补一次（版本没变就是 304）。 */
+            framefetch_request("MQTT 已连接");
         }
         break;
 

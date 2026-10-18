@@ -42,10 +42,12 @@ static const char *TAG = "framefetch";
  * 却要和推流抢同一块堆。 */
 #define CHUNK 1024
 
-/* 开 TLS 大约要 40KB。低于这个水位本轮不取——帧可以晚一分钟，
- * 推流断了用户现在就看得见。比 OTA 的 90KB 低：没有帧就没有看板，
- * 这条路是功能本身，不是锦上添花。 */
-#define MIN_FREE_HEAP 60000
+/* 开 TLS 大约要 40KB。门槛 90KB 是为了给「历史最低空闲堆 ≥40KB」留出
+ * 硬余量：流在发帧时 WiFi 发送缓冲会周期性占用几十 KB，60KB 的旧门槛
+ * 会让 TLS 握手把最低点打到几 KB（M2 实测 min=320）。堆低于门槛时
+ * 先等最多 10 秒（发送缓冲释放），等不到再按退避重试。 */
+#define MIN_FREE_HEAP 90000
+#define NET_WAIT_MS   10000
 
 #define RETRY_MIN_S  15
 #define RETRY_MAX_S 300
@@ -312,12 +314,28 @@ bool framefetch_busy(void)
 static void fetch_task(void *arg)
 {
     (void)arg;
-    /* 与照片下载/读卡互斥。取帧优先级高，但锁已经被照片任务拿着时，
-     * 照片每 4KB 会让一次，所以这里最多等一小段。 */
+    /* MQTT 重连和取帧同时开 TLS 会把堆打到几 KB；MQTT 不在线时先不取。
+     * 堆门槛放在「停流、排空发送缓冲」之后：板子发帧时稳态只有 65–80K，
+     * 停流前判断只会一直失败。 */
     fetch_r r;
-    if (photo_io_lock(120000)) {
-        r = fetch_once();
-        photo_io_unlock();
+    if (!cloud_connected()) {
+        ESP_LOGI(TAG, "MQTT 未连接，本轮不取帧");
+        r = FETCH_FAIL;
+    } else if (photo_io_net_lock(120000)) {
+        stream_quiet(true);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        for (int i = 0; i < NET_WAIT_MS / 100 &&
+                        esp_get_free_heap_size() < MIN_FREE_HEAP; i++)
+            vTaskDelay(pdMS_TO_TICKS(100));
+        if (esp_get_free_heap_size() < MIN_FREE_HEAP) {
+            ESP_LOGW(TAG, "停流后堆仍只有 %u < %d，本轮不取帧",
+                     (unsigned)esp_get_free_heap_size(), MIN_FREE_HEAP);
+            r = FETCH_FAIL;
+        } else {
+            r = fetch_once();
+        }
+        stream_quiet(false);
+        photo_io_net_unlock();
     } else {
         ESP_LOGW(TAG, "等照片任务放锁超时，本轮取帧跳过");
         r = FETCH_FAIL;

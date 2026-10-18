@@ -10,6 +10,7 @@
 #include "sdmmc_cmd.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 static const char *TAG = "photosd";
 
@@ -81,7 +82,18 @@ static esp_err_t bus_init(int width)
 
 photo_state_t photo_sd_mount(void)
 {
-    if (s_inited) return photostore_state(&s_store);
+    if (s_inited) {
+        photo_state_t st = mapped_state();
+        if (st != PHOTO_FAULT) return st;
+        /* fault 可能是拔卡/读错误留下的：重新 deinit + init 才能恢复。
+         * 限速 5 秒，避免结构性损坏（魔数在、CRC 坏）时每轮都重初始化。 */
+        static int64_t last_recover_us;
+        int64_t now = esp_timer_get_time();
+        if (now - last_recover_us < 5000000) return st;
+        last_recover_us = now;
+        ESP_LOGW(TAG, "SD 处于 fault，重新初始化卡");
+        photo_sd_unmount();
+    }
 
     esp_err_t err = bus_init(4);
     if (err != ESP_OK) {

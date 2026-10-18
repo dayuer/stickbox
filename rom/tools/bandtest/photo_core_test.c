@@ -59,7 +59,9 @@ static void test_json(void)
     check(!pl.init_force, "init_force=false");
     check(pl.has_expires && pl.expires_at == 1760000000LL, "init_expires_at");
     check(pl.entries_seen && pl.entry_count == 3, "entries 3 条");
-    check(pl.photo_count == 2, "只收 photo 条目（board 忽略）");
+    check(pl.photo_count == 2, "只收 photo 条目（board 不进 photos）");
+    check(pl.board_seen && pl.board_duration_s == 20 &&
+          strcmp(pl.board_theme, "quota") == 0, "board 时长/主题");
     check(pl.photos[0].size == 198432 && pl.photos[1].size == 241760, "size");
     check(pl.photos[0].order == 1 && pl.photos[1].order == 2, "order");
     check(pl.photos[0].duration_s == 8, "duration_s");

@@ -33,6 +33,7 @@
 #include "memdiag.h"
 #include "ota.h"
 #include "pairband.h"
+#include "photo_play.h"
 #include "photo_sync.h"
 #include "provision.h"
 #include "stream.h"
@@ -173,7 +174,8 @@ static void supervisor_task(void *arg)
                 (int64_t)backoff * 1000000;
 
         if (streaming) {
-            lcd_ui_stream("推流中", stream_frames_sent());
+            lcd_ui_stream(photo_is_playing() ? "照片播放中" : "推流中",
+                          stream_frames_sent());
         } else if (pushed_at != 0) {
             lcd_ui_stream("已推送，等电视", stream_frames_sent());
         }
@@ -307,7 +309,7 @@ void app_main(void)
     frames[0] = (frame_t){ blank_start, blank_end - blank_start };
     /* 配对码条带占 MCU 行 46..51；未配对时停在第 1 页显示它。 */
     memdiag_heap("stream_start 之前");
-    stream_start(frames, 1, CONFIG_STICKBOX_DLNA_FPS, PAIR_ROW0, PAIR_ROWS);
+    stream_start(frames, 1, STREAM_FPS, PAIR_ROW0, PAIR_ROWS);
     memdiag_heap("stream_start 之后（含带缓冲与页面解析）");
 
     /* 尽早：flash 里存着上次的帧包时，这一步就让电视直接出真实看板，不用等
@@ -315,6 +317,10 @@ void app_main(void)
      * 放在 stream_start() 之后是因为要用它的带缓冲和页面解析结果。 */
     framefetch_boot();
     memdiag_heap("framefetch_boot 之后（含 flash 帧包与时钟任务）");
+    /* 照片播放调度 + 开机只挂卡（不格式化）：断网也能播已缓存的照片。 */
+    photo_play_start();
+    photo_sync_boot_mount();
+    memdiag_heap("照片播放调度之后");
 
     sntp_start();
     xTaskCreate(services_task, "svc", 8192, NULL, 4, NULL);
