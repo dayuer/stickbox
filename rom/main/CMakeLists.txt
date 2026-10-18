@@ -1,7 +1,7 @@
 idf_component_register(
     SRCS "main.c" "cloud_client.c" "netlog.c" "lcd_ui.c" "font_cn_16.c"
          "provision.c" "dlna.c" "stream.c" "jband.c" "pairband.c"
-         "ota.c" "coredump.c" "memdiag.c"
+         "ota.c" "coredump.c" "coredump_policy.c" "memdiag.c"
          "framepack.c" "framepack_band.c" "framepack_meta.c" "framepack_ver.c"
          "statusband.c" "statusmask.c" "framefetch.c"
          "photosha.c" "photostore_core.c" "photo_sd.c"

@@ -55,4 +55,14 @@ config STICKBOX_DLNA_REPUSH_IDLE_S
         电视关机 / 切走信号源后流会断。空闲超过这个时间就重新 SSDP 发现并推送，
         失败后按 2 倍退避，最长 5 分钟。
 
+config STICKBOX_COREDUMP_FAKE_STATUS
+    int "Test only: pretend coredump upload returns this HTTP status (0 = off)"
+    default 0
+    range 0 599
+    help
+        仅测试构建用，发布构建必须为 0。非 0 时：即使没有崩溃镜像也走一遍
+        上传流程（维护窗口、net 锁、堆门槛、NVS 退避全部照常），但不发网络，
+        直接当作服务端返回了这个状态码，并且永远不擦镜像。用来在镜像已经
+        传上去被擦掉的板子上验证「413 时同一镜像每天最多 3 次」。
+
 endmenu
