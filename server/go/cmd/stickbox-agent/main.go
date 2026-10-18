@@ -115,8 +115,12 @@ func parseUsageStream(r io.Reader) (usagePayload, string, error) {
 	sc.Buffer(make([]byte, 0, 64<<10), 16<<20)
 
 	var report *usageReportWire
+	sawTotalCost := false
 	for sc.Scan() {
 		line := bytes.TrimSpace(sc.Bytes())
+		if bytes.Contains(line, []byte(totalCostMarker)) {
+			sawTotalCost = true
+		}
 		if len(line) == 0 || line[0] != '{' {
 			continue
 		}
@@ -135,7 +139,7 @@ func parseUsageStream(r io.Reader) (usagePayload, string, error) {
 		return usagePayload{}, "", fmt.Errorf("读取 claude 输出失败：%w", err)
 	}
 	if report == nil {
-		return usagePayload{}, "", errors.New("claude 输出里没有 usage_report（/usage 的输出格式可能变了）")
+		return usagePayload{}, "", &noReportError{TotalCost: sawTotalCost}
 	}
 	if report.RateLimits == nil {
 		return usagePayload{}, "用量接口暂时不可用（rate_limits 为 null，通常是刚触发过 429 冷却），本轮跳过", nil
@@ -514,23 +518,40 @@ func collectUsage(c *agentConfig) (usagePayload, string, error) {
 	if err != nil {
 		return usagePayload{}, "", err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), claudeTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, claude,
-		"-p", "/usage",
+	out, err := runClaude(claude, work, "-p", "/usage",
 		"--setting-sources", "project",
 		"--no-session-persistence",
 		"--output-format", "stream-json",
 		"--verbose",
 	)
+	if err != nil {
+		return usagePayload{}, "", err
+	}
+	rep, skip, err := parseUsageStream(bytes.NewReader(out))
+	var nr *noReportError
+	if errors.As(err, &nr) && nr.TotalCost {
+		// 未登录时 /usage 退化成「Total cost: $0.0000」，要问 auth status 才知道真相。
+		if claudeAuthStatus(claude, work) == authLoggedOut {
+			return usagePayload{}, "", errClaudeNotLoggedIn
+		}
+	}
+	return rep, skip, err
+}
+
+// runClaude 在白名单环境和专用空目录里跑一次 claude，返回 stdout。
+// 失败时错误已带上超时/stderr 线索；stdout 即使出错也尽量返回。
+func runClaude(claude, work string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), claudeTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, claude, args...)
 	cmd.Env = filterEnv(os.Environ())
 	cmd.Dir = work
 
 	// 显式接 /dev/null：launchd 下继承的 stdin 可能是个不关闭的管道。
 	devNull, err := os.Open(os.DevNull)
 	if err != nil {
-		return usagePayload{}, "", fmt.Errorf("打开 %s 失败：%w", os.DevNull, err)
+		return nil, fmt.Errorf("打开 %s 失败：%w", os.DevNull, err)
 	}
 	defer devNull.Close()
 	cmd.Stdin = devNull
@@ -542,9 +563,9 @@ func collectUsage(c *agentConfig) (usagePayload, string, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		tail := tailText(stderr.buf, 600)
-		return usagePayload{}, "", claudeExecError(err, errors.Is(ctx.Err(), context.DeadlineExceeded), tail)
+		return out, claudeExecError(err, errors.Is(ctx.Err(), context.DeadlineExceeded), tail)
 	}
-	return parseUsageStream(bytes.NewReader(out))
+	return out, nil
 }
 
 func claudeExecError(err error, timedOut bool, stderrTail string) error {
@@ -590,6 +611,7 @@ func tailText(b []byte, n int) string {
 func runRound(c *agentConfig, logf func(string, ...any)) error {
 	rep, skip, err := collectUsage(c)
 	if err != nil {
+		recordRoundState(logf, err, time.Now())
 		return err
 	}
 	if skip != "" {
@@ -599,8 +621,11 @@ func runRound(c *agentConfig, logf func(string, ...any)) error {
 	rep.TZ = localTZ()
 	n, err := postUsage(c, rep)
 	if err != nil {
-		return fmt.Errorf("上报失败：%w", err)
+		err = fmt.Errorf("上报失败：%w", err)
+		recordRoundState(logf, err, time.Now())
+		return err
 	}
+	recordRoundState(logf, nil, time.Now())
 	logf("已上报：五小时 %s / 七天 %s；服务端推送到 %d 台设备",
 		fmtWindow(rep.FiveHour), fmtWindow(rep.SevenDay), n)
 	return nil
@@ -837,7 +862,8 @@ func cmdRun(args []string) error {
 
 	log.Printf("stickbox-agent %s 启动，每 %s 上报一次（未配对或令牌失效时 %s 后重试）",
 		version, usageInterval, authRetryInterval)
-	return runDaemon(ctx, logf, daemonRound(logf), sleepCtx)
+	tracker := newFailureTracker(systemNotify, logf)
+	return runDaemon(ctx, logf, withFailureNotify(daemonRound(logf), tracker), sleepCtx)
 }
 
 // daemonRound 每轮重新读配置：用户重新 pair 之后不用重启服务。
@@ -980,6 +1006,9 @@ func cmdStatus(args []string) error {
 		fmt.Printf("后台服务：已安装（%s）\n", where)
 	} else {
 		fmt.Println("后台服务：未安装（运行 stickbox-agent install）")
+	}
+	for _, line := range loadState().statusLines() {
+		fmt.Println(line)
 	}
 	return nil
 }
