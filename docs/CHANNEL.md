@@ -15,7 +15,7 @@
 
 切换素材不重新编码：ffmpeg 读一份很长的 concat 清单，清单每项是一个符号链接，
 **读到第 k 段才会打开它**，所以可以在那一刻之前才决定它指向谁。原型见
-`probe/dlna-tv/tools/live_switch.py`，切换延迟 ≈ 1–2 段（2–4 秒）。
+`experiments/tvstart/live_switch.py`，切换延迟 ≈ 1–2 段（2–4 秒）。
 
 所以「看板」不再是产品的全部，而是频道里的一个 clip。**但它是锚**：
 用户的影像用 NAS 也能放，唯独「我的实时数据上电视」做不到用 NAS 替代。
@@ -79,7 +79,7 @@
 量级：200 张预缩到 1080p 的照片（约 400KB/张）= **80 MB 一次性**；
 同样内容做成 24/7 轮播流约 52 GB/月，**而且是永远每月**。
 
-**第 4 类让电视自己去拉源站**（原型 `probe/dlna-tv/tools/push_url.py`：
+**第 4 类让电视自己去拉源站**（原型 `experiments/tvstart/push_url.py`：
 不起本地 HTTP 服务，数据通路完全不经过本机，只发 Stop/SetAVTransportURI/Play）。
 流量 0，而且顺带避开「转发别人的直播流」——那是实质问题，不是洁癖。
 
@@ -200,7 +200,7 @@ broker 的每连接内存在 2000 台时已经做过 T22 优化；1000 个 ffmpe
 
 按顺序，前一个没结论就不要做后一个：
 
-1. **电视在流内换素材后会不会断流重来。** `probe/dlna-tv/tools/swap_server.py`
+1. **电视在流内换素材后会不会断流重来。** `experiments/tvstart/swap_server.py`
    就是为这个写的（`/naive.ts` 裸拼 vs `/remux.ts` concat 流拷贝），判据是
    「换片之后有没有出现新的 GET」。**仓库里没有记录结论。**
    这一条决定上面全部——电视要是会重来，流内切换就不成立。
