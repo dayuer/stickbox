@@ -23,9 +23,13 @@ CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
 CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
 
-# 1080p MJPEG ~120KB/帧 × 2fps，加大 TCP 窗口提吞吐（probe 实测值）。
-CONFIG_LWIP_TCP_SND_BUF_DEFAULT=23040
-CONFIG_LWIP_TCP_WND_DEFAULT=11520
+# M3 堆：照片播放时同时存在「电视拉流」和「HTTPS 下载/清单」两个 socket。
+# 23K/11.5K 的窗口在两边同时占用时吃掉近 70KB，把照片 TLS 握手的最低点
+# 压到 17K。降到 12K/8K：2fps×180KB 帧仍有足够吞吐（Wi-Fi RTT 个位数
+# 毫秒），换回约 30KB 堆余量。这个值是 M3 堆验收（min≥40K）的一部分，
+# 改大之前先在电视上测吞吐。
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=12288
+CONFIG_LWIP_TCP_WND_DEFAULT=8192
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=12
 
 # MQTT TLS + 推流 + netlog + 配网 httpd，16 个 socket 是余量。

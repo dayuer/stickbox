@@ -27,3 +27,7 @@ void framefetch_request(const char *why);
 /* 是否正有一轮取帧在跑（已请求、任务已建但还没结束）。
  * 照片下载拿它让路：取帧优先。 */
 bool framefetch_busy(void);
+
+/* 开机后第一轮取帧任务是否已经跑完（不论 200/304/失败）。
+ * 照片开机任务用它避开和首个 TLS 握手叠加。 */
+bool framefetch_first_done(void);
