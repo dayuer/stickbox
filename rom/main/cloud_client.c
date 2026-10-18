@@ -232,7 +232,9 @@ static bool device_register(void)
     return ok;
 }
 
-static void pair_code_refresh(void)
+/* 返回 HTTP 状态：409 = 服务端说这把密钥已经转正（不是 pending），调用方
+ * 据此退出，不要再换码。 */
+static int pair_code_refresh(void)
 {
     char resp[512], url[160];
     api_url(url, sizeof url, "/device/pair-code");
@@ -245,21 +247,26 @@ static void pair_code_refresh(void)
         lcd_ui_cloud("密钥被拒，重新注册");
         vTaskDelay(pdMS_TO_TICKS(1500));
         esp_restart();
-        return;
+        return st;
+    }
+    if (st == 409) {
+        ESP_LOGI(TAG, "服务端说已配对（409），不换码");
+        return st;
     }
     if (st != 200) {
         ESP_LOGW(TAG, "换配对码失败 HTTP %d：%s", st, resp);
         s_pair_expire_us = esp_timer_get_time() + PAIR_RETRY_S * 1000000LL;
-        return;
+        return st;
     }
     cJSON *root = cJSON_Parse(resp);
-    if (!root) return;
+    if (!root) return st;
     const cJSON *code = cJSON_GetObjectItemCaseSensitive(root, "code");
     int64_t expires = json_i64(root, "expires_at", 0);
     int64_t now = json_i64(root, "now", 0);
     if (cJSON_IsString(code))
         set_pair(code->valuestring, expires, now);
     cJSON_Delete(root);
+    return st;
 }
 
 /* ── 指令 ACK ── */
@@ -563,9 +570,21 @@ static void heartbeat_task(void *arg)
     }
 }
 
+static volatile bool s_pair_task_alive;
+
 static void pair_code_task(void *arg)
 {
     (void)arg;
+    /* 重启后密钥从 NVS 加载、服务端仍是 pending 的路径（#13）：此刻手里没有
+     * 码（上一轮的码只在 RAM 里，且可能已过期），先换一个再进入常规循环。
+     * 注册路径进来时 set_pair 已经设过码，不重复换。 */
+    if (!s_pair_code[0] && s_devkey[0] && !s_paired && !s_got_usage) {
+        if (pair_code_refresh() == 409) {
+            s_pair_task_alive = false;
+            vTaskDelete(NULL);
+            return;
+        }
+    }
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(5000));
         if (s_paired || s_got_usage) {
@@ -573,13 +592,18 @@ static void pair_code_task(void *arg)
              * s_got_usage 是第二道保险：能收到用量就说明密钥已经转正，
              * 不必非等那条可能被 key_id 过滤掉的 paired=true。 */
             ESP_LOGI(TAG, "已配对，换码任务退出");
+            s_pair_task_alive = false;
             vTaskDelete(NULL);
             return;
         }
         if (!s_devkey[0] || !s_pair_expire_us) continue;
         if (esp_timer_get_time() > s_pair_expire_us) {
             ESP_LOGI(TAG, "配对码过期，换新码");
-            pair_code_refresh();
+            if (pair_code_refresh() == 409) {
+                s_pair_task_alive = false;
+                vTaskDelete(NULL);
+                return;
+            }
         }
     }
 }
@@ -660,6 +684,41 @@ static void schedule_reconnect(int delay_ms)
     esp_timer_start_once(s_reconnect_timer, (uint64_t)delay_ms * 1000ULL);
 }
 
+/* 重启后密钥已加载、手里没有码（#13）。pending 阶段服务端不让订 usage/frame，
+ * 所以不能指望 SUBACK 0x80；连上 MQTT 后给 retained pair(paired=true) /
+ * usage 一点时间（25s），都没来且仍未配对，就按 pending 处理：起换码任务，
+ * 先换一个新码显示。esp_timer 回调只做布尔判断和一次 xTaskCreate。
+ * 已配对设备在这 25s 内会收到 usage，回调什么都不做，无常驻开销。 */
+#define PENDING_PROBE_US (25LL * 1000000)
+static esp_timer_handle_t s_probe_timer;
+static bool s_probe_armed;
+
+static void start_pair_task(void)
+{
+    if (s_pair_code[0] || s_paired || s_got_usage || s_pair_task_alive) return;
+    s_pair_task_alive = true;
+    if (xTaskCreate(pair_code_task, "pair_code", 8192, NULL, 3, NULL) != pdPASS)
+        s_pair_task_alive = false;   /* 堆不够：probe_cb 会 25s 后重试 */
+}
+
+static void probe_cb(void *arg)
+{
+    (void)arg;
+    if (s_paired || s_got_usage || s_pair_code[0]) return;
+    start_pair_task();
+    if (!s_pair_task_alive && s_probe_timer)   /* 建任务失败：25s 后再试 */
+        esp_timer_start_once(s_probe_timer, PENDING_PROBE_US);
+}
+
+static void arm_pending_probe(void)
+{
+    if (s_probe_armed || !s_devkey[0] || s_pair_code[0] || s_paired) return;
+    const esp_timer_create_args_t a = { .callback = probe_cb, .name = "pend_probe" };
+    if (esp_timer_create(&a, &s_probe_timer) != ESP_OK) return;
+    if (esp_timer_start_once(s_probe_timer, PENDING_PROBE_US) == ESP_OK)
+        s_probe_armed = true;
+}
+
 static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     esp_mqtt_event_handle_t e = data;
@@ -683,6 +742,7 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
         /* 手里有密钥就直接订用量与帧通知，不等 paired=true——理由见
          * subscribe_paired_topics() 的注释。被拒了会走 SUBACK 分支。 */
         if (s_devkey[0]) {
+            arm_pending_probe();
             subscribe_paired_topics();
             /* 每次连上都对一次清单：断线期间 plv 可能已经变了，
              * ETag 会让没变化时只花一个 304。 */
@@ -700,6 +760,11 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
                 /* 被拒说明这条连接还是 pending；配对转正后要允许重订一次。 */
                 s_data_sub_req = false;
                 ESP_LOGW(TAG, "订阅被拒（msg_id %d），密钥尚未转正，等配对通知", e->msg_id);
+                /* 重启后密钥从 NVS 加载、服务端仍是 pending：RAM 里没有配对码，
+                 * 屏幕上什么都没有，framefetch/photo_sync 又因为
+                 * cloud_pair_pending()==false 反复请求被 403（#13）。
+                 * 这里起换码任务：它先换一个新码并显示，之后走常规过期换码。 */
+                start_pair_task();
             }
         }
         break;
@@ -859,9 +924,12 @@ void cloud_client_start(const uint8_t mac[6])
      * 上板实测这是稳态少掉几十 KB 的大头。 */
     if (need_pair_code) {
         /* 换配对码要跑一次 TLS 握手，4096 太紧；和注册用同一个 8192。 */
-        xTaskCreate(pair_code_task, "pair_code", 8192, NULL, 3, NULL);
+        s_pair_task_alive = true;
+        if (xTaskCreate(pair_code_task, "pair_code", 8192, NULL, 3, NULL) != pdPASS)
+            s_pair_task_alive = false;
     } else {
-        ESP_LOGI(TAG, "已有设备密钥，不创建换码任务");
+        /* 已配对设备不需要它；密钥仍是 pending 的话，订阅被拒时再按需创建。 */
+        ESP_LOGI(TAG, "已有设备密钥，暂不创建换码任务");
     }
 
     char lwt[96];
