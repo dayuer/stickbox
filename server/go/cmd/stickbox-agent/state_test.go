@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"runtime"
 	"strings"
@@ -103,5 +105,30 @@ func TestRunRoundRecordsNotLoggedIn(t *testing.T) {
 	s := loadState()
 	if s.ClaudeAuth != stateAuthOut || s.LastErrorAt == 0 {
 		t.Fatalf("状态未记录：%+v", s)
+	}
+}
+
+// 正常 usage_report：整轮走通（解析 → 上报 → 记成功），上报内容不受本任务影响。
+func TestRunRoundNormalReportsAndRecordsSuccess(t *testing.T) {
+	t.Setenv("STICKBOX_CONFIG_DIR", t.TempDir())
+	var posted bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posted = true
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":1,"devices":1}`))
+	}))
+	defer srv.Close()
+
+	claude := fakeClaudeFiles(t, readFixture(t, "usage-stream.jsonl"), `{"loggedIn":true}`+"\n", 0)
+	cfg := &agentConfig{Server: srv.URL, Token: "tok", ClaudePath: claude}
+	if err := runRound(cfg, func(string, ...any) {}); err != nil {
+		t.Fatal(err)
+	}
+	if !posted {
+		t.Fatal("应当上报")
+	}
+	s := loadState()
+	if s.LastSuccessAt == 0 || s.ClaudeAuth != stateAuthIn {
+		t.Fatalf("成功状态未记录：%+v", s)
 	}
 }
