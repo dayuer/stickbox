@@ -9,6 +9,12 @@ struct fp_index;
 
 #define STREAM_PORT 8080
 
+/* 帧率的**唯一旋钮**。AVI 头的 dwMicroSecPerFrame / strh.rate 都从它派生
+ * （见 stream.c 的 build_header）。2fps 是当前值；1fps 已在三星 Room C 上
+ * 连续 3 分钟验证通过，改这里即可。0.5fps 不能只改数字：s_fps 是整数，
+ * 需要把 AVI 头写成 rate=1/scale=2，不在 M3 范围。 */
+#define STREAM_FPS CONFIG_STICKBOX_DLNA_FPS
+
 /* 时钟条带的单块缓冲上限，双缓冲共 26KB。
  *
  * 必须与 server/go/internal/frame/frame.go 的 frame.BandCap 保持一致。

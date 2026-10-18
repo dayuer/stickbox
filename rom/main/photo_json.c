@@ -86,6 +86,7 @@ static void str_putcp(photo_json_t *p, uint32_t cp)
 static void reset_entry(photo_json_t *p)
 {
     p->kind[0] = 0;
+    p->etheme[0] = 0;
     p->esha[0] = 0;
     p->esize = 0;
     p->esize_set = false;
@@ -119,6 +120,10 @@ static bool deliver_str(photo_json_t *p)
             if (!p->str_long && n == PHOTO_PL_HEX)
                 memcpy(p->esha, p->str, PHOTO_PL_HEX + 1);
             else p->esha[0] = 0;
+        } else if (p->have_key && strcmp(p->key, "theme") == 0) {
+            if (!p->str_long && n < (int)sizeof p->etheme)
+                memcpy(p->etheme, p->str, (size_t)n + 1);
+            else p->etheme[0] = 0;
         }
     }
     clear_key(p);
@@ -196,7 +201,17 @@ static bool deliver_lit(photo_json_t *p)
 
 static bool finalize_entry(photo_json_t *p)
 {
-    if (strcmp(p->kind, "photo") != 0) return true;   /* board / 未知 kind 忽略 */
+    if (strcmp(p->kind, "board") == 0) {
+        /* 服务端保证只有一条 board；重复出现时保留第一条。 */
+        if (!p->out->board_seen) {
+            p->out->board_seen = true;
+            p->out->board_duration_s = (uint16_t)p->edur;
+            memcpy(p->out->board_theme, p->etheme, sizeof p->out->board_theme);
+            p->out->board_theme[sizeof p->out->board_theme - 1] = 0;
+        }
+        return true;
+    }
+    if (strcmp(p->kind, "photo") != 0) return true;   /* 未知 kind 忽略 */
 
     if (p->esha[0] == 0 || !p->esize_set || p->esize == 0 ||
         p->esize > PHOTO_MAX_BYTES) return false;

@@ -315,9 +315,9 @@ static void fetch_task(void *arg)
     /* 与照片下载/读卡互斥。取帧优先级高，但锁已经被照片任务拿着时，
      * 照片每 4KB 会让一次，所以这里最多等一小段。 */
     fetch_r r;
-    if (photo_io_lock(120000)) {
+    if (photo_io_net_lock(120000)) {
         r = fetch_once();
-        photo_io_unlock();
+        photo_io_net_unlock();
     } else {
         ESP_LOGW(TAG, "等照片任务放锁超时，本轮取帧跳过");
         r = FETCH_FAIL;

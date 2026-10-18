@@ -4,22 +4,25 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
-static SemaphoreHandle_t s_mux;
+static SemaphoreHandle_t s_net;
+static SemaphoreHandle_t s_store;
 
 void photo_io_init(void)
 {
-    if (!s_mux) s_mux = xSemaphoreCreateMutex();
+    if (!s_net) s_net = xSemaphoreCreateMutex();
+    if (!s_store) s_store = xSemaphoreCreateMutex();
 }
 
-bool photo_io_lock(uint32_t timeout_ms)
+static bool take(SemaphoreHandle_t m, uint32_t timeout_ms)
 {
-    if (!s_mux) return true;   /* 没锁可用：不能因此阻塞功能 */
+    if (!m) return true;   /* 没锁可用：不能因此阻塞功能 */
     TickType_t ticks = timeout_ms == UINT32_MAX ? portMAX_DELAY
                                                 : pdMS_TO_TICKS(timeout_ms);
-    return xSemaphoreTake(s_mux, ticks) == pdTRUE;
+    return xSemaphoreTake(m, ticks) == pdTRUE;
 }
 
-void photo_io_unlock(void)
-{
-    if (s_mux) xSemaphoreGive(s_mux);
-}
+bool photo_io_net_lock(uint32_t timeout_ms) { return take(s_net, timeout_ms); }
+void photo_io_net_unlock(void) { if (s_net) xSemaphoreGive(s_net); }
+
+bool photo_io_store_lock(uint32_t timeout_ms) { return take(s_store, timeout_ms); }
+void photo_io_store_unlock(void) { if (s_store) xSemaphoreGive(s_store); }
