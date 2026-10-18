@@ -117,6 +117,10 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/agent/coredumps", a.requireAgent(a.handleAgentCoredumps))
 	mux.Handle("POST /api/agent/logout", a.requireAgent(a.handleAgentLogout))
 
+	// 用户级时区：agent 或（将来的）user 令牌都可以设置。
+	mux.Handle("GET /api/user/tz", a.requireUser(a.handleUserTZGet))
+	mux.Handle("PUT /api/user/tz", a.requireUser(a.handleUserTZPut))
+
 	return drainBody(mux)
 }
 
@@ -171,7 +175,16 @@ func (a *API) requireAgent(fn handlerFn) http.Handler {
 	return a.guard(fn, auth.RoleAgent)
 }
 
+// requireUser 接受 agent 或 user 角色：两者都代表一个用户。
+func (a *API) requireUser(fn handlerFn) http.Handler {
+	return a.guardAny(fn, auth.RoleAgent, auth.RoleUser)
+}
+
 func (a *API) guard(fn handlerFn, want auth.Role) http.Handler {
+	return a.guardAny(fn, want)
+}
+
+func (a *API) guardAny(fn handlerFn, want ...auth.Role) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tok, ok := bearerToken(r)
 		if !ok {
@@ -184,7 +197,14 @@ func (a *API) guard(fn handlerFn, want auth.Role) http.Handler {
 			unauthorized(w)
 			return
 		}
-		if id.Role != want {
+		allowed := false
+		for _, role := range want {
+			if id.Role == role {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
 			unauthorized(w)
 			return
 		}

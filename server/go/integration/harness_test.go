@@ -57,6 +57,12 @@ func startServer(t *testing.T) *env {
 // startServerAt 在指定目录起一套服务（同一个库可以关掉再起，模拟重启）。
 // 返回的 stop 可提前调用且可重复调用；测试结束也会自动 stop。
 func startServerAt(t *testing.T, dir string) (*env, func()) {
+	return startServerAtWith(t, dir, nil)
+}
+
+// startServerAtWith 允许注入自定义 Builder（T29 的时区测试用它记录快照）。
+// builder 为 nil 时用真实渲染器。
+func startServerAtWith(t *testing.T, dir string, builder frames.Builder) (*env, func()) {
 	t.Helper()
 	certDir := filepath.Join(dir, "certs")
 	if err := os.MkdirAll(certDir, 0o755); err != nil {
@@ -90,11 +96,14 @@ func startServerAt(t *testing.T, dir string) (*env, func()) {
 	api := httpapi.New(cfg, st, v, reg, br)
 	br.SetUsageResender(api.Usage())
 	br.SetPairResender(api)
-	rr, err := render.New()
-	if err != nil {
-		t.Fatalf("初始化渲染器：%v", err)
+	if builder == nil {
+		rr, err := render.New()
+		if err != nil {
+			t.Fatalf("初始化渲染器：%v", err)
+		}
+		builder = frames.RenderBuilder{R: rr}
 	}
-	fs, err := frames.New(cfg.Root, st, api.Usage(), br, frames.RenderBuilder{R: rr}, frames.Options{
+	fs, err := frames.New(cfg.Root, st, api.Usage(), br, builder, frames.Options{
 		DefaultTZ:         "UTC",
 		Debounce:          100 * time.Millisecond, // 测试里缩短防抖
 		RenderConcurrency: 1,

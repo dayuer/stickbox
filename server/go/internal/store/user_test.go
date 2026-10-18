@@ -18,6 +18,48 @@ func TestCreateUser(t *testing.T) {
 	}
 }
 
+func TestUserTZSetAndClear(t *testing.T) {
+	s := open(t)
+	u, err := s.CreateUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.TZ != "" {
+		t.Fatalf("新用户时区 = %q，期望空", u.TZ)
+	}
+	found, err := s.SetUserTZ(u.ID, "Asia/Jakarta")
+	if err != nil || !found {
+		t.Fatalf("SetUserTZ = %v,%v", found, err)
+	}
+	got, ok, err := s.UserByID(u.ID)
+	if err != nil || !ok || got.TZ != "Asia/Jakarta" {
+		t.Fatalf("取回 %+v ok=%v err=%v", got, ok, err)
+	}
+	users, err := s.ListUsers()
+	if err != nil || len(users) != 1 || users[0].TZ != "Asia/Jakarta" {
+		t.Fatalf("用户列表 = %+v err=%v", users, err)
+	}
+
+	found, err = s.SetUserTZ(u.ID, "")
+	if err != nil || !found {
+		t.Fatalf("清除 = %v,%v", found, err)
+	}
+	if got, _, _ := s.UserByID(u.ID); got.TZ != "" {
+		t.Fatalf("清除后时区 = %q", got.TZ)
+	}
+	// 重复写同一个值也要报告 found（SQLite 仍算一次 UPDATE）。
+	if found, err := s.SetUserTZ(u.ID, "Asia/Tokyo"); err != nil || !found {
+		t.Fatalf("设置 = %v,%v", found, err)
+	}
+	if found, err := s.SetUserTZ(u.ID, "Asia/Tokyo"); err != nil || !found {
+		t.Fatalf("重复设置同值 = %v,%v，期望 found=true", found, err)
+	}
+
+	if found, err := s.SetUserTZ("nope", "UTC"); err != nil || found {
+		t.Fatalf("未知用户 = %v,%v，期望 found=false", found, err)
+	}
+}
+
 func TestUserByIDNotFound(t *testing.T) {
 	s := open(t)
 	if _, ok, err := s.UserByID("nope"); ok || err != nil {

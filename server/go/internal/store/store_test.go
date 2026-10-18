@@ -73,6 +73,41 @@ func TestMigrateLegacyUsersTable(t *testing.T) {
 	}
 }
 
+// T29：T7 时代的 users 表没有 tz 列，老库直接打开必须自动补上。
+func TestMigrateUsersAddsTZColumn(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`CREATE TABLE users(
+		   id TEXT PRIMARY KEY,
+		   created INTEGER NOT NULL DEFAULT 0,
+		   disabled INTEGER NOT NULL DEFAULT 0)`,
+		`INSERT INTO users(id, created, disabled) VALUES('u1', 123, 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	u, ok, err := s.UserByID("u1")
+	if err != nil || !ok || u.Created != 123 || u.TZ != "" {
+		t.Fatalf("迁移后用户 = %+v ok=%v err=%v", u, ok, err)
+	}
+	if found, err := s.SetUserTZ("u1", "Asia/Jakarta"); err != nil || !found {
+		t.Fatalf("SetUserTZ = %v,%v", found, err)
+	}
+}
+
 // 用量每用户只留最新一份。
 func TestUsageOverwritesLatest(t *testing.T) {
 	s := open(t)

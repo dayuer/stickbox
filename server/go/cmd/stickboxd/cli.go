@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -13,6 +17,7 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/config"
 	"github.com/dayuer/stickbox/server/go/internal/store"
+	"github.com/dayuer/stickbox/server/go/internal/tz"
 )
 
 const cliUsage = `用法：
@@ -27,6 +32,8 @@ const cliUsage = `用法：
                                         设备诊断：密钥状态、最近 CONNECT、
                                         未确认 cid、用量/帧版本、注册配额
   stickboxd user list                   列出用户
+  stickboxd user tz <user_id> [tz]      设置用户时区（省略 tz = 清除），
+                                        例如 Asia/Jakarta 或 +07:00
 
 正常设备走 /api/device/register 出配对码，不需要这些命令。
 全局 -conf 必须放在子命令之前；默认 /opt/stickbox/config.json。`
@@ -45,6 +52,10 @@ func runCLI(cfg *config.Config, args []string) error {
 	// device show 只读运行中的 stickboxd，不打开数据库。
 	if len(args) >= 2 && args[0] == "device" && args[1] == "show" {
 		return runDeviceShow(cfg, args[2:])
+	}
+	// user tz 优先走运行中的进程（立刻重渲）；进程不在时才直接写库。
+	if len(args) >= 2 && args[0] == "user" && args[1] == "tz" {
+		return runUserTZ(cfg, args[2:])
 	}
 
 	st, err := store.Open(cfg.DBPath())
@@ -109,11 +120,103 @@ func runCLI(cfg *config.Config, args []string) error {
 			if u.Disabled {
 				state = "停用"
 			}
-			fmt.Printf("%-32s 创建=%s  %s\n", u.ID, ts(u.Created), state)
+			tzv := u.TZ
+			if tzv == "" {
+				tzv = "（未设置）"
+			}
+			fmt.Printf("%-32s 创建=%s  时区=%-16s %s\n",
+				u.ID, ts(u.Created), tzv, state)
 		}
 		return nil
 	}
 	return fmt.Errorf("未知命令 %q\n\n%s", strings.Join(args, " "), cliUsage)
+}
+
+// runUserTZ：stickboxd user tz <user_id> [tz]
+//
+// 有运行中的 stickboxd 时走回环 admin 接口，写库后同步重渲并通知设备；
+// 进程不在时退回直接写库，等它下次启动/用量上报后再生效。
+func runUserTZ(cfg *config.Config, args []string) error {
+	if len(args) < 1 || strings.TrimSpace(args[0]) == "" {
+		return fmt.Errorf("用法：stickboxd user tz <user_id> [tz]（省略 tz = 清除）")
+	}
+	userID := strings.TrimSpace(args[0])
+	if len(args) > 2 {
+		return fmt.Errorf("用法：stickboxd user tz <user_id> [tz]")
+	}
+	value := ""
+	if len(args) == 2 {
+		v, err := tz.Normalize(args[1])
+		if err != nil {
+			return err
+		}
+		value = v
+	}
+
+	err := applyUserTZRemote(cfg, userID, value)
+	if err == nil {
+		if value == "" {
+			fmt.Printf("已清除用户 %s 的时区设置（已重新渲染并通知设备）\n", userID)
+		} else {
+			fmt.Printf("已设置用户 %s 的时区：%s（已重新渲染并通知设备）\n", userID, value)
+		}
+		return nil
+	}
+	// 服务端明确拒绝（用户不存在、非法值）就别再写库了。
+	var se *adminStatusError
+	if errors.As(err, &se) {
+		return fmt.Errorf("设置失败：%s", se.Error())
+	}
+	fmt.Printf("本机 admin 接口不可用（%v），改为直接写数据库\n", err)
+
+	st, err := store.Open(cfg.DBPath())
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	found, err := st.SetUserTZ(userID, value)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("用户 %s 不存在", userID)
+	}
+	fmt.Printf("已写入数据库；stickboxd 未运行，未能立即重渲染（下次启动/上报后生效）\n")
+	return nil
+}
+
+// adminStatusError 表示 admin 接口有响应但拒绝了请求；
+// 与「连不上」区分开：这种情况不该再退回直接写库。
+type adminStatusError struct {
+	status int
+	msg    string
+}
+
+func (e *adminStatusError) Error() string {
+	return fmt.Sprintf("admin 接口返回 %d：%s", e.status, e.msg)
+}
+
+func applyUserTZRemote(cfg *config.Config, userID, value string) error {
+	addr := strings.TrimSpace(cfg.AdminAddr)
+	if addr == "" {
+		return fmt.Errorf("配置里没有 admin_addr")
+	}
+	body, _ := json.Marshal(map[string]string{"user_id": userID, "tz": value})
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post("http://"+addr+"/user-tz",
+		"application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	if resp.StatusCode != http.StatusOK {
+		return &adminStatusError{
+			status: resp.StatusCode,
+			msg:    strings.TrimSpace(string(raw)),
+		}
+	}
+	return nil
 }
 
 // runHealthcheck 供容器 healthcheck 用。distroless 没有 curl/wget，

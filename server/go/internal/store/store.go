@@ -44,7 +44,8 @@ CREATE INDEX IF NOT EXISTS devices_user ON devices(user_id);
 CREATE TABLE IF NOT EXISTS users(
   id       TEXT PRIMARY KEY,
   created  INTEGER NOT NULL DEFAULT 0,
-  disabled INTEGER NOT NULL DEFAULT 0
+  disabled INTEGER NOT NULL DEFAULT 0,
+  tz       TEXT NOT NULL DEFAULT ''
 );
 
 -- 配对码：每台设备最多一条。code_hash 唯一，避免两个设备同时出同一个码。
@@ -96,6 +97,17 @@ func Open(path string) (*Store, error) {
 	if err := migrateUsers(db); err != nil {
 		db.Close()
 		return nil, err
+	}
+	// T29：用户级时区。老库的 users 表没有这一列；建表语句只在全新库生效。
+	if has, err := hasColumn(db, "users", "tz"); err != nil {
+		db.Close()
+		return nil, err
+	} else if !has {
+		if _, err := db.Exec(
+			`ALTER TABLE users ADD COLUMN tz TEXT NOT NULL DEFAULT ''`); err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
 	if _, err := db.Exec(`
 		DROP TABLE IF EXISTS user_phones;

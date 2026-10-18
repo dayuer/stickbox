@@ -30,6 +30,7 @@ import (
 	"github.com/dayuer/stickbox/server/go/internal/render"
 	"github.com/dayuer/stickbox/server/go/internal/source"
 	"github.com/dayuer/stickbox/server/go/internal/store"
+	"github.com/dayuer/stickbox/server/go/internal/tz"
 	"github.com/dayuer/stickbox/server/go/internal/usage"
 )
 
@@ -68,6 +69,8 @@ type Store interface {
 	// KeyByID 是设备端点判权的唯一依据：必须用令牌自己的 KeyID
 	// 查 pending/disabled/user_id，不能按 dev 反查主人。
 	KeyByID(keyID string) (store.Key, bool, error)
+	// UserTZ 返回用户级时区设置；空串表示未设置。
+	UserTZ(userID string) (string, error)
 }
 
 // Usage 提供用户最近一次上报。
@@ -413,7 +416,7 @@ func (s *Service) Rebuild(userID string) error {
 	if err != nil {
 		return fmt.Errorf("frames: 读用量：%w", err)
 	}
-	loc := s.locationFor(rep.TZ)
+	loc := s.locationFor(userID, rep.TZ)
 	now := s.opt.Now()
 
 	var snap source.Snapshot
@@ -874,7 +877,7 @@ func (s *Service) checkStale(now time.Time) {
 		if err != nil {
 			continue
 		}
-		loc := s.locationFor(rep.TZ)
+		loc := s.locationFor(id, rep.TZ)
 
 		s.mu.RLock()
 		c := s.cache[id]
@@ -973,19 +976,21 @@ func (s *Service) backfillLoop(ctx context.Context) {
 	}
 }
 
-func (s *Service) locationFor(tz string) *time.Location {
-	if tz != "" {
-		if l, err := time.LoadLocation(tz); err == nil {
-			return l
-		}
-		slog.Warn("未知时区，回退默认", "tz", tz)
+// locationFor 按「用户设置 > agent 上报 > default_tz」解析时区。
+// 用户级设置存在 users.tz；读库失败不能让出帧失败，退回 agent/默认。
+func (s *Service) locationFor(userID, agentTZ string) *time.Location {
+	userTZ := ""
+	if v, err := s.store.UserTZ(userID); err != nil {
+		slog.Warn("读用户时区失败，按 agent/默认处理", "user", userID, "err", err)
+	} else {
+		userTZ = v
 	}
-	if s.opt.DefaultTZ != "" {
-		if l, err := time.LoadLocation(s.opt.DefaultTZ); err == nil {
-			return l
-		}
+	name, _ := tz.Resolve(userTZ, agentTZ, s.opt.DefaultTZ)
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return time.UTC
 	}
-	return time.UTC
+	return loc
 }
 
 // Pack 生成下发格式：
