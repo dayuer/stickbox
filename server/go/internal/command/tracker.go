@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -223,6 +224,28 @@ func (t *Tracker) Ack(dev, cid string, ok bool, errMsg string) {
 	}
 }
 
+// CancelDevice 结案某台设备所有未确认的指令。设备换了新密钥或被吊销后，
+// 旧连接名下的 cid 不能再投给新密钥（新密钥可能根本没收到过这条指令），
+// 也不能继续占用重试预算、刷重投日志。
+func (t *Tracker) CancelDevice(dev, reason string) int {
+	now := t.now()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	n := 0
+	for cid, p := range t.pend {
+		if p.dev != dev {
+			continue
+		}
+		delete(t.pend, cid)
+		t.last[dev] = Outcome{
+			CID: cid, Topic: p.topic, OK: false, Err: reason,
+			Tries: p.tries, Finished: now,
+		}
+		n++
+	}
+	return n
+}
+
 func (t *Tracker) finish(cid string, p *pending, ok bool, errMsg string) {
 	t.mu.Lock()
 	t.last[p.dev] = Outcome{
@@ -230,6 +253,33 @@ func (t *Tracker) finish(cid string, p *pending, ok bool, errMsg string) {
 		Tries: p.tries, Finished: t.now(),
 	}
 	t.mu.Unlock()
+}
+
+// PendingInfo 是一条未确认指令的诊断快照。
+type PendingInfo struct {
+	CID      string    `json:"cid"`
+	Topic    string    `json:"topic"`
+	Tries    int       `json:"tries"`
+	NextAt   time.Time `json:"next_at"`
+	Deadline time.Time `json:"deadline"`
+}
+
+// PendingDetail 返回某设备未确认指令的明细，按下次重投时间排序。
+func (t *Tracker) PendingDetail(dev string) []PendingInfo {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := []PendingInfo{}
+	for cid, p := range t.pend {
+		if p.dev != dev {
+			continue
+		}
+		out = append(out, PendingInfo{
+			CID: cid, Topic: p.topic, Tries: p.tries,
+			NextAt: p.next, Deadline: p.deadline,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].NextAt.Before(out[j].NextAt) })
+	return out
 }
 
 // Pending 返回某设备还有多少条指令没被确认。0 表示两端状态一致。

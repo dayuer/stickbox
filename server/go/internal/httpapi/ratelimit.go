@@ -58,6 +58,21 @@ func (l *rateLimiter) allow(key string) bool {
 	return true
 }
 
+func (l *rateLimiter) remaining(key string) (int, int, time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	hs := l.prune(key)
+	left := l.limit - len(hs)
+	if left < 0 {
+		left = 0
+	}
+	var reset time.Time
+	if len(hs) > 0 {
+		reset = hs[0].Add(l.window)
+	}
+	return left, l.limit, reset
+}
+
 func (l *rateLimiter) prune(key string) []time.Time {
 	cut := l.now().Add(-l.window)
 	hs := l.hits[key]

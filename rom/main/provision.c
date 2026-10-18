@@ -5,6 +5,7 @@
  */
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -147,6 +148,59 @@ void prov_erase_devkey(void)
     nvs_commit(h);
     nvs_close(h);
     ESP_LOGW(TAG, "已清除设备密钥（保留服务器地址）");
+}
+
+/* 重注册频率闸：1 小时内最多 3 次。
+ *
+ * 任何清理路径出 bug 都不该把 flash 磨坏：注册会写 NVS、作废帧槽会擦
+ * flash，如果服务端/固件状态机把它们串成循环，一晚上能擦成千上万次。
+ * 计数存 NVS，软件重启后仍有效；时间没对上（开机早期）时放行，避免
+ * 首次配网被误伤。 */
+#define REREG_MAX 3
+#define REREG_WINDOW_S 3600
+
+bool prov_rereg_allowed(void)
+{
+    time_t now = time(NULL);
+    if (now < 1700000000) {
+        /* SNTP 还没对上：无法判断窗口，放行。正常循环发生在联网之后。 */
+        return true;
+    }
+    nvs_handle_t h;
+    if (nvs_open(NVS_CLOUD, NVS_READONLY, &h) != ESP_OK) return true;
+    int64_t start = 0;
+    uint8_t n = 0;
+    nvs_get_i64(h, "rereg_t", &start);
+    nvs_get_u8(h, "rereg_n", &n);
+    nvs_close(h);
+    if (start > 0 && now - start < REREG_WINDOW_S && n >= REREG_MAX) {
+        ESP_LOGE(TAG, "1 小时内已注册 %d 次，拒绝继续注册", REREG_MAX);
+        return false;
+    }
+    return true;
+}
+
+/* 只在注册**成功**后计数：服务器临时不可用不应消耗配额。 */
+void prov_rereg_note(void)
+{
+    time_t now = time(NULL);
+    if (now < 1700000000) return;
+    nvs_handle_t h;
+    if (nvs_open(NVS_CLOUD, NVS_READWRITE, &h) != ESP_OK) return;
+    int64_t start = 0;
+    uint8_t n = 0;
+    nvs_get_i64(h, "rereg_t", &start);
+    nvs_get_u8(h, "rereg_n", &n);
+    if (start <= 0 || now - start >= REREG_WINDOW_S) {
+        start = now;
+        n = 0;
+    }
+    if (n < 255) n++;
+    nvs_set_i64(h, "rereg_t", start);
+    nvs_set_u8(h, "rereg_n", n);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGW(TAG, "注册计数 %u/%d（本小时）", (unsigned)n, REREG_MAX);
 }
 
 void prov_erase(void)

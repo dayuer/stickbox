@@ -9,6 +9,7 @@ import (
 	"github.com/mochi-mqtt/server/v2/packets"
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
+	"github.com/dayuer/stickbox/server/go/internal/store"
 )
 
 func TestAdmissionTokenBucket(t *testing.T) {
@@ -93,5 +94,29 @@ func TestBrokerAppliesCapabilities(t *testing.T) {
 	if caps.MaximumClientWritesPending != 64 || caps.MaximumInflight != 32 || caps.ReceiveMaximum != 32 {
 		t.Errorf("Capabilities = %d/%d/%d，期望 64/32/32",
 			caps.MaximumClientWritesPending, caps.MaximumInflight, caps.ReceiveMaximum)
+	}
+}
+
+type errKeys struct{}
+
+func (errKeys) KeyByID(string) (store.Key, bool, error) {
+	return store.Key{}, false, errors.New("db down")
+}
+func (errKeys) UpdateKeyHash(string, string, string) error { return nil }
+
+// 查库失败是临时故障，必须回 0x03（server unavailable），不能回 0x05；
+// 否则设备会把一次数据库抖动当成密钥被吊销，清 NVS 重新注册。
+func TestConnectDBErrorReturnsServerUnavailable(t *testing.T) {
+	h := &Hook{
+		v:   auth.NewVerifier(errKeys{}, "test-pepper-0123456789abcdef"),
+		ids: newIDTable(),
+	}
+	cl := &mqtt.Client{Net: mqtt.ClientConnection{Remote: "192.0.2.1:3333"}}
+	err := h.OnConnect(cl, packets.Packet{Connect: packets.ConnectParams{
+		Username: []byte("f412fa87c9e0"),
+		Password: []byte("k.s"),
+	}})
+	if !errors.Is(err, packets.ErrServerUnavailable) {
+		t.Fatalf("OnConnect = %v，期望 packets.ErrServerUnavailable（0x03）", err)
 	}
 }

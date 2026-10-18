@@ -98,7 +98,7 @@ func newFrameAPI(t *testing.T) (http.Handler, *testDeps, *frames.Service, *fakeF
 	}
 	themes := []frames.Themed{{
 		Theme:  render.Quota{R: rr},
-		Source: source.NewClaude(fakeFrameUsage{}, "UTC"),
+		Source: source.NewClaude(fakeFrameUsage{}, source.NewFixedTZ("UTC")),
 	}}
 	fs, err := frames.New(dep.cfg.Root, dep.store, themes, fakeFramePub{}, b, frames.Options{
 		Debounce:          5 * time.Millisecond, // 测试里缩短防抖

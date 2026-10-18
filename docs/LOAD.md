@@ -49,6 +49,11 @@ go run ./cmd/stickbox-load run -state /tmp/t22/load.json \
 T22 起 `waitIdle` 会先观察是否出现渲染任务，再要求连续 6 秒空闲，
 避免懒加载在设备订阅前被误判为“已空闲”。
 
+`run` 还会统计 MQTT CONNECT 的耗时（设备侧 dial → CONNACK，p50/p95/p99）
+和本次运行的 CPU：给 `-server-pid <pid>` 后用 `ps -o time=` 的累计 CPU 差
+除以墙钟，得到服务端平均 CPU%。注意单机 2000 台同时重连会撞上每 IP
+20 次/秒的准入限流，真实重连 p99 要在多来源 IP 的压测里看。
+
 ---
 
 ## 2. 数据（60× 加速）

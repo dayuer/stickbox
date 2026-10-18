@@ -41,7 +41,7 @@ func TestSalesSnapshot(t *testing.T) {
 			CardRevenue: &sales.Metric{Value: 8_000, Goal: 10_000},
 		},
 	}
-	s, err := NewSales(st, "UTC").Snapshot(context.Background(), "u1", now)
+	s, err := NewSales(st, NewFixedTZ("UTC")).Snapshot(context.Background(), "u1", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestSalesStaleDayShowsZero(t *testing.T) {
 			Orders: &sales.Metric{Value: 390, Goal: 400},
 		},
 	}
-	s, err := NewSales(st, "UTC").Snapshot(context.Background(), "u1", now)
+	s, err := NewSales(st, NewFixedTZ("UTC")).Snapshot(context.Background(), "u1", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestSalesSkipsMetricWithoutGoal(t *testing.T) {
 			Orders: &sales.Metric{Value: 420, Goal: 400},
 		},
 	}
-	s, err := NewSales(st, "UTC").Snapshot(context.Background(), "u1", now)
+	s, err := NewSales(st, NewFixedTZ("UTC")).Snapshot(context.Background(), "u1", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestSalesSkipsMetricWithoutGoal(t *testing.T) {
 // 还没上报过时要出「等待上报」的快照，不能报错——否则刚配对的设备没帧可取。
 func TestSalesNoReport(t *testing.T) {
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
-	s, err := NewSales(fakeSalesStore{}, "Asia/Shanghai").Snapshot(context.Background(), "u1", now)
+	s, err := NewSales(fakeSalesStore{}, NewFixedTZ("Asia/Shanghai")).Snapshot(context.Background(), "u1", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestSalesShowCardRevenue(t *testing.T) {
 			GMV:         &sales.Metric{Value: 146_000, Goal: 200_000},
 			CardRevenue: &sales.Metric{Value: 8_000, Goal: 10_000},
 		},
-	}, "UTC")
+	}, NewFixedTZ("UTC"))
 	src.Show = [2]sales.Kind{sales.KindCardRevenue, sales.KindGMV}
 	s, err := src.Snapshot(context.Background(), "u1", now)
 	if err != nil {

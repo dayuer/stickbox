@@ -58,6 +58,12 @@ func startServer(t *testing.T) *env {
 // startServerAt 在指定目录起一套服务（同一个库可以关掉再起，模拟重启）。
 // 返回的 stop 可提前调用且可重复调用；测试结束也会自动 stop。
 func startServerAt(t *testing.T, dir string) (*env, func()) {
+	return startServerAtWith(t, dir, nil)
+}
+
+// startServerAtWith 允许注入自定义 Builder（T29 的时区测试用它记录快照）。
+// builder 为 nil 时用真实渲染器。
+func startServerAtWith(t *testing.T, dir string, builder frames.Builder) (*env, func()) {
 	t.Helper()
 	certDir := filepath.Join(dir, "certs")
 	if err := os.MkdirAll(certDir, 0o755); err != nil {
@@ -95,13 +101,17 @@ func startServerAt(t *testing.T, dir string) (*env, func()) {
 	if err != nil {
 		t.Fatalf("初始化渲染器：%v", err)
 	}
+	if builder == nil {
+		builder = frames.ThemeBuilder{}
+	}
+	tzr := source.NewTZResolver(st, "UTC")
 	fs, err := frames.New(cfg.Root, st, []frames.Themed{{
 		Theme: render.Quota{R: rr},
 		Source: source.NewComposite(
-			source.NewClaude(api.Usage(), "UTC"),
-			source.NewSales(api.Sales(), "UTC"),
+			source.NewClaude(api.Usage(), tzr),
+			source.NewSales(api.Sales(), tzr),
 		),
-	}}, br, frames.ThemeBuilder{}, frames.Options{
+	}}, br, builder, frames.Options{
 		Debounce:          100 * time.Millisecond, // 测试里缩短防抖
 		RenderConcurrency: 1,
 		BackfillPerSec:    100,

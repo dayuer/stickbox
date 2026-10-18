@@ -69,10 +69,9 @@ static bool read_slot_header(int slot, uint32_t *seq, uint32_t *len,
     *len = be32(h + 12);
     *crc = be32(h + 16);
     if (*len == 0 || *len > FP_MAX_PACK) return false;
-    /* 版本串放在保留区的前 12 字节，不带结尾 0。 */
-    size_t n = vercap - 1 < 12 ? vercap - 1 : 12;
-    memcpy(ver, h + 20, n);
-    ver[n] = 0;
+    /* 版本串放在保留区的前 12 字节。旧写入方只拷实际长度，剩余是 0xFF
+     * 擦除态——必须按定长字段解码并补 0，不能直接当 C 字符串。 */
+    fp_slot_ver(ver, vercap, h + 20);
     return true;
 }
 
@@ -145,8 +144,10 @@ static bool activate(int slot, uint32_t len, const char *ver)
     return true;
 }
 
-bool framepack_init(void)
+/* 找分区但不扫槽/不激活。解绑清理和开机无密钥清理都要先有 s_part。 */
+static bool ensure_part(void)
 {
+    if (s_part) return true;
     s_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 0x40, "frames");
     if (!s_part) {
         /* 旧分区表（T9 之前）没有这个分区。不是致命错误：退回预置页，
@@ -166,6 +167,12 @@ bool framepack_init(void)
     }
     ESP_LOGI(TAG, "frames 分区 %u 字节 = %d 槽，可驻留 %d 个主题",
              (unsigned)s_part->size, s_slots, s_slots / FP_SLOTS_PER_THEME);
+    return true;
+}
+
+bool framepack_init(void)
+{
+    if (!ensure_part()) return false;
 
     int best = -1;
     uint32_t best_seq = 0, best_len = 0;
@@ -204,6 +211,55 @@ bool framepack_active(const fp_index_t **ix,
 }
 
 const char *framepack_version(void) { return s_active ? s_ver : ""; }
+
+static void erase_all_slots(void)
+{
+    /* 只擦每个槽的第一个扇区（含 magic+header），整槽擦除没必要还费寿命。 */
+    for (int i = 0; i < s_slots; i++) {
+        const size_t off = (size_t)i * FP_SLOT_SIZE;
+        esp_err_t err = esp_partition_erase_range(s_part, off, 4096);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "作废槽 %d 失败：%s", i, esp_err_to_name(err));
+        }
+    }
+    s_active = false;
+    s_seq = 0;
+    s_ver[0] = 0;
+}
+
+void framepack_invalidate(void)
+{
+    if (!ensure_part()) {
+        s_active = false;
+        s_ver[0] = 0;
+        return;
+    }
+    /* 先让推流松手，再 munmap，最后擦槽头。
+     * 擦除期间 flash 映射不可用，顺序反了推流任务会读到失效地址。 */
+    stream_use_presets();
+    if (s_mapped) {
+        esp_partition_munmap(s_map);
+        s_mapped = false;
+    }
+    erase_all_slots();
+    ESP_LOGI(TAG, "frames 槽已作废，切回预置页");
+}
+
+void framepack_invalidate_reboot(void)
+{
+    /* 解绑清理路径：马上要 esp_restart，不能等推流 idle（电视卡住时
+     * fp_wait_idle 可能等很久，设备就一直不重启）。只把“下一帧用预置页”
+     * 切过去，不 munmap——在途发送可能还拿着映射，重启后自然释放。
+     * 若擦除与在途读取撞车导致 panic，设备照样重启；开机时没有密钥会
+     * 再次擦槽（见 framefetch_boot 的守卫），隐私不会漏。 */
+    if (!ensure_part()) {
+        ESP_LOGW(TAG, "cleanup: 没有 frames 分区");
+        return;
+    }
+    stream_use_presets_nowait();
+    ESP_LOGW(TAG, "cleanup: 作废 frames 槽");
+    erase_all_slots();
+}
 
 /* ------------------------------------------------------------ 流式写入 */
 
@@ -272,6 +328,9 @@ bool fp_write_finish(fp_writer_t *w)
     put_be32(h + 8, w->seq);
     put_be32(h + 12, w->pack_len);
     put_be32(h + 16, w->crc);
+    /* 版本字段是定长 12 字节，必须用 0 补满；0xFF 填充会让旧读取方
+     * 把擦除态当成版本号的一部分。 */
+    memset(h + 20, 0, 12);
     memcpy(h + 20, w->ver, strnlen(w->ver, 12));
 
     /* 头部最后写：掉电时魔数写不全，这个槽自然失效。 */

@@ -71,6 +71,8 @@ type Store interface {
 	// KeyByID 是设备端点判权的唯一依据：必须用令牌自己的 KeyID
 	// 查 pending/disabled/user_id，不能按 dev 反查主人。
 	KeyByID(keyID string) (store.Key, bool, error)
+	// UserTZ 返回用户级时区设置；空串表示未设置。
+	UserTZ(userID string) (string, error)
 }
 
 // Publisher 把帧版本通知推给一台设备。
@@ -798,6 +800,9 @@ func (s *Service) ETag(themeID string, ver uint64) string {
 // 内存 LRU 淘汰——如果不比对文件里的版本，就会把 v1 的字节挂到 v2 名下。
 // 所以 readPackFile 连版本一起返回，和内存里的 c.ver 不一致就丢弃重读。
 func (s *Service) Current(userID, themeID string) (data []byte, ver uint64, ok bool) {
+	if themeID == "" {
+		themeID = s.primaryTheme() // 老调用方（admin、运维）不关心主题
+	}
 	k := packKey{user: userID, theme: themeID}
 	for attempt := 0; attempt < 3; attempt++ {
 		s.mu.Lock()

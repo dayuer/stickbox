@@ -34,9 +34,9 @@ func twoThemes(t *testing.T, f *fixture, sl *fakeSales) *Service {
 	t.Helper()
 	themes := []Themed{
 		{Theme: stubTheme{id: "quota", src: "claude-usage"},
-			Source: source.NewClaude(f.us, "UTC")},
+			Source: source.NewClaude(f.us, source.NewFixedTZ("UTC"))},
 		{Theme: stubTheme{id: "sales", src: "chaodai-sales"},
-			Source: source.NewSales(sl, "UTC")},
+			Source: source.NewSales(sl, source.NewFixedTZ("UTC"))},
 	}
 	svc, err := New(f.root, f.st, themes, f.pub, f.b, Options{
 		Debounce: 5 * time.Millisecond, RenderConcurrency: 1,

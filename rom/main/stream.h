@@ -9,7 +9,7 @@ struct fp_index;
 
 #define STREAM_PORT 8080
 
-/* 时钟条带的单块缓冲上限，双缓冲共 32KB。
+/* 时钟条带的单块缓冲上限，双缓冲共 26KB。
  *
  * 必须与 server/go/internal/frame/frame.go 的 frame.BandCap 保持一致。
  *
@@ -23,7 +23,10 @@ struct fp_index;
  *
  * 光靠这个常量也不够：段长会随渲染器的字体和 q 值变化。帧包自带
  * max_band_bytes，设备加载时先拿 stream_band_cap() 比对，超了拒绝整包。 */
-#define BAND_CAP (16 * 1024)
+/* 13KB：服务端实测最坏带长 13,089（08:28，max_band_bytes），再留 223 字节。
+ * 两块缓冲各 16KB 是这个版本稳态比 v0.9.3 少 45KB 的大头；压到 13KB
+ * 省下 6KB，且仍然覆盖最坏帧。 */
+#define BAND_CAP (13 * 1024)
 
 /* 预置页面：1080p baseline JPEG，DRI = 每行 MCU 数（tools/render_pages.py 生成） */
 typedef struct {
@@ -60,6 +63,9 @@ void stream_use_framepack(const struct fp_index *ix, const uint8_t *base, size_t
 
 /* 退回预置页。没有帧包、或帧包失效时调用——画面停在配对页，不黑屏。 */
 void stream_use_presets(void);
+
+/* 同上，但不等在途帧发完。只给“马上重启”的清理路径用；不 munmap。 */
+void stream_use_presets_nowait(void);
 
 /* 发布一块帧包模式的时钟带，附带每行在缓冲里的偏移与长度。
  * 长度超过 BAND_CAP 时拒绝发布并返回 false，画面保持上一帧。 */

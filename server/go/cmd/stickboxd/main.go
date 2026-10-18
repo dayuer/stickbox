@@ -13,6 +13,7 @@ import (
 	"time"
 	_ "time/tzdata" // 镜像里没有 tzdata；按用户 IANA 时区渲染需要内嵌一份
 
+	"github.com/dayuer/stickbox/server/go/internal/admin"
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/broker"
 	"github.com/dayuer/stickbox/server/go/internal/command"
@@ -63,6 +64,11 @@ func serve(cfg *config.Config) error {
 	defer st.Close()
 
 	v := auth.NewVerifier(st, cfg.TokenPepper)
+	if os.Getenv("STICKBOX_VERIFIER_CACHE") == "1" {
+		// 仅供压测对照，见 task/T25 的提交说明；生产必须走无缓存路径。
+		slog.Warn("启用了压测对照的 verifier 缓存（命中仍查库）")
+		v = auth.NewVerifierCached(st, cfg.TokenPepper)
+	}
 
 	reloader, err := tlsx.New(cfg.CertPath(), cfg.KeyPath())
 	if err != nil {
@@ -98,6 +104,9 @@ func serve(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("初始化渲染器：%w", err)
 	}
+	// 时区解析：用户设置 > 这一路数据自带 > 服务端默认（T29 的优先级）。
+	// 各数据源共用这一个解析器。
+	tzr := source.NewTZResolver(st, cfg.DefaultTZ)
 	// 主题表：顺序就是播放列表的优先级，第一个是主主题（老固件只认它）。
 	//
 	// 现在只有额度看板一个主题，它的数据源是 Composite：两路数据都挤进
@@ -106,8 +115,8 @@ func serve(cfg *config.Config) error {
 	themes := []frames.Themed{{
 		Theme: render.Quota{R: rr},
 		Source: source.NewComposite(
-			source.NewClaude(api.Usage(), cfg.DefaultTZ),
-			source.NewSales(api.Sales(), cfg.DefaultTZ),
+			source.NewClaude(api.Usage(), tzr),
+			source.NewSales(api.Sales(), tzr),
 		),
 	}}
 	fs, err := frames.New(cfg.Root, st, themes, br, frames.ThemeBuilder{}, frames.Options{
@@ -164,6 +173,19 @@ func serve(cfg *config.Config) error {
 		slog.Info("metrics 监听", "addr", cfg.MetricsAddr)
 	}
 
+	// 设备诊断只监听回环，stickboxd device show / user tz 在服务器本机调用它。
+	adminH := admin.NewHandler(st, api.Usage(), fs,
+		adminRuntime{br: br, cmd: cmdTracker, api: api})
+	// CLI 改时区要立刻重渲并通知设备；它跑在另一个进程，只能走这里。
+	adminH.SetTZApplier(adminTZ{st: st, fs: fs})
+	adminSrv, err := admin.Serve(cfg.AdminAddr, adminH)
+	if err != nil {
+		br.Close()
+		return err
+	}
+	defer adminSrv.Close()
+	slog.Info("admin 诊断监听", "addr", cfg.AdminAddr)
+
 	errc := make(chan error, 1)
 	go func() {
 		slog.Info("HTTPS 监听", "addr", cfg.HTTPAddr, "version", version.String())
@@ -188,6 +210,45 @@ func serve(cfg *config.Config) error {
 		br.Close()
 		return nil
 	}
+}
+
+// adminRuntime 把 broker/tracker/API 的易失状态接到只读诊断接口。
+type adminRuntime struct {
+	br  *broker.Broker
+	cmd *command.Tracker
+	api *httpapi.API
+}
+
+func (a adminRuntime) RecentAuth(dev string, n int) []broker.AuthEvent {
+	return a.br.RecentAuth(dev, n)
+}
+func (a adminRuntime) ConnectedKeys(dev string) []string { return a.br.ConnectedKeys(dev) }
+func (a adminRuntime) Pending(dev string) []command.PendingInfo {
+	return a.cmd.PendingDetail(dev)
+}
+func (a adminRuntime) RegisterQuota(dev string) (int, int, time.Time) {
+	return a.api.RegisterQuota(dev)
+}
+
+// adminTZ 让 CLI 的 user tz 经过运行中的进程：写库后同步重渲并通知设备。
+type adminTZ struct {
+	st *store.Store
+	fs *frames.Service
+}
+
+func (a adminTZ) ApplyUserTZ(userID, value string) error {
+	found, err := a.st.SetUserTZ(userID, value)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("用户 %s 不存在", userID)
+	}
+	if err := a.fs.Rebuild(userID); err != nil {
+		// 渲染失败不影响设置本身；后台 worker 会再试。
+		a.fs.MarkDirty(userID)
+	}
+	return nil
 }
 
 func envOr(k, def string) string {

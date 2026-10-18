@@ -77,17 +77,3 @@ type Source interface {
 	ID() string
 	Snapshot(ctx context.Context, userID string, now time.Time) (Snapshot, error)
 }
-
-// LoadLocation 解析 IANA 时区名，失败时依次回退 fallback 与 UTC。
-// 各数据源共用，避免每家自己写一遍兜底。
-func LoadLocation(tz, fallback string) *time.Location {
-	for _, name := range []string{tz, fallback} {
-		if name == "" {
-			continue
-		}
-		if l, err := time.LoadLocation(name); err == nil {
-			return l
-		}
-	}
-	return time.UTC
-}

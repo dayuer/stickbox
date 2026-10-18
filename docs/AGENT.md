@@ -89,7 +89,31 @@ stickbox-agent install
 stickbox-agent status     # 服务器、配置、配对状态、后台服务
 stickbox-agent logout     # 注销令牌并删除本机令牌
 stickbox-agent unpair <dev>  # 让某块屏解绑（它收到通知后会重新出配对码）
+stickbox-agent tz set Asia/Jakarta  # 设置用户时区（见 3b）
 ```
+
+---
+
+## 3b. 时区（独立于本机）
+
+显示时区存在**服务端**，不需要改本机 `TZ`，也不依赖 agent 所在机器的时区。
+优先级：
+
+```
+用户设置 > agent 上报 > 服务端 default_tz
+```
+
+```sh
+stickbox-agent tz set Asia/Jakarta   # IANA 名
+stickbox-agent tz set +07:00         # 固定整小时偏移，服务端存成 Etc/GMT-7
+stickbox-agent tz show               # 当前生效值 + 来源（用户设置/agent 上报/服务端默认）
+stickbox-agent tz clear              # 清除用户设置，回退到 agent/默认
+```
+
+- 改完立即重渲染并通知屏换帧，不用等下一次用量上报；
+- 非法时区（拼错、`Local`、`+07:30`）会直接报错，不会被静默忽略；
+- `+07:00` 这类固定偏移只支持整小时；
+- 同一个用户下所有屏共用这一设置。
 
 ---
 
@@ -109,6 +133,7 @@ stickbox-agent doctor
 | 用量读取 | 在白名单环境 + 专用工作目录里跑一次 `/usage`，能否拿到 `rate_limits` |
 | 配对令牌 | 有没有令牌；调 `GET /api/agent/devices`，401 就是失效 |
 | 服务端连通性 | DNS、TLS 证书、`/healthz` |
+| 固件下载路由 | 不存在的固件应返回 stickboxd 的 404，而不是 nginx 的 HTML 404 |
 | 后台服务 | 是否安装、日志里最近一次成功上报是什么时候 |
 | 时区 | 当前上报的 IANA 时区 |
 
@@ -123,6 +148,8 @@ stickbox-agent doctor
        有效（名下 1 台屏）
 [OK  ] 服务端连通性
        mqtt.stickbox.ai：DNS / TLS / healthz 正常
+[OK  ] 固件下载路由
+       不存在的固件返回 stickboxd 自己的 404（/fw/ 已正确反代）
 [OK  ] 后台服务
        已安装（~/Library/LaunchAgents/ai.stickbox.agent.plist）；最近一次上报 3 分钟 前
 [OK  ] 时区
@@ -185,8 +212,16 @@ Claude 的用量接口刚被限流过，本地冷却约 1 小时，期间拿不�
 
 ### 时区显示不对
 
-设置 `TZ=Asia/Shanghai`（或你的时区）后重启服务；没有 IANA 时区时服务端会用
-默认时区，日期和跨天刷新可能不准。
+先看当前生效值：
+
+```sh
+stickbox-agent tz show
+```
+
+- 来源是「用户设置」：用 `stickbox-agent tz set <正确时区>` 改；
+- 来源是「agent 上报」：agent 会读本机时区（`TZ` 或系统设置），也可以直接
+  `stickbox-agent tz set ...` 固定住，不再随本机变化；
+- 来源是「服务端默认」：同上，设置一次即可。
 
 ---
 

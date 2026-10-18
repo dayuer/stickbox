@@ -20,11 +20,14 @@ const (
 	// RoleAgent 是用户电脑上的 stickbox-agent：上报用量、管理名下的屏。
 	// 它不能连 MQTT。
 	RoleAgent Role = "agent"
+	// RoleUser 预留给直接代表用户的令牌（例如将来的 App/网页端）。
+	// 与 agent 一样只能走 HTTP，不能连 MQTT。
+	RoleUser Role = "user"
 )
 
 type Identity struct {
 	Dev    string // device 角色专用
-	UserID string // agent 角色专用；不要用它判定设备的数据权限
+	UserID string // agent / user 角色专用；不要用它判定设备的数据权限
 	Role   Role
 	KeyID  string
 	// Pending 表示这把 device 密钥还没完成配对。待配对密钥可以连 MQTT
@@ -67,19 +70,31 @@ type Verifier struct {
 	pepper string
 	mu     sync.RWMutex
 	c      map[string]cacheEntry
-	// epoch 在每次 Invalidate/InvalidateAll 时加一。Verify 在跑完校验
-	// 准备写缓存前检查它：如果期间有失效操作，说明刚查到的身份可能已经
-	// 过时（例如设备连接与配对同时发生），必须重新查库而不是写回缓存。
-	epoch uint64
+	// cache 只用于压测对照（见 verifier_bench_test.go）：生产不缓存正结果。
+	// CLI 的 device unbind/revoke 在另一个进程改库，没法让本进程的缓存失效；
+	// 每次 CONNECT 都查一次主键，才能在下一次连接就回 0x05。
+	cache bool
 	sem   chan struct{}
 	now   func() time.Time
 }
 
 func NewVerifier(keys KeyStore, pepper string) *Verifier {
+	return newVerifier(keys, pepper, false)
+}
+
+// NewVerifierCached 仅供压测对照：命中缓存后仍会查库核对吊销状态，
+// 语义与生产一致，但多一次缓存查找。生产路径不要用它。
+func NewVerifierCached(keys KeyStore, pepper string) *Verifier {
+	return newVerifier(keys, pepper, true)
+}
+
+// newVerifier 只给包内压测用：cache=true 时复现旧的缓存策略（命中仍查库）。
+func newVerifier(keys KeyStore, pepper string, cache bool) *Verifier {
 	return &Verifier{
 		keys:   keys,
 		pepper: pepper,
 		c:      map[string]cacheEntry{},
+		cache:  cache,
 		sem:    make(chan struct{}, argonConcurrency),
 		now:    time.Now,
 	}
@@ -92,8 +107,10 @@ func (v *Verifier) HashSecret(keyID, secret string) (string, error) {
 
 // Verify 校验 "{key_id}.{secret}" 形式的令牌。
 //
-// 首次走 argon2id（几十毫秒，故意的）；之后缓存 sha256，
-// 让取件这种高频路径退化成一次哈希比较。
+// 每次都查库（主键），拿到 disabled/pending/dev 的最新状态；T22 之后密钥
+// 哈希是 HMAC，校验本身很便宜。不在进程内缓存正结果是刻意的：CLI 的
+// device unbind/revoke 跑在另一个进程，无法让这里的缓存失效，缓存 1 小时
+// 会让被吊销的密钥继续 CONNECT 成功。
 func (v *Verifier) Verify(token string) (Identity, error) {
 	keyID, secret, err := SplitToken(token)
 	if err != nil {
@@ -101,68 +118,84 @@ func (v *Verifier) Verify(token string) (Identity, error) {
 	}
 	sum := sha256.Sum256([]byte(secret))
 
-	// 最多重试 3 次：Invalidate 一般不会连续发生，这里只是防止异常情况下
-	// 无限循环。最后一次按刚读到的库返回，但不写缓存。
-	for attempt := 0; ; attempt++ {
-		v.mu.RLock()
-		e, ok := v.c[keyID]
-		epoch := v.epoch
-		v.mu.RUnlock()
-		if ok && v.now().Before(e.exp) {
-			if subtle.ConstantTimeCompare(sum[:], e.sum[:]) == 1 {
-				return e.id, nil
-			}
-			return Identity{}, ErrDenied
+	// 仅压测对照：缓存命中也要查库确认状态，不能只比对 secret。
+	if v.cache {
+		if id, hit, err := v.cachedHit(keyID, sum); hit {
+			return id, err
 		}
-
-		k, found, err := v.keys.KeyByID(keyID)
-		if err != nil {
-			return Identity{}, err
-		}
-		if !found || k.Disabled {
-			return Identity{}, ErrDenied
-		}
-
-		// 新记录是 HMAC，几乎零成本；只有旧 argon2id 记录才需要限并发。
-		// 先做一次格式判断，避免付 64MB 的钱去跑一个 HMAC 比较。
-		okPass, legacy := false, false
-		if strings.HasPrefix(k.Hash, "$"+hmacScheme+"$") {
-			okPass, _ = VerifySecret(v.pepper, keyID, secret, k.Hash)
-		} else {
-			v.sem <- struct{}{}
-			okPass, legacy = VerifySecret(v.pepper, keyID, secret, k.Hash)
-			<-v.sem
-		}
-		if !okPass {
-			return Identity{}, ErrDenied
-		}
-		if legacy {
-			// 校验成功即迁移；失败不影响本次登录（下次再试）。
-			// 带上旧哈希做 CAS：并发校验/轮换时不会把别人刚写的新哈希盖回去。
-			if h, err := v.HashSecret(keyID, secret); err == nil {
-				if err := v.keys.UpdateKeyHash(keyID, k.Hash, h); err != nil {
-					slog.Warn("令牌哈希迁移失败", "key_id", keyID, "err", err)
-				}
-			}
-		}
-
-		id := Identity{
-			Dev: k.Dev, UserID: k.UserID, Role: Role(k.Role), KeyID: k.KeyID,
-			Pending: k.Pending,
-		}
-		v.mu.Lock()
-		if v.epoch == epoch {
-			v.c[keyID] = cacheEntry{sum: sum, id: id, exp: v.now().Add(cacheTTL)}
-			v.mu.Unlock()
-			return id, nil
-		}
-		v.mu.Unlock()
-		if attempt >= 2 {
-			return id, nil
-		}
-		// 校验期间缓存被失效（配对转正 / 解绑吊销）：刚读到的身份可能
-		// 已经过时，重新查库，绝不能把旧状态写回缓存。
 	}
+
+	k, found, err := v.keys.KeyByID(keyID)
+	if err != nil {
+		return Identity{}, err
+	}
+	if !found || k.Disabled {
+		return Identity{}, ErrDenied
+	}
+
+	// 新记录是 HMAC，几乎零成本；只有旧 argon2id 记录才需要限并发。
+	// 先做一次格式判断，避免付 64MB 的钱去跑一个 HMAC 比较。
+	okPass, legacy := false, false
+	if strings.HasPrefix(k.Hash, "$"+hmacScheme+"$") {
+		okPass, _ = VerifySecret(v.pepper, keyID, secret, k.Hash)
+	} else {
+		v.sem <- struct{}{}
+		okPass, legacy = VerifySecret(v.pepper, keyID, secret, k.Hash)
+		<-v.sem
+	}
+	if !okPass {
+		return Identity{}, ErrDenied
+	}
+	if legacy {
+		// 校验成功即迁移；失败不影响本次登录（下次再试）。
+		// 带上旧哈希做 CAS：并发校验/轮换时不会把别人刚写的新哈希盖回去。
+		if h, err := v.HashSecret(keyID, secret); err == nil {
+			if err := v.keys.UpdateKeyHash(keyID, k.Hash, h); err != nil {
+				slog.Warn("令牌哈希迁移失败", "key_id", keyID, "err", err)
+			}
+		}
+	}
+
+	id := identityOf(k)
+	if v.cache {
+		v.mu.Lock()
+		v.c[keyID] = cacheEntry{sum: sum, id: id, exp: v.now().Add(cacheTTL)}
+		v.mu.Unlock()
+	}
+	return id, nil
+}
+
+func identityOf(k store.Key) Identity {
+	return Identity{
+		Dev: k.Dev, UserID: k.UserID, Role: Role(k.Role), KeyID: k.KeyID,
+		Pending: k.Pending,
+	}
+}
+
+// cachedHit 只在压测对照路径使用：命中缓存后仍然查一次库，确认密钥
+// 没有被 CLI 吊销、状态没有变化。DB 错误原样返回（由 broker 回 0x03）。
+func (v *Verifier) cachedHit(keyID string, sum [32]byte) (Identity, bool, error) {
+	v.mu.RLock()
+	e, ok := v.c[keyID]
+	v.mu.RUnlock()
+	if !ok || !v.now().Before(e.exp) {
+		return Identity{}, false, nil
+	}
+	if subtle.ConstantTimeCompare(sum[:], e.sum[:]) != 1 {
+		return Identity{}, true, ErrDenied
+	}
+	k, found, err := v.keys.KeyByID(keyID)
+	if err != nil {
+		return Identity{}, true, err
+	}
+	if !found || k.Disabled {
+		return Identity{}, true, ErrDenied
+	}
+	id := identityOf(k)
+	v.mu.Lock()
+	v.c[keyID] = cacheEntry{sum: sum, id: id, exp: v.now().Add(cacheTTL)}
+	v.mu.Unlock()
+	return id, true, nil
 }
 
 // Lookup 实时查库判断一把密钥现在是否仍然有效，绕过缓存。
@@ -190,7 +223,6 @@ func (v *Verifier) Lookup(keyID string) (Identity, bool, error) {
 func (v *Verifier) Invalidate(keyID string) {
 	v.mu.Lock()
 	delete(v.c, keyID)
-	v.epoch++
 	v.mu.Unlock()
 }
 
@@ -200,6 +232,5 @@ func (v *Verifier) Invalidate(keyID string) {
 func (v *Verifier) InvalidateAll() {
 	v.mu.Lock()
 	v.c = map[string]cacheEntry{}
-	v.epoch++
 	v.mu.Unlock()
 }

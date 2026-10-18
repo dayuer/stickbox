@@ -20,6 +20,13 @@ bool prov_save_devkey(const char *key);
 /* 只清设备密钥，保留 Wi-Fi。密钥被吊销/解绑后回到注册流程时用。 */
 void prov_erase_devkey(void);
 
+/* 注册频率闸：1 小时内最多 3 次，超限返回 false（设备应停在配对页退避）。
+ * 计数存 NVS，软件重启后仍有效。 */
+bool prov_rereg_allowed(void);
+
+/* 注册成功后调用一次，消耗当小时配额。 */
+void prov_rereg_note(void);
+
 /* 读自托管服务器地址（NVS namespace "cloud" / key "mqtt_uri"、"api_base"）。
  * 没配过的那一项填空串——调用方回落到 cloud_creds.h 的编译期默认值。
  * 两项独立，只改其中一个也成立。

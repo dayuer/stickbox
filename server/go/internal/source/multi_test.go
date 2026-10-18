@@ -90,8 +90,8 @@ func TestCompositeSwitchesBySourceCount(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := NewComposite(
-				NewClaude(tc.usage, "UTC"),
-				NewSales(tc.sales, "UTC"),
+				NewClaude(tc.usage, NewFixedTZ("UTC")),
+				NewSales(tc.sales, NewFixedTZ("UTC")),
 			)
 			s, err := c.Snapshot(context.Background(), "u1", multiNow)
 			if err != nil {
@@ -110,8 +110,8 @@ func TestCompositeMergedLastUpdateIsOldest(t *testing.T) {
 	old := multiNow.Add(-3 * time.Hour)
 	fresh := multiNow.Add(-time.Minute)
 	c := NewComposite(
-		NewClaude(usageAt(old), "UTC"),
-		NewSales(salesAt(fresh), "UTC"),
+		NewClaude(usageAt(old), NewFixedTZ("UTC")),
+		NewSales(salesAt(fresh), NewFixedTZ("UTC")),
 	)
 	s, err := c.Snapshot(context.Background(), "u1", multiNow)
 	if err != nil {
@@ -126,8 +126,8 @@ func TestCompositeMergedLastUpdateIsOldest(t *testing.T) {
 // 否则经营数据会按额度口径配色（超前变成告警）。
 func TestCompositeKeepsPerWindowDirection(t *testing.T) {
 	c := NewComposite(
-		NewClaude(usageAt(multiNow.Add(-time.Minute)), "UTC"),
-		NewSales(salesAt(multiNow.Add(-2*time.Minute)), "UTC"),
+		NewClaude(usageAt(multiNow.Add(-time.Minute)), NewFixedTZ("UTC")),
+		NewSales(salesAt(multiNow.Add(-2*time.Minute)), NewFixedTZ("UTC")),
 	)
 	s, err := c.Snapshot(context.Background(), "u1", multiNow)
 	if err != nil {
@@ -160,8 +160,8 @@ func TestCompositeIgnoresSourceWithNoWindows(t *testing.T) {
 		},
 	}
 	c := NewComposite(
-		NewClaude(usageAt(multiNow.Add(-30*time.Minute)), "UTC"),
-		NewSales(noGoal, "UTC"),
+		NewClaude(usageAt(multiNow.Add(-30*time.Minute)), NewFixedTZ("UTC")),
+		NewSales(noGoal, NewFixedTZ("UTC")),
 	)
 	s, err := c.Snapshot(context.Background(), "u1", multiNow)
 	if err != nil {
@@ -182,8 +182,8 @@ func TestCompositeNoWindowsPrefersSourceWithData(t *testing.T) {
 			GMV: &sales.Metric{Value: 1, Goal: 0}},
 	}
 	c := NewComposite(
-		NewClaude(fakeUsageStore{}, "UTC"), // 从没上报过
-		NewSales(noGoal, "UTC"),
+		NewClaude(fakeUsageStore{}, NewFixedTZ("UTC")), // 从没上报过
+		NewSales(noGoal, NewFixedTZ("UTC")),
 	)
 	s, err := c.Snapshot(context.Background(), "u1", multiNow)
 	if err != nil {
@@ -200,8 +200,8 @@ func TestCompositeNoWindowsPrefersSourceWithData(t *testing.T) {
 // 一路数据都没有时要出占位快照，并且带着第一路的方向，让文案口径对得上。
 func TestCompositeNoDataAtAll(t *testing.T) {
 	c := NewComposite(
-		NewClaude(fakeUsageStore{}, "UTC"),
-		NewSales(fakeSalesStore{}, "UTC"),
+		NewClaude(fakeUsageStore{}, NewFixedTZ("UTC")),
+		NewSales(fakeSalesStore{}, NewFixedTZ("UTC")),
 	)
 	s, err := c.Snapshot(context.Background(), "u1", multiNow)
 	if err != nil {
@@ -219,8 +219,8 @@ func TestCompositeNoDataAtAll(t *testing.T) {
 func TestCompositeSurvivesOneFailure(t *testing.T) {
 	boom := errors.New("数据库炸了")
 	c := NewComposite(
-		NewClaude(fakeUsageStore{err: boom}, "UTC"),
-		NewSales(salesAt(multiNow.Add(-time.Minute)), "UTC"),
+		NewClaude(fakeUsageStore{err: boom}, NewFixedTZ("UTC")),
+		NewSales(salesAt(multiNow.Add(-time.Minute)), NewFixedTZ("UTC")),
 	)
 	s, err := c.Snapshot(context.Background(), "u1", multiNow)
 	if err != nil {
@@ -235,8 +235,8 @@ func TestCompositeSurvivesOneFailure(t *testing.T) {
 func TestCompositeAllFail(t *testing.T) {
 	boom := errors.New("数据库炸了")
 	c := NewComposite(
-		NewClaude(fakeUsageStore{err: boom}, "UTC"),
-		NewSales(fakeSalesStoreErr{boom}, "UTC"),
+		NewClaude(fakeUsageStore{err: boom}, NewFixedTZ("UTC")),
+		NewSales(fakeSalesStoreErr{boom}, NewFixedTZ("UTC")),
 	)
 	if _, err := c.Snapshot(context.Background(), "u1", multiNow); !errors.Is(err, boom) {
 		t.Fatalf("err = %v，要 %v", err, boom)
@@ -250,7 +250,7 @@ func (f fakeSalesStoreErr) Latest(string) (sales.Report, time.Time, bool, error)
 }
 
 func TestCompositeID(t *testing.T) {
-	c := NewComposite(NewClaude(fakeUsageStore{}, "UTC"), NewSales(fakeSalesStore{}, "UTC"))
+	c := NewComposite(NewClaude(fakeUsageStore{}, NewFixedTZ("UTC")), NewSales(fakeSalesStore{}, NewFixedTZ("UTC")))
 	if got := c.ID(); got != "claude-usage+chaodai-sales" {
 		t.Errorf("ID = %q", got)
 	}

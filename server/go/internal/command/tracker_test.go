@@ -528,3 +528,48 @@ func TestFailedSendKeepsOldPending(t *testing.T) {
 		t.Error("发布失败却把旧记录删了，这条指令整个丢了")
 	}
 }
+
+// 换密钥/吊销/解绑之后，旧 cid 全部作废，不再重投。
+func TestCancelDeviceStopsRetries(t *testing.T) {
+	tr, pub, pres, _, clock := newTracker(t)
+	pres.set("d", true)
+	tr.Send("d", "printer/d/pair", []byte(`{"paired":false}`), true)
+	tr.Send("d", "printer/d/usage", []byte(`{"now":1}`), false)
+
+	if n := tr.CancelDevice("d", "unpaired"); n != 2 {
+		t.Fatalf("CancelDevice 结案 %d 条，期望 2", n)
+	}
+	if tr.Pending("d") != 0 {
+		t.Fatalf("CancelDevice 后仍有 %d 条待确认", tr.Pending("d"))
+	}
+	*clock = clock.Add(retryBase + time.Second)
+	tr.sweep()
+	if n := len(pub.all()); n != 2 {
+		t.Errorf("作废后仍重投了：共 %d 条消息", n)
+	}
+	if o, ok := tr.LastOutcome("d"); !ok || o.Err != "unpaired" {
+		t.Errorf("结局 = %+v ok=%v，期望 unpaired", o, ok)
+	}
+}
+
+func TestPendingDetail(t *testing.T) {
+	tr, _, pres, _, _ := newTracker(t)
+	pres.set("d", true)
+	cid1, _ := tr.Send("d", "printer/d/usage", []byte(`{"now":1}`), false)
+	cid2, _ := tr.Send("d", "printer/d/frame", []byte(`{"ver":2}`), false)
+	tr.Send("other", "printer/other/usage", []byte(`{"now":1}`), false)
+
+	list := tr.PendingDetail("d")
+	if len(list) != 2 {
+		t.Fatalf("明细 = %+v", list)
+	}
+	seen := map[string]bool{list[0].CID: true, list[1].CID: true}
+	if !seen[cid1] || !seen[cid2] {
+		t.Errorf("明细 cid = %+v", list)
+	}
+	tr.Ack("d", cid1, true, "")
+	list = tr.PendingDetail("d")
+	if len(list) != 1 || list[0].CID != cid2 || list[0].Tries == 0 {
+		t.Errorf("确认后明细 = %+v", list)
+	}
+}

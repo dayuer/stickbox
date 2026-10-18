@@ -34,7 +34,7 @@ func TestSoapSetAVTransportURIMatchesPythonGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	const url = "http://192.168.3.237:8091/live.avi"
-	got := soapEnvelope("SetAVTransportURI", [][2]string{
+	got := soapEnvelope(AVTService, "SetAVTransportURI", [][2]string{
 		{"InstanceID", "0"},
 		{"CurrentURI", XMLEscape(url)},
 		{"CurrentURIMetaData", DIDL(url, "StickBox", "video/avi")},

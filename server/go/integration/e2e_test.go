@@ -494,18 +494,26 @@ func pairAndReconnect(t *testing.T, e *env, dev, devKey, code string) (*fakeDevi
 	return d, agentTok
 }
 
-// 设备转正重连后收到 retained 的 paired=true，确认它，服务端结案。
-func TestEndToEndPairAckAfterReconnect(t *testing.T) {
+// pair 是 retained 状态通知，不做 ACK 跟踪：消息里没有 cid，服务端也不会
+// 为一个重新注册的新密钥重投旧解绑指令。
+func TestEndToEndPairIsNotTracked(t *testing.T) {
 	e := startServer(t)
 	devKey, code := e.register("f412fa87c9e0")
 	dev, _ := pairAndReconnect(t, e, "f412fa87c9e0", devKey, code)
 
-	cid := cidOf(t, dev.waitPair(5*time.Second))
-	dev.ack(cid, true, "")
-
-	waitPendingZero(t, e, "f412fa87c9e0")
-	if o, ok := e.cmd.LastOutcome("f412fa87c9e0"); !ok || !o.OK {
-		t.Errorf("结局 = %+v ok=%v", o, ok)
+	payload := dev.waitPair(5 * time.Second)
+	var m map[string]any
+	if err := json.Unmarshal(payload, &m); err != nil {
+		t.Fatalf("pair 不是 JSON：%s", payload)
+	}
+	if _, ok := m["cid"]; ok {
+		t.Errorf("pair 不应带 cid：%s", payload)
+	}
+	if m["paired"] != true {
+		t.Errorf("pair payload = %s", payload)
+	}
+	if n := e.cmd.Pending("f412fa87c9e0"); n != 0 {
+		t.Errorf("pair 不应被跟踪：pending=%d", n)
 	}
 }
 
@@ -514,18 +522,31 @@ func TestEndToEndUsageAckClearsPending(t *testing.T) {
 	e := startServer(t)
 	devKey, code := e.register("f412fa87c9e0")
 	dev, agentTok := pairAndReconnect(t, e, "f412fa87c9e0", devKey, code)
-	dev.ack(cidOf(t, dev.waitPair(5*time.Second)), true, "")
 	if err := dev.subscribeUsage(); err != nil {
 		t.Fatalf("转正后订阅用量 = %v", err)
 	}
 
 	e.reportUsage(agentTok, usageReport(time.Now(), 12.5))
-	cid := cidOf(t, dev.waitUsage(5*time.Second))
-	if e.cmd.Pending("f412fa87c9e0") == 0 {
-		t.Error("下行之后应当有待确认的指令")
-	}
+	dev.waitUsage(5 * time.Second) // 确认消息确实投到了设备
+	// 订阅补发和本次上报可能各带一个 cid，取当前真正待确认的那条。
+	cid := waitPendingTopic(t, e, "f412fa87c9e0", "printer/f412fa87c9e0/usage")
 	dev.ack(cid, true, "")
-	waitPendingZero(t, e, "f412fa87c9e0")
+	waitPendingGone(t, e, "f412fa87c9e0", cid)
+}
+
+func waitPendingTopic(t *testing.T, e *env, dev, topic string) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, p := range e.cmd.PendingDetail(dev) {
+			if p.Topic == topic {
+				return p.CID
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("%s 没有待确认的 %s", dev, topic)
+	return ""
 }
 
 // 设备回 ok=0（刻意不应用）是永久失败，立即结案不再重投。
@@ -533,8 +554,13 @@ func TestEndToEndNackStopsRetry(t *testing.T) {
 	e := startServer(t)
 	devKey, code := e.register("f412fa87c9e0")
 	dev, _ := pairAndReconnect(t, e, "f412fa87c9e0", devKey, code)
-
-	cid := cidOf(t, dev.waitPair(5*time.Second))
+	if err := dev.subscribeUsage(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.cmd.Send("f412fa87c9e0", "printer/f412fa87c9e0/usage", []byte(`{"now":1}`), false); err != nil {
+		t.Fatal(err)
+	}
+	cid := cidOf(t, dev.waitUsage(5*time.Second))
 	dev.ack(cid, false, "stale_key")
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -559,8 +585,13 @@ func TestEndToEndDuplicateAckIsHarmless(t *testing.T) {
 	e := startServer(t)
 	devKey, code := e.register("f412fa87c9e0")
 	dev, _ := pairAndReconnect(t, e, "f412fa87c9e0", devKey, code)
-
-	cid := cidOf(t, dev.waitPair(5*time.Second))
+	if err := dev.subscribeUsage(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.cmd.Send("f412fa87c9e0", "printer/f412fa87c9e0/usage", []byte(`{"now":1}`), false); err != nil {
+		t.Fatal(err)
+	}
+	cid := cidOf(t, dev.waitUsage(5*time.Second))
 	dev.ack(cid, true, "")
 	dev.ack(cid, true, "") // 重投撞上在途回执时会出现
 
@@ -573,7 +604,13 @@ func TestEndToEndPendingKeyCannotForgeAck(t *testing.T) {
 	e := startServer(t)
 	devKey, code := e.register("f412fa87c9e0")
 	dev, _ := pairAndReconnect(t, e, "f412fa87c9e0", devKey, code)
-	cid := cidOf(t, dev.waitPair(5*time.Second))
+	if err := dev.subscribeUsage(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.cmd.Send("f412fa87c9e0", "printer/f412fa87c9e0/usage", []byte(`{"now":1}`), false); err != nil {
+		t.Fatal(err)
+	}
+	cid := cidOf(t, dev.waitUsage(5*time.Second))
 
 	// 知道 MAC 的人注册一把 pending 密钥，连上来想替它回执。
 	// 用不同的 client id：同 id 会触发 MQTT 会话接管，把合法设备顶掉，
@@ -598,6 +635,28 @@ func TestEndToEndPendingKeyCannotForgeAck(t *testing.T) {
 	// 真正的设备仍能正常确认。
 	dev.ack(cid, true, "")
 	waitPendingZero(t, e, "f412fa87c9e0")
+}
+
+// 上报用量也可能触发 frame 通知（另一个 cid），所以只等这一条 cid 结案。
+func waitPendingGone(t *testing.T, e *env, dev, cid string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if !pendingContains(e, dev, cid) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("%s 的 cid %s 仍未结案", dev, cid)
+}
+
+func pendingContains(e *env, dev, cid string) bool {
+	for _, p := range e.cmd.PendingDetail(dev) {
+		if p.CID == cid {
+			return true
+		}
+	}
+	return false
 }
 
 func waitPendingZero(t *testing.T, e *env, dev string) {

@@ -88,7 +88,7 @@ func TestFramesBackfillOnStartup(t *testing.T) {
 		e.store,
 		[]frames.Themed{{
 			Theme:  render.Quota{R: rr},
-			Source: source.NewClaude(usage.NewService(e.store, usageNoopPub{}, time.Now), "UTC"),
+			Source: source.NewClaude(usage.NewService(e.store, usageNoopPub{}, time.Now), source.NewFixedTZ("UTC")),
 		}},
 		pub,
 		tinyBuilder{},

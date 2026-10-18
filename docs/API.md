@@ -52,14 +52,15 @@ StickBox 把电视变成 Claude 订阅用量看板：用户电脑上的 `stickbo
 **当不透明字符串处理，不要解析、不要截断、不要打进日志。** 固件分配
 64 字节缓冲。HTTP 请求用 `Authorization: Bearer <token>`。
 
-### 0.2 两类主体
+### 0.2 主体与角色
 
 | 主体 | 凭证 | 能做什么 |
 |---|---|---|
 | 设备（ESP32） | device 令牌 | 注册/换配对码；连 MQTT 发心跳、收用量与配对通知 |
-| agent（电脑） | agent 令牌 | 配对/解绑、列出名下屏、读写用量、注销 |
+| agent（电脑） | agent 令牌 | 配对/解绑、列出名下屏、读写用量、设置时区、注销 |
+| user（预留） | user 令牌 | 与 agent 同级的用户操作（设置时区等）；目前没有签发入口 |
 
-agent 不能连 MQTT；设备不能调 agent 的 HTTP 端点。
+agent / user 令牌不能连 MQTT；设备不能调 agent/user 的 HTTP 端点。
 
 ---
 
@@ -83,6 +84,8 @@ agent 不能连 MQTT；设备不能调 agent 的 HTTP 端点。
 | POST | `/api/data` | agent | 上报一次当日经营数据 |
 | GET | `/api/agent/coredumps` | agent | 列出自己名下设备的崩溃记录 |
 | POST | `/api/agent/logout` | agent | 注销当前 agent 令牌 |
+| GET | `/api/user/tz` | agent/user | 当前生效时区及来源 |
+| PUT | `/api/user/tz` | agent/user | 设置/清除用户级时区，立即换帧 |
 | GET | `/healthz` | 无 | 健康检查，只返回 200/503 |
 <!-- endpoints:end -->
 
@@ -253,8 +256,10 @@ device 鉴权，且密钥必须已配对（pending 密钥返回 `403`）。
 控制。只认 `{Root}/fw` 下的文件名。
 
 > 自托管注意：设备的 TLS 接收缓冲是 8KB，而 nginx 默认 `ssl_buffer_size`
-> 是 16k，两者都不支持 MFL 协商——必须给这个路径设 `ssl_buffer_size 4k`，
-> 否则 OTA 下载直接失败。见 `server/DEPLOY.md`。
+> 是 16k，两者都不支持 MFL 协商——必须在 nginx 的 `http`/`server` 层设
+> `ssl_buffer_size 4k`（写进 `location` 会让 `nginx -t` 报错），否则
+> OTA 下载直接失败。另需给 `location /fw/` 配 https 反代到 9443。见
+> `server/DEPLOY.md` 与 `server/deploy/nginx-stickbox.conf`。
 
 ### 2.7 MQTT 连接
 
@@ -609,6 +614,44 @@ agent 鉴权。列出自己名下设备的崩溃记录（`dev`、`at`、`size`�
 注销当前 agent 令牌（只影响这一把）。
 
 请求体可省略。成功 `200`：`{"ok":1}`。之后该令牌再请求返回 `401`。
+
+### 3.8 `GET /api/user/tz`、`PUT /api/user/tz`
+
+用户级时区。**agent 令牌或 user 令牌均可**（user 角色预留给将来的
+App/网页端）。时区优先级固定为：
+
+```
+用户设置（users.tz） > agent 上报（POST /api/usage 的 tz） > 配置 default_tz
+```
+
+`GET` 返回当前**生效值**和来源：
+
+```json
+{"tz":"Asia/Jakarta","source":"user"}
+```
+
+`source` 是 `user` / `agent` / `default` 之一。agent 上报非法时区时会在
+摄入阶段被丢弃（只记日志），不会让整条用量失败。
+
+`PUT` 设置用户时区：
+
+```json
+{"tz":"Asia/Jakarta"}
+```
+
+- 接受 IANA 名（`Asia/Jakarta`、`America/New_York`，必须是
+  `time.LoadLocation` 能识别的）；
+- 也接受 `+07:00` / `-05:00` 这类**整小时**固定偏移，服务端规范化为
+  `Etc/GMT-7` / `Etc/GMT+5`（注意 IANA 的符号与 UTC 相反）；
+- `{"tz":""}` 表示清除用户设置，回退到 agent 上报 / `default_tz`；
+- 缺字段、非法名（含 `Local`、`+07:30`、带 `..` 的路径）返回
+  `400 {"e":"bad tz"}`，不会静默忽略；
+- 成功 `200`，响应与 `GET` 相同（生效值 + 来源）。
+
+设置/清除成功后服务端**立即重新渲染该用户的帧并给名下设备发 frame 通知**，
+不需要等下一次用量上报。`stickbox-agent tz set/show/clear` 是它的客户端；
+服务器本机也可以用 `stickboxd user tz <user_id> [tz]`（走回环 admin 接口，
+同样立即生效）。
 
 ---
 

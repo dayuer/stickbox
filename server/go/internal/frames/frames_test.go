@@ -26,7 +26,15 @@ type fakeStore struct {
 	devs   map[string][]string
 	owners map[string]string
 	keys   map[string]store.Key
+	tzs    map[string]string
 	err    error
+}
+
+func (f *fakeStore) UserTZ(userID string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.tzs[userID], nil
 }
 
 func (f *fakeStore) DevicesOfUser(userID string) ([]string, error) {
@@ -200,10 +208,13 @@ func testBundle(payload string) *frame.Bundle { return testBundleN(payload, 0) }
 
 // themed 是这些测试默认的主题表：一个主题，吃 Claude 那一路。
 // 要验播放列表/多主题的用例自己传两项（见 playlist_test.go）。
+//
+// 用 NewTZResolver 而不是 NewFixedTZ：fakeStore 实现了 UserTZ，
+// 时区优先级（用户设置 > agent 上报 > 默认）要在这些用例里真的生效。
 func (f *fixture) themed() []Themed {
 	return []Themed{{
 		Theme:  stubTheme{id: "quota", src: "claude-usage"},
-		Source: source.NewClaude(f.us, "UTC"),
+		Source: source.NewClaude(f.us, source.NewTZResolver(f.st, "UTC")),
 	}}
 }
 
@@ -541,6 +552,36 @@ func TestRebuildUsesUserTimezone(t *testing.T) {
 	}
 	if snap.Now.Hour() != 3 || snap.Now.Day() != 18 {
 		t.Errorf("快照本地时间 = %s，期望 10-18 03:00", snap.Now)
+	}
+}
+
+// T29：用户级设置优先于 agent 上报；清除后退回 agent，再退回默认。
+func TestRebuildTimezonePriority(t *testing.T) {
+	f := newFixture(t)
+	f.us.set("u1", usage.Report{
+		FiveHour: &usage.Window{UsedPercentage: 10, ResetsAt: 1792228800},
+		TZ:       "Asia/Tokyo",
+	}, time.Date(2026, 10, 17, 19, 0, 0, 0, time.UTC))
+	f.setNow(time.Date(2026, 10, 17, 20, 0, 0, 0, time.UTC))
+
+	f.st.tzs = map[string]string{"u1": "Asia/Jakarta"}
+	f.rebuild("u1")
+	if loc := f.b.snapshot().Now.Location().String(); loc != "Asia/Jakarta" {
+		t.Fatalf("用户时区没生效：%s", loc)
+	}
+
+	f.st.tzs["u1"] = ""
+	f.rebuild("u1")
+	if loc := f.b.snapshot().Now.Location().String(); loc != "Asia/Tokyo" {
+		t.Fatalf("清除后应回退 agent 时区：%s", loc)
+	}
+
+	f.us.set("u1", usage.Report{
+		FiveHour: &usage.Window{UsedPercentage: 10, ResetsAt: 1792228800},
+	}, time.Date(2026, 10, 17, 19, 30, 0, 0, time.UTC))
+	f.rebuild("u1")
+	if loc := f.b.snapshot().Now.Location().String(); loc != "UTC" {
+		t.Fatalf("agent 也没报时应回退默认：%s", loc)
 	}
 }
 

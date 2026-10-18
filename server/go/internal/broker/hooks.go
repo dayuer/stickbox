@@ -51,6 +51,8 @@ type Hook struct {
 	cmd CommandTracker
 	// pending 限制同一 dev 的 pending 连接频率。
 	pending *pendingLimiter
+	// auth 是最近 CONNECT 结果环形缓冲，device show 诊断用。
+	auth *authLog
 	// admit 是全局新连接准入（每秒）。
 	admit *admission
 }
@@ -77,6 +79,7 @@ func (h *Hook) Provides(b byte) bool {
 func (h *Hook) OnConnect(cl *mqtt.Client, pk packets.Packet) error {
 	if h.admit != nil && !h.admit.allow(cl.Net.Remote) {
 		slog.Warn("MQTT 连接被准入限流", "remote", cl.Net.Remote)
+		h.noteAuth(cl, string(pk.Connect.Username), 0x03, "admission")
 		return packets.ErrServerUnavailable // 0x03：让设备退避重试，不要清密钥
 	}
 	user := string(pk.Connect.Username)
@@ -85,27 +88,32 @@ func (h *Hook) OnConnect(cl *mqtt.Client, pk packets.Packet) error {
 		if errors.Is(err, auth.ErrDenied) {
 			// 真·密钥不对：让 OnConnectAuthenticate 回 0x05。
 			slog.Warn("MQTT 认证失败", "username", user, "remote", cl.Net.Remote)
+			h.noteAuth(cl, user, 0x05, "invalid_key")
 			return nil
 		}
 		// 查库失败等临时错误：0x03，不能告诉设备密钥无效。
 		slog.Warn("MQTT 认证暂时不可用", "username", user, "remote", cl.Net.Remote, "err", err)
+		h.noteAuth(cl, user, 0x03, "db_error")
 		return packets.ErrServerUnavailable
 	}
 
-	// agent 只走 HTTP，ACL 也不给它任何 topic。
-	if id.Role == auth.RoleAgent {
-		slog.Warn("agent 令牌不允许连 MQTT", "username", user)
+	// 非设备令牌（agent / user）只走 HTTP，ACL 也不给它们任何 topic。
+	if id.Role != auth.RoleDevice {
+		slog.Warn("非设备令牌不允许连 MQTT", "username", user, "role", id.Role)
+		h.noteAuth(cl, user, 0x05, "role")
 		return nil
 	}
 
 	// T7 起设备注册时就直接带 dev，不会再签出 dev='' 的密钥。
 	if id.Role == auth.RoleDevice && id.Dev == "" {
 		slog.Warn("设备密钥未绑定 dev，拒绝连接；请重新注册", "key_id", id.KeyID)
+		h.noteAuth(cl, user, 0x05, "no_dev")
 		return nil
 	}
 	// device 角色的 username 必须等于它自己的 dev——防止拿 A 的密钥冒充 B 连接。
 	if id.Role == auth.RoleDevice && id.Dev != user {
 		slog.Warn("MQTT username 与密钥不符", "username", user, "key_dev", id.Dev)
+		h.noteAuth(cl, user, 0x05, "dev_mismatch")
 		return nil
 	}
 	// pending 密钥只能读 pair；它不能把已在线 active 设备顶下线。
@@ -113,6 +121,7 @@ func (h *Hook) OnConnect(cl *mqtt.Client, pk packets.Packet) error {
 		if h.pending != nil && !h.pending.allow(id.Dev, time.Now()) {
 			// 限频不是“密钥无效”，回 0x03 让设备退避。
 			slog.Warn("pending 连接过频，稍后重试", "dev", id.Dev, "remote", cl.Net.Remote)
+			h.noteAuth(cl, user, 0x03, "pending_rate")
 			return packets.ErrServerUnavailable
 		}
 		// CLI 的 device unbind/revoke 直接改库，不和 broker 同进程，没法
@@ -124,16 +133,20 @@ func (h *Hook) OnConnect(cl *mqtt.Client, pk packets.Packet) error {
 			// 已有一台 active 在线：这是“稍后再试”，不是密钥被吊销。
 			slog.Warn("pending 连接试图顶掉在线设备，稍后重试",
 				"dev", id.Dev, "remote", cl.Net.Remote)
+			h.noteAuth(cl, user, 0x03, "pending_takeover")
 			return packets.ErrServerUnavailable
 		}
 		h.evictStale(cl.ID)
+		h.noteAuth(cl, user, 0x00, "ok_pending")
 		return nil
 	}
 	if !h.ids.admit(cl, id) {
 		slog.Warn("连接身份登记失败，稍后重试", "remote", cl.Net.Remote)
+		h.noteAuth(cl, user, 0x03, "admit_failed")
 		return packets.ErrServerUnavailable
 	}
 	h.evictStale(cl.ID)
+	h.noteAuth(cl, user, 0x00, "ok")
 	return nil
 }
 
@@ -168,6 +181,13 @@ func (h *Hook) dropRevoked(dev string) {
 		slog.Warn("密钥已吊销，断开在线连接", "dev", dev)
 		if h.srv != nil {
 			_ = h.srv.DisconnectClient(cl, packets.ErrNotAuthorized)
+		}
+	}
+	// 吊销后设备已经不能以原身份回 ACK，pair 指令（解绑通知）再重投也没有
+	// 意义；直接结案，别把重试预算耗在一条不会有人确认的指令上。
+	if len(stale) > 0 && h.cmd != nil {
+		if n := h.cmd.CancelDevice(dev, "device_revoked"); n > 0 {
+			slog.Info("吊销后作废旧指令", "dev", dev, "count", n)
 		}
 	}
 }

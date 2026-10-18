@@ -93,7 +93,12 @@ static void services_task(void *arg)
     ESP_LOGI(TAG, "云端服务已启动，堆=%u", (unsigned)esp_get_free_heap_size());
     memdiag_heap("cloud_client_start 之后（含 MQTT TLS 长连接）");
 
-    /* 密钥与服务器地址都就位了，立刻拉一次最新帧。排在 ota_start 之前：
+    /* 等 MQTT 连上再拉第一帧：MQTT 和取帧各要一次 TLS 握手，同时开会让
+     * 开机堆最低点再掉约 20KB（v0.9.4 实测 14KB）。MQTT 迟迟连不上时
+     * 最多等 5 秒，避免完全不出帧。 */
+    for (int i = 0; i < 50 && !cloud_connected(); i++)
+        vTaskDelay(pdMS_TO_TICKS(100));
+    /* 密钥与服务器地址都就位了，拉一次最新帧。排在 ota_start 之前：
      * 两边都要开 TLS，先把看板起来，升级检查本来就推迟到开机 10 分钟后。 */
     framefetch_start();
 
@@ -221,6 +226,14 @@ static void suicide_task(void *arg)
 void app_main(void)
 {
     ESP_LOGI(TAG, "=== StickBox 电视看板 ===");
+    /* NVS 先于 ota_boot_check：崩溃型回滚的“坏版本”要写进 NVS，晚初始化
+     * 会让这条记录静默失败。 */
+    esp_err_t r = nvs_flash_init();
+    if (r == ESP_ERR_NVS_NO_FREE_PAGES || r == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ESP_ERROR_CHECK(nvs_flash_init());
+    }
+    ESP_LOGI(TAG, "NVS 就绪（OTA 坏版本记录可写）");
     ota_boot_check();     /* 尽早：要先知道本次是不是 OTA 后的试运行 */
 #if CONFIG_STICKBOX_OTA_SUICIDE
     /* 只为验证 OTA 回滚而存在的测试版本。
@@ -235,11 +248,6 @@ void app_main(void)
     lcd_ui_init();
     ESP_LOGI(TAG, "堆@LCD后=%u", (unsigned)esp_get_free_heap_size());
 
-    esp_err_t r = nvs_flash_init();
-    if (r == ESP_ERR_NVS_NO_FREE_PAGES || r == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ESP_ERROR_CHECK(nvs_flash_init());
-    }
     s_evt = xEventGroupCreate();
 
     /* 开机按住 MENU 键 = 清空 Wi-Fi 配置重新配网 */

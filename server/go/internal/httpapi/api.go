@@ -28,6 +28,8 @@ type Publisher interface {
 	PublishUsage(dev string, payload []byte) error
 	PublishPair(dev string, payload []byte) error
 	KickDevice(dev string)
+	// CancelDevice 结案该设备未确认的指令（解绑后不再重投）。
+	CancelDevice(dev, reason string) int
 }
 
 type API struct {
@@ -77,6 +79,12 @@ func New(cfg *config.Config, st *store.Store, v *auth.Verifier,
 	}
 }
 
+// RegisterQuota 返回某台设备注册限流的剩余次数与最早恢复时间，
+// 给服务器本机的 device show 诊断用。
+func (a *API) RegisterQuota(dev string) (left, limit int, reset time.Time) {
+	return a.regDev.remaining(dev)
+}
+
 // Usage 暴露用量服务，main 拿它接到 broker 上（设备订阅时补发）。
 func (a *API) Usage() *usage.Service { return a.usage }
 
@@ -116,6 +124,10 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/data", a.requireAgent(a.handleDataPost))
 	mux.Handle("GET /api/agent/coredumps", a.requireAgent(a.handleAgentCoredumps))
 	mux.Handle("POST /api/agent/logout", a.requireAgent(a.handleAgentLogout))
+
+	// 用户级时区：agent 或（将来的）user 令牌都可以设置。
+	mux.Handle("GET /api/user/tz", a.requireUser(a.handleUserTZGet))
+	mux.Handle("PUT /api/user/tz", a.requireUser(a.handleUserTZPut))
 
 	return drainBody(mux)
 }
@@ -171,7 +183,16 @@ func (a *API) requireAgent(fn handlerFn) http.Handler {
 	return a.guard(fn, auth.RoleAgent)
 }
 
+// requireUser 接受 agent 或 user 角色：两者都代表一个用户。
+func (a *API) requireUser(fn handlerFn) http.Handler {
+	return a.guardAny(fn, auth.RoleAgent, auth.RoleUser)
+}
+
 func (a *API) guard(fn handlerFn, want auth.Role) http.Handler {
+	return a.guardAny(fn, want)
+}
+
+func (a *API) guardAny(fn handlerFn, want ...auth.Role) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tok, ok := bearerToken(r)
 		if !ok {
@@ -184,7 +205,14 @@ func (a *API) guard(fn handlerFn, want auth.Role) http.Handler {
 			unauthorized(w)
 			return
 		}
-		if id.Role != want {
+		allowed := false
+		for _, role := range want {
+			if id.Role == role {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
 			unauthorized(w)
 			return
 		}

@@ -121,7 +121,12 @@ docker inspect --format '{{.State.Health.Status}}' stickboxd   # 期望 healthy
   `curl -s http://127.0.0.1:9090/metrics`。不要把 9090 暴露到公网。
 
 宿主机 nginx 在 443 终止 TLS，再反代到本机 9443（反代本身也走 TLS）。
-站点文件 `/etc/nginx/sites-available/mqtt.stickbox.ai`：
+仓库里的 `server/deploy/nginx-stickbox.conf` 与生产
+`/etc/nginx/sites-available/mqtt.stickbox.ai` 一致，直接拷贝即可：
+
+```bash
+sudo cp server/deploy/nginx-stickbox.conf /etc/nginx/sites-available/mqtt.stickbox.ai
+```
 
 ```nginx
 server {
@@ -135,15 +140,19 @@ server {
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
     client_max_body_size 32k;
+    # 设备 mbedTLS 收包缓冲 8KB、不协商 MFL：record 必须 <8KB，否则 OTA 下载失败。
+    # 只能放在 server（或 http）层；放进 location 会让 nginx -t 报
+    # "ssl_buffer_size directive is not allowed here"。
+    ssl_buffer_size 4k;
 
     # 健康检查不鉴权，只回答 200/503；可以给外部 uptime 监控用。
     location = /healthz {
-        proxy_pass https://127.0.0.1:9443;
+        proxy_pass https://127.0.0.1:9443/healthz;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_connect_timeout 5s;
+        proxy_connect_timeout 3s;
         proxy_read_timeout 5s;
+        access_log off;
     }
 
     location /api/ {
@@ -155,6 +164,16 @@ server {
         proxy_set_header X-Forwarded-Proto https;
         proxy_connect_timeout 5s;
         proxy_read_timeout 30s;
+    }
+
+    # OTA 固件下载（不鉴权，sha256 由 manifest 校验）。
+    # 漏掉这个 location，请求会落到 location / 的兜底 404。
+    location /fw/ {
+        proxy_pass https://127.0.0.1:9443;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 120s;
     }
 
     location / {
@@ -333,9 +352,19 @@ docker exec stickboxd /stickboxd -conf /etc/stickbox/config.json device list
 | `device list` | 列出全部密钥（含「待配对」状态） |
 | `device revoke <key_id>` | 吊销一把 |
 | `device unbind <dev>` | **强制解绑**，处理二手转让 |
-| `user list` | 列出用户（没有手机号） |
+| `user list` | 列出用户（没有手机号；含用户时区） |
+| `user tz <user_id> [tz]` | 设置用户时区；省略 tz 表示清除（如 `Asia/Jakarta`、`+07:00`） |
 
 `device unbind` 绕过所有权检查，所以只能在服务器上执行，不暴露为 API。
+
+`user tz` 在服务端运行时走本机 admin 接口（`127.0.0.1:9091`），写库后
+**立即重渲并通知设备换帧**；stickboxd 没运行时退回直接写数据库，修改会在
+下次启动/用量上报后生效。时区优先级：用户设置 > agent 上报 >
+`default_tz`；非法时区直接报错。平时用户自己在电脑上执行
+`stickbox-agent tz set/show/clear`，不需要登服务器。
+
+旧库升级不需要手工迁移：本版首次启动会自动给 `users` 表补上 `tz` 列
+（`ALTER TABLE ... ADD COLUMN tz TEXT NOT NULL DEFAULT ''`）。
 
 ## OTA 下载对 TLS record 大小的依赖
 
@@ -344,16 +373,49 @@ docker exec stickboxd /stickboxd -conf /etc/stickbox/config.json device list
 两者都不支持 MFL（Maximum Fragment Length）协商，所以**设备收不下 16KB 的
 record，OTA 下载会直接失败**。
 
-自托管的人必须给固件下载路径调小 record：
+自托管的人必须在 `server`（或 `http`）层调小 record：
 
 ```nginx
-location /fw/ {
+server {
+    # ...
+
+    # 设备 mbedTLS 收包缓冲 8KB、不协商 MFL：record 必须 <8KB，否则 OTA 下载失败
     ssl_buffer_size 4k;
-    proxy_pass http://127.0.0.1:9443;
+
+    # OTA 固件下载（不鉴权，sha256 由 manifest 校验）
+    location /fw/ {
+        proxy_pass https://127.0.0.1:9443;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 120s;
+    }
 }
 ```
 
-不走 nginx、直接用 stickboxd 的 HTTPS 时同理，要确认发出的 record ≤ 8KB。
+两个容易写错的地方：
+
+- **`ssl_buffer_size` 不能写在 `location` 里**。它只允许出现在 `http` /
+  `server` 上下文，放进 `location` 时 `nginx -t` 会直接报
+  `"ssl_buffer_size" directive is not allowed here`。整台 server 只有
+  443 一个 HTTPS 入口，在 `server` 层设一次即可，不需要（也不能）只给
+  `/fw/` 设。
+- **`proxy_pass` 必须是 `https://127.0.0.1:9443`**。stickboxd 的 9443 是
+  TLS 监听，写成 `http://` 会反代失败（400/502），OTA 一样下载不了。
+
+完整文件见 `server/deploy/nginx-stickbox.conf`。验证路由是否真的到了
+stickboxd（而不是被 `location /` 的兜底 404 截住）：
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://mqtt.stickbox.ai/fw/__probe__.bin
+# 期望 404；再看响应体应是 stickboxd 的 "404 page not found"，
+# 不是 nginx 的 HTML 错误页
+curl -s https://mqtt.stickbox.ai/fw/__probe__.bin
+```
+
+`stickbox-agent doctor` 的「固件下载路由」会自动做这个区分：nginx 的
+HTML 404 判为失败并提示补 `location /fw/`。不走 nginx、直接用 stickboxd
+的 HTTPS 时同理，要确认发出的 record ≤ 8KB。
 
 改了之后务必实际跑一次完整 OTA 验证——这条依赖在日志里的表现只是下载失败，
 不会指向 record 大小。
@@ -364,3 +426,20 @@ location /fw/ {
 （`esp_crt_bundle_attach`）。**自托管如果用私有 CA 签的证书，这两条链路都走
 不通**（配网填的自托管地址只影响连哪台服务器，不影响信任哪个 CA）。
 目前只能用公共 CA 签发的证书，或者自行改固件换成自带 CA。
+
+## 设备诊断（服务器本机）
+
+```sh
+stickboxd -conf /opt/stickbox/config.json device show <dev> [--last N]
+```
+
+只读诊断，从 `admin_addr`（默认 `127.0.0.1:9091`，配置层强制回环）取
+运行期状态，不打开数据库文件、不输出任何密钥材料。输出包括：
+
+- 该设备的全部 key_id 与状态（active / pending / disabled）及当前在线连接用的 key_id
+- 最近 N 次 MQTT CONNECT 的 CONNACK 返回码（0x00 / 0x03 / 0x05）和原因
+- 未确认的下行 cid、重投次数与下次重投时间
+- 最近一次用量、帧版本、注册限流剩余额度
+
+`admin_addr` 只允许回环地址；配置成 `0.0.0.0` 或省略主机名会被拒绝启动。
+不要把该端口经 nginx 暴露到公网。

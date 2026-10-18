@@ -173,6 +173,10 @@ type results struct {
 	ReportsErr int64              `json:"reports_err"`
 	Timeouts   int64              `json:"frame_notify_timeouts"`
 	LatencyMS  map[string]float64 `json:"frame_notify_latency_ms"`
+	ConnectMS  map[string]float64 `json:"mqtt_connect_latency_ms"`
+	Connects   int64              `json:"mqtt_connects"`
+	CPUTimeS   float64            `json:"server_cpu_time_s,omitempty"`
+	CPUPercent float64            `json:"server_cpu_percent,omitempty"`
 	Samples    []sample           `json:"samples"`
 	FramesKB   int64              `json:"frames_disk_kb"`
 	Final      string             `json:"final_metrics"`
@@ -190,6 +194,7 @@ func run(args []string) {
 	framesDir := fs.String("frames-dir", "/tmp/t21/data/frames", "帧缓存目录（统计磁盘占用）")
 	outDir := fs.String("out", "/tmp/t21/out", "结果输出目录")
 	waitTimeout := fs.Duration("timeout", 30*time.Second, "等 frame 通知的上限")
+	serverPID := fs.Int("server-pid", 0, "服务端进程 PID；给了就统计这段时间的 CPU")
 	fs.Parse(args)
 
 	raw, err := os.ReadFile(*statePath)
@@ -210,6 +215,9 @@ func run(args []string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	wallStart := time.Now()
+	cpuStart, haveCPU := processCPUTime(*serverPID)
+
 	devAgent := map[string]int{}
 	agentCh := make([]chan time.Time, len(st.Agents))
 	for i := range agentCh {
@@ -221,6 +229,8 @@ func run(args []string) {
 		}
 	}
 
+	var connectMu sync.Mutex
+	var connectLat []time.Duration
 	devices := 0
 	for _, ag := range st.Agents {
 		for _, dev := range ag.Devices {
@@ -230,6 +240,11 @@ func run(args []string) {
 				StateDir: filepath.Join(st.DeviceStatesDir, dev),
 				Insecure: true, NoFetch: true,
 				Logf: func(string, ...any) {},
+				OnConnected: func(dev string, d time.Duration) {
+					connectMu.Lock()
+					connectLat = append(connectLat, d)
+					connectMu.Unlock()
+				},
 				OnFrameNotify: func(dev string, ver uint64) {
 					if idx, ok := devAgent[dev]; ok {
 						select {
@@ -379,6 +394,28 @@ func run(args []string) {
 	mu.Lock()
 	res.Samples = samples
 	mu.Unlock()
+	connectMu.Lock()
+	conn := append([]time.Duration(nil), connectLat...)
+	connectMu.Unlock()
+	sort.Slice(conn, func(i, j int) bool { return conn[i] < conn[j] })
+	res.Connects = int64(len(conn))
+	res.ConnectMS = map[string]float64{}
+	if len(conn) > 0 {
+		res.ConnectMS["p50"] = ms(percentile(conn, .50))
+		res.ConnectMS["p95"] = ms(percentile(conn, .95))
+		res.ConnectMS["p99"] = ms(percentile(conn, .99))
+		res.ConnectMS["max"] = ms(conn[len(conn)-1])
+		res.ConnectMS["avg"] = ms(avg(conn))
+	}
+	if haveCPU {
+		if cpuEnd, ok := processCPUTime(*serverPID); ok {
+			wall := time.Since(wallStart)
+			res.CPUTimeS = cpuEnd.Seconds() - cpuStart.Seconds()
+			if wall > 0 {
+				res.CPUPercent = res.CPUTimeS / wall.Seconds() * 100
+			}
+		}
+	}
 	res.FramesKB = dirSizeKB(*framesDir)
 	res.Final = fetchText(*metricsURL)
 	_ = finalTxt
@@ -442,6 +479,45 @@ func waitMQTT(ctx context.Context, metricsURL string, want int, max time.Duratio
 		}
 	}
 	fmt.Println("预热超时，继续（连接数可能未满）")
+}
+
+// processCPUTime 读进程累计 CPU 时间（user+sys）。用 ps -o time=，
+// macOS/Linux 都支持；解析 [[dd-]hh:]mm:ss[.ss]。
+func processCPUTime(pid int) (time.Duration, bool) {
+	if pid <= 0 {
+		return 0, false
+	}
+	out, err := exec.Command("ps", "-o", "time=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return 0, false
+	}
+	s := strings.TrimSpace(string(out))
+	if s == "" {
+		return 0, false
+	}
+	var days int
+	if i := strings.IndexByte(s, '-'); i >= 0 {
+		days, _ = strconv.Atoi(s[:i])
+		s = s[i+1:]
+	}
+	parts := strings.Split(s, ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return 0, false
+	}
+	var h, m int
+	var sec float64
+	if len(parts) == 3 {
+		h, _ = strconv.Atoi(parts[0])
+		m, _ = strconv.Atoi(parts[1])
+		sec, _ = strconv.ParseFloat(parts[2], 64)
+	} else {
+		m, _ = strconv.Atoi(parts[0])
+		sec, _ = strconv.ParseFloat(parts[1], 64)
+	}
+	return time.Duration(days)*24*time.Hour +
+		time.Duration(h)*time.Hour +
+		time.Duration(m)*time.Minute +
+		time.Duration(sec*float64(time.Second)), true
 }
 
 func fetchSample(metricsURL string) sample {
@@ -636,6 +712,14 @@ func printSummary(r results) {
 		r.LatencyMS["avg"], r.LatencyMS["count"])
 	fmt.Printf("peak: mqtt=%.0f pending=%.0f goroutines=%.0f cpu=%.0f%% rss=%.0fMB frames=%.1fMB\n",
 		maxMQTT, maxPending, maxGor, maxCPU, maxRSS, float64(r.FramesKB)/1024)
+	if r.Connects > 0 {
+		fmt.Printf("mqtt connect latency ms: p50=%.1f p95=%.1f p99=%.1f max=%.1f avg=%.1f (n=%d)\n",
+			r.ConnectMS["p50"], r.ConnectMS["p95"], r.ConnectMS["p99"],
+			r.ConnectMS["max"], r.ConnectMS["avg"], r.Connects)
+	}
+	if r.CPUPercent > 0 {
+		fmt.Printf("server cpu: %.1f%% (%.1fs cpu over the run)\n", r.CPUPercent, r.CPUTimeS)
+	}
 }
 
 func fatal(msg string) {

@@ -18,8 +18,8 @@ type SalesStore interface {
 // 方向是 Target 而不是 Budget。环的几何、配速预测、主次分配完全共用。
 type Sales struct {
 	Store SalesStore
-	// DefaultTZ 是上报里没带时区时的兜底（IANA 名）。
-	DefaultTZ string
+	// TZ 解析时区：用户设置 > 上报里带的 tz > 服务端默认。
+	TZ TZResolver
 	// Show 是上屏的两个指标，按顺序决定短窗口/长窗口候选。
 	// 版面只有两个环，上报可以带三个指标，由这里挑。
 	Show [2]sales.Kind
@@ -27,11 +27,11 @@ type Sales struct {
 
 // NewSales 构造经营数据源，默认上屏成交额与订单数。
 // 权益卡收入照样会被上报和存下来，换 Show 就能上屏。
-func NewSales(st SalesStore, defaultTZ string) Sales {
+func NewSales(st SalesStore, tzr TZResolver) Sales {
 	return Sales{
-		Store:     st,
-		DefaultTZ: defaultTZ,
-		Show:      [2]sales.Kind{sales.KindGMV, sales.KindOrders},
+		Store: st,
+		TZ:    tzr,
+		Show:  [2]sales.Kind{sales.KindGMV, sales.KindOrders},
 	}
 }
 
@@ -42,7 +42,7 @@ func (s Sales) Snapshot(_ context.Context, userID string, now time.Time) (Snapsh
 	if err != nil {
 		return Snapshot{}, err
 	}
-	loc := LoadLocation(sales.NormalizeTZ(rep.TZ), s.DefaultTZ)
+	loc := s.TZ.Location(userID, sales.NormalizeTZ(rep.TZ))
 	local := now.In(loc)
 	snap := Snapshot{Now: local, Dir: Target}
 	if !ok {
