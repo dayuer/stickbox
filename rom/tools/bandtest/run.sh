@@ -21,6 +21,8 @@ cc $CC_ARGS -o vertest vertest.c ../../main/framepack_ver.c
 cc $CC_ARGS -o photostore_test photostore_test.c ../../main/photostore_core.c ../../main/photosha.c
 # 清单流式解析 + init_token 判决 + status JSON
 cc $CC_ARGS -o photo_core_test photo_core_test.c ../../main/photo_json.c ../../main/photo_policy.c
+# 播放序列：构建/计时/跳过不可播/重建，以及「无照片永远 board」回归
+cc $CC_ARGS -o photo_seq_test photo_seq_test.c ../../main/photo_play_seq.c
 
 # 帧包和黄金帧都由 server/go/cmd/packgen 现生成，不依赖任何别人的 worktree
 # ——那些目录会被收敛掉，测试不该因此失效。
@@ -61,3 +63,6 @@ echo "== 7. 照片存储：格式化/掉电/CRC/扫描 =="
 
 echo "== 8. 照片清单解析 / 初始化授权 / status.photo =="
 ./photo_core_test | tail -3
+
+echo "== 9. 照片播放序列 / 无照片时恒为 board =="
+./photo_seq_test | tail -3

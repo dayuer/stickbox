@@ -46,6 +46,11 @@ typedef struct {
     int      entry_count;
     int      photo_count;
     photo_pl_entry_t photos[PHOTO_PL_MAX_PHOTOS];
+    /* board 条目（M3 播放序列用）。服务端当前只发一条、位置 0；
+     * 播放器按这条的停留时长显示当前激活的帧包主题。 */
+    bool     board_seen;
+    uint16_t board_duration_s;   /* 0 = 没给，播放侧按 20s */
+    char     board_theme[24];
 } photo_pl_t;
 
 typedef enum {
@@ -89,6 +94,7 @@ typedef struct {
 
     /* 正在拼的 entry */
     char        kind[16];
+    char        etheme[24];
     char        esha[PHOTO_PL_HEX + 1];
     uint32_t    esize;
     bool        esize_set;
