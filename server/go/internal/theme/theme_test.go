@@ -2,24 +2,6 @@ package theme
 
 import "testing"
 
-// 槽数 → 主题数。槽数来自设备上报，不是服务端常量：
-// 8MB 模组 6 槽、16MB 模组 12 槽，机群可能是混的。
-func TestMaxResident(t *testing.T) {
-	for slots, want := range map[int]int{
-		0:  1, // 老固件没上报：保守按一个主题，别下发它存不下的播放列表
-		1:  1,
-		5:  1,
-		6:  2, // 8MB：frames 1.5MB
-		11: 3,
-		12: 4, // 16MB：frames 3MB
-		64: 21,
-	} {
-		if got := MaxResident(slots); got != want {
-			t.Errorf("MaxResident(%d) = %d，要 %d", slots, got, want)
-		}
-	}
-}
-
 func quotaGeom() Geometry {
 	return Geometry{
 		BandRow0: 4, BandRow1: 16,

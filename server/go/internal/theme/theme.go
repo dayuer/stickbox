@@ -33,28 +33,11 @@ const (
 	NumSlots = 4
 )
 
-// SlotsPerTheme 是一个主题占几个槽做磨损均衡。
-// 必须和固件的 FP_SLOTS_PER_THEME 一致（rom/main/framepack.h）。
-//
-// 底帧只在数据变化时重写（约 144 次/天），摊到 3 个槽是 48 次/槽/天，
-// 10 万次擦写约 5.7 年。减到 2 槽就是 3.8 年——拿寿命换主题数。
+// SlotsPerTheme 是一个主题占几个槽做磨损均衡，必须和固件的
+// FP_SLOTS_PER_THEME 一致（rom/main/framepack.h）。设备自己按分区槽数 /
+// 每主题槽数算能驻留几个主题；服务端不裁剪播放列表（见 frames.Playlist），
+// 所以这里只留常量，不提供 MaxResident。
 const SlotsPerTheme = 3
-
-// MaxResident 按设备上报的槽数，算出它能同时驻留几个主题。
-//
-// 槽数不是常量：8MB 模组的 frames 分区 1.5MB = 6 槽（2 个主题），
-// 16MB 模组翻倍 = 12 槽（4 个主题）。模组一旦中途换过，机群就是混的，
-// 所以播放列表必须按**每台设备**的实际能力裁，服务端不能替整个机群假设。
-// 设备在 framepack_init 里按分区实际大小算出槽数并上报。
-//
-// slots 为 0（老固件还没上报过）时保守按 1 个主题算：宁可少排一个，
-// 也不能下发设备存不下的播放列表。
-func MaxResident(slots int) int {
-	if n := slots / SlotsPerTheme; n >= 1 {
-		return n
-	}
-	return 1
-}
 
 // ClockSlot 是一张跳动数字卡片在底帧里的位置。
 type ClockSlot struct {
