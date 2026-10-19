@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/x509"
 	"errors"
 	"net/http"
@@ -83,4 +84,84 @@ func classify(err error) outcome {
 func isForbidden(err error) bool {
 	var ae *apiError
 	return errors.As(err, &ae) && ae.Status == http.StatusForbidden
+}
+
+// retryPlanner 决定一轮结束后睡多久。只在 runDaemon 的单个循环里使用，
+// 不需要加锁。
+type retryPlanner struct {
+	fast int // 当前这串 transient 已经用掉的快速重试次数
+	fail int // 连续失败轮数（未配对不算故障，既不累计也不清零，与 failureTracker 一致）
+}
+
+// next 根据本轮结果返回下一轮前的等待时间。
+//   - 成功：计数清零，usageInterval（成功路径不变）。
+//   - transient：前 3 次依次 60s/120s/240s；用完之后回 usageInterval，
+//     且不再开新一串快速重试，直到出现一次成功或 persistent，避免长时间故障期间
+//     每 10 分钟都夹带一串重试。
+//   - persistent：保持原有间隔（未配对/令牌失效 1 小时，其余 usageInterval），
+//     不快速重试，也就不会反复拉起 claude。
+func (p *retryPlanner) next(err error) (wait time.Duration, fastRetry bool) {
+	switch classify(err) {
+	case outcomeOK:
+		p.fast, p.fail = 0, 0
+		return usageInterval, false
+	case outcomeTransient:
+		p.fail++
+		if p.fast < len(fastRetryDelays) {
+			d := fastRetryDelays[p.fast]
+			p.fast++
+			return d, true
+		}
+		return usageInterval, false
+	}
+	if !errors.Is(err, errNotPaired) {
+		p.fail++
+	}
+	p.fast = 0
+	return retryDelay(err), false
+}
+
+// daemonConfig 是 runDaemon 的依赖。sleep / now 注入，单测里不真的等。
+type daemonConfig struct {
+	logf  func(string, ...any)
+	round func() error
+	sleep func(context.Context, time.Duration) bool
+	now   func() time.Time
+	// onSchedule 在每轮结束、睡眠之前调用：连续失败轮数（成功为 0）和下次尝试时间。
+	// 可为 nil。
+	onSchedule func(fails int, next time.Time)
+}
+
+// runDaemon 常驻循环：一轮跑完才睡、睡醒才跑下一轮，所以任何时候最多
+// 一个 claude 子进程，重试不会重叠。sleep 注入是为了单测里不真的等 1 小时。
+func runDaemon(
+	ctx context.Context,
+	logf func(string, ...any),
+	round func() error,
+	sleep func(context.Context, time.Duration) bool,
+) error {
+	return runDaemonWith(ctx, daemonConfig{logf: logf, round: round, sleep: sleep, now: time.Now})
+}
+
+func runDaemonWith(ctx context.Context, c daemonConfig) error {
+	var plan retryPlanner
+	for {
+		err := c.round()
+		wait, fast := plan.next(err)
+		if err != nil {
+			if fast {
+				c.logf("本轮失败（瞬时，第 %d/%d 次快速重试）：%v（%s 后重试）",
+					plan.fast, len(fastRetryDelays), err, wait)
+			} else {
+				c.logf("本轮失败：%v（%s 后重试）", err, wait)
+			}
+		}
+		if c.onSchedule != nil {
+			c.onSchedule(plan.fail, c.now().Add(wait))
+		}
+		if !c.sleep(ctx, wait) {
+			c.logf("收到退出信号，停止")
+			return nil
+		}
+	}
 }

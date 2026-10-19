@@ -896,26 +896,6 @@ func retryDelay(err error) time.Duration {
 	return usageInterval
 }
 
-// runDaemon 常驻循环。sleep 注入是为了单测里不真的等 1 小时。
-func runDaemon(
-	ctx context.Context,
-	logf func(string, ...any),
-	round func() error,
-	sleep func(context.Context, time.Duration) bool,
-) error {
-	for {
-		err := round()
-		wait := retryDelay(err)
-		if err != nil {
-			logf("本轮失败：%v（%s 后重试）", err, wait)
-		}
-		if !sleep(ctx, wait) {
-			logf("收到退出信号，停止")
-			return nil
-		}
-	}
-}
-
 func sleepCtx(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()
