@@ -424,7 +424,7 @@ func (c *apiClient) call(method, path string, withAuth bool, in, out any) error 
 
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("连接 %s 失败：%w", c.base, err)
+		return &transportError{msg: fmt.Sprintf("连接 %s 失败：%v", c.base, err), err: err}
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -616,7 +616,9 @@ func runRound(c *agentConfig, logf func(string, ...any)) error {
 	}
 	if skip != "" {
 		logf("%s", skip)
-		return nil
+		err := &skipError{reason: skip}
+		recordRoundState(logf, err, time.Now())
+		return err
 	}
 	rep.TZ = localTZ()
 	n, err := postUsage(c, rep)
@@ -854,7 +856,12 @@ func cmdRun(args []string) error {
 		if err := requireToken(c); err != nil {
 			return err
 		}
-		return runRound(c, logf)
+		err = runRound(c, logf)
+		var se *skipError
+		if errors.As(err, &se) {
+			return nil // 本轮无数据可报不是错误，保持 --once 原来的退出码
+		}
+		return err
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -883,7 +890,7 @@ func daemonRound(logf func(string, ...any)) func() error {
 // retryDelay：没配对/401 是用户还没操作完，不是服务故障，1 小时后再看；
 // 别的错误按正常上报间隔重试。
 func retryDelay(err error) time.Duration {
-	if errors.Is(err, errNotPaired) || isUnauthorized(err) {
+	if errors.Is(err, errNotPaired) || isUnauthorized(err) || isForbidden(err) {
 		return authRetryInterval
 	}
 	return usageInterval
