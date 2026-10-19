@@ -46,8 +46,10 @@ const (
 	usageInterval     = 10 * time.Minute
 	authRetryInterval = time.Hour
 	claudeTimeout     = 5 * time.Minute
-	httpTimeout       = 20 * time.Second
 )
+
+// httpTimeout 是单次上报请求的超时；用 var 只为单测里能缩短，运行时不改。
+var httpTimeout = 20 * time.Second
 
 // agentConfig 是用户配置目录里保存的全部状态。
 type agentConfig struct {
@@ -424,7 +426,7 @@ func (c *apiClient) call(method, path string, withAuth bool, in, out any) error 
 
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("连接 %s 失败：%w", c.base, err)
+		return &transportError{msg: fmt.Sprintf("连接 %s 失败：%v", c.base, err), err: err}
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -616,7 +618,9 @@ func runRound(c *agentConfig, logf func(string, ...any)) error {
 	}
 	if skip != "" {
 		logf("%s", skip)
-		return nil
+		err := &skipError{reason: skip}
+		recordRoundState(logf, err, time.Now())
+		return err
 	}
 	rep.TZ = localTZ()
 	n, err := postUsage(c, rep)
@@ -854,16 +858,29 @@ func cmdRun(args []string) error {
 		if err := requireToken(c); err != nil {
 			return err
 		}
-		return runRound(c, logf)
+		err = runRound(c, logf)
+		var se *skipError
+		if errors.As(err, &se) {
+			return nil // 本轮无数据可报不是错误，保持 --once 原来的退出码
+		}
+		return err
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("stickbox-agent %s 启动，每 %s 上报一次（未配对或令牌失效时 %s 后重试）",
-		version, usageInterval, authRetryInterval)
+	log.Printf("stickbox-agent %s 启动，每 %s 上报一次（瞬时失败 %v 快速重试；未配对或令牌失效时 %s 后重试）",
+		version, usageInterval, fastRetryDelays, authRetryInterval)
 	tracker := newFailureTracker(systemNotify, logf)
-	return runDaemon(ctx, logf, withFailureNotify(daemonRound(logf), tracker), sleepCtx)
+	return runDaemonWith(ctx, daemonConfig{
+		logf:  logf,
+		round: withFailureNotify(daemonRound(logf), tracker),
+		sleep: sleepCtx,
+		now:   time.Now,
+		onSchedule: func(fails int, next time.Time) {
+			recordSchedule(logf, fails, next)
+		},
+	})
 }
 
 // daemonRound 每轮重新读配置：用户重新 pair 之后不用重启服务。
@@ -883,30 +900,10 @@ func daemonRound(logf func(string, ...any)) func() error {
 // retryDelay：没配对/401 是用户还没操作完，不是服务故障，1 小时后再看；
 // 别的错误按正常上报间隔重试。
 func retryDelay(err error) time.Duration {
-	if errors.Is(err, errNotPaired) || isUnauthorized(err) {
+	if errors.Is(err, errNotPaired) || isUnauthorized(err) || isForbidden(err) {
 		return authRetryInterval
 	}
 	return usageInterval
-}
-
-// runDaemon 常驻循环。sleep 注入是为了单测里不真的等 1 小时。
-func runDaemon(
-	ctx context.Context,
-	logf func(string, ...any),
-	round func() error,
-	sleep func(context.Context, time.Duration) bool,
-) error {
-	for {
-		err := round()
-		wait := retryDelay(err)
-		if err != nil {
-			logf("本轮失败：%v（%s 后重试）", err, wait)
-		}
-		if !sleep(ctx, wait) {
-			logf("收到退出信号，停止")
-			return nil
-		}
-	}
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {
