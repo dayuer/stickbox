@@ -24,6 +24,7 @@
 #include "sdkconfig.h"
 
 #include "lcd_ui.h"
+#include "ota.h"
 
 LV_FONT_DECLARE(font_cn_16);
 
@@ -112,6 +113,16 @@ static void build(void)
 
     lv_obj_t *t = label(14, 4, 212, C_MUTED, LV_TEXT_ALIGN_LEFT);
     lv_label_set_text(t, "StickBox 状态");
+
+    /* 固件版本：标题行右侧，靠右对齐；不占配对码所在的底行。
+     * 版本串在固件里是定值，build() 里写一次即可，不进 ui_state_t、不随渲染刷新。
+     * 标题文字约占到 x=122，所以版本框从 x=126 起、宽 100px；放不下的部分
+     * 由 DOTS 模式截成省略号，不会压到左边的标题。 */
+    lv_obj_t *ver = label(126, 4, 100, C_MUTED, LV_TEXT_ALIGN_RIGHT);
+    const char *v = ota_version();
+    char vb[24];
+    snprintf(vb, sizeof vb, (v[0] >= '0' && v[0] <= '9') ? "v%s" : "%s", v);
+    lv_label_set_text(ver, vb);
 
     s_wifi = label(14, 26, 212, C_TEXT, LV_TEXT_ALIGN_LEFT);
     s_ip   = label(14, 46, 212, C_MUTED, LV_TEXT_ALIGN_LEFT);
