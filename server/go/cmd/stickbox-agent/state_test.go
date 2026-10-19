@@ -11,6 +11,51 @@ import (
 	"time"
 )
 
+func TestStatusLinesShowConsecutiveFailuresAndNextRetry(t *testing.T) {
+	next := time.Date(2026, 10, 20, 9, 1, 0, 0, time.Local)
+	s := agentState{ConsecutiveFailures: 2, NextRetryAt: next.Unix()}
+	lines := s.statusLines()
+	if len(lines) != 4 {
+		t.Fatalf("连续失败时应多一行：%v", lines)
+	}
+	if !strings.Contains(lines[3], "连续失败：2 轮") || !strings.Contains(lines[3], "09:01:00") {
+		t.Errorf("第四行 = %q", lines[3])
+	}
+	if got := (agentState{}).statusLines(); len(got) != 3 {
+		t.Errorf("没有失败时仍是三行：%v", got)
+	}
+}
+
+func TestRecordScheduleWritesAndClears(t *testing.T) {
+	t.Setenv("STICKBOX_CONFIG_DIR", t.TempDir())
+	logf := func(string, ...any) {}
+	// 先有一份已有内容的状态，确认不被覆盖。
+	if err := saveState(agentState{LastSuccessAt: 7, LastError: "x", LastErrorAt: 8}); err != nil {
+		t.Fatal(err)
+	}
+	next := time.Date(2026, 10, 20, 9, 1, 0, 0, time.UTC)
+	recordSchedule(logf, 3, next)
+	s := loadState()
+	if s.ConsecutiveFailures != 3 || s.NextRetryAt != next.Unix() || s.LastSuccessAt != 7 || s.LastError != "x" {
+		t.Fatalf("写入后 = %+v", s)
+	}
+	recordSchedule(logf, 0, next)
+	s = loadState()
+	if s.ConsecutiveFailures != 0 || s.NextRetryAt != 0 || s.LastSuccessAt != 7 {
+		t.Fatalf("成功后应清零且保留其它字段：%+v", s)
+	}
+}
+
+// 跳过（limits 为 null）也会写进最近错误，status 才看得见。
+func TestSkippedRoundIsRecordedInState(t *testing.T) {
+	t.Setenv("STICKBOX_CONFIG_DIR", t.TempDir())
+	recordRoundState(func(string, ...any) {}, &skipError{reason: "limits 为 null，本轮跳过"}, time.Now())
+	s := loadState()
+	if !strings.Contains(s.LastError, "limits 为 null") || s.ClaudeAuth != "" {
+		t.Fatalf("状态 = %+v", s)
+	}
+}
+
 func TestStateSaveLoadAndPerms(t *testing.T) {
 	t.Setenv("STICKBOX_CONFIG_DIR", t.TempDir())
 	if got := loadState(); got != (agentState{}) {

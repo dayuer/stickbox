@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -18,6 +19,38 @@ func newTestTracker() (*failureTracker, *[]sentNote, *time.Time) {
 	}, func(string, ...any) {})
 	tr.now = func() time.Time { return now }
 	return tr, &sent, &now
+}
+
+// 快速重试的每一轮都算「连续失败」：60s、120s 后的第 3 轮失败就达到阈值；
+// 同一原因之后一小时内（含后续 10 分钟间隔的轮次）不再重复通知。
+func TestFastRetriesCountTowardNotifyAndStillThrottled(t *testing.T) {
+	tr, sent, now := newTestTracker()
+	script := []error{errTransient, errTransient, errTransient, errTransient, errTransient, errTransient}
+	i := 0
+	round := func() error { e := script[i]; i++; return e }
+	var sleeps []time.Duration
+	sleep := func(_ context.Context, d time.Duration) bool {
+		sleeps = append(sleeps, d)
+		*now = now.Add(d)
+		return i < len(script)
+	}
+	err := runDaemonWith(context.Background(), daemonConfig{
+		logf: func(string, ...any) {}, round: withFailureNotify(round, tr),
+		sleep: sleep, now: func() time.Time { return *now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 6 轮：60s、120s、240s、10m、10m、10m，总时间约 33 分钟，都在 1 小时内。
+	if len(sleeps) != 6 || sleeps[2] != 4*time.Minute || sleeps[3] != usageInterval {
+		t.Fatalf("sleeps = %v", sleeps)
+	}
+	if len(*sent) != 1 {
+		t.Fatalf("同一原因一小时内只通知一次，实际 %d 次：%v", len(*sent), *sent)
+	}
+	if !strings.Contains((*sent)[0].body, "3") {
+		t.Errorf("第 3 轮就该通知：%q", (*sent)[0].body)
+	}
 }
 
 func TestFailureTrackerNotifiesAtThirdFailure(t *testing.T) {

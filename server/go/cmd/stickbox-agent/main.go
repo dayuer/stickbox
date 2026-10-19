@@ -867,10 +867,18 @@ func cmdRun(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("stickbox-agent %s 启动，每 %s 上报一次（未配对或令牌失效时 %s 后重试）",
-		version, usageInterval, authRetryInterval)
+	log.Printf("stickbox-agent %s 启动，每 %s 上报一次（瞬时失败 %v 快速重试；未配对或令牌失效时 %s 后重试）",
+		version, usageInterval, fastRetryDelays, authRetryInterval)
 	tracker := newFailureTracker(systemNotify, logf)
-	return runDaemon(ctx, logf, withFailureNotify(daemonRound(logf), tracker), sleepCtx)
+	return runDaemonWith(ctx, daemonConfig{
+		logf:  logf,
+		round: withFailureNotify(daemonRound(logf), tracker),
+		sleep: sleepCtx,
+		now:   time.Now,
+		onSchedule: func(fails int, next time.Time) {
+			recordSchedule(logf, fails, next)
+		},
+	})
 }
 
 // daemonRound 每轮重新读配置：用户重新 pair 之后不用重启服务。
