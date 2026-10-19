@@ -167,8 +167,8 @@ func TestE2EUploadTimeoutRetriesAfterSixtySeconds(t *testing.T) {
 	}
 }
 
-// ② 服务端一直 503：60s、120s、240s 后回到 10 分钟，总共只拉起 4 次 claude；
-// 第 3 轮失败时通知一次，之后不重复。
+// ② 服务端一直 503：60s、120s、240s 后回到 10 分钟；每轮只拉起一次 claude。
+// 前 4 轮（7 分钟内）不通知，距第一次失败满 25 分钟（第 6 轮）才通知一次，之后不重复。
 func TestE2EThreeTransientFailuresThenNormalInterval(t *testing.T) {
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -178,45 +178,46 @@ func TestE2EThreeTransientFailuresThenNormalInterval(t *testing.T) {
 	defer srv.Close()
 
 	claude := newCountingClaude(t, readFixture(t, "usage-stream.jsonl"), `{"loggedIn":true}`+"\n")
-	r := runE2E(t, claude, srv.URL, 5, nil)
+	r := runE2E(t, claude, srv.URL, 7, nil)
 
-	want := []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, usageInterval, usageInterval}
+	want := []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, usageInterval, usageInterval, usageInterval, usageInterval}
 	if !reflect.DeepEqual(r.sleeps, want) {
 		t.Fatalf("sleeps = %v，期望 %v", r.sleeps, want)
 	}
-	if claude.UsageCalls() != 5 || hits != 5 {
-		t.Errorf("claude %d 次、上报 %d 次，期望各 5 次（串行，每轮一次）", claude.UsageCalls(), hits)
+	if claude.UsageCalls() != 7 || hits != 7 {
+		t.Errorf("claude %d 次、上报 %d 次，期望各 7 次（串行，每轮一次）", claude.UsageCalls(), hits)
 	}
 	if len(r.sent) != 1 {
 		t.Fatalf("同一原因一小时内只通知一次：%v", r.sent)
 	}
-	if s := loadState(); s.ConsecutiveFailures != 5 || s.NextRetryAt != r.clock.Unix() {
+	if s := loadState(); s.ConsecutiveFailures != 7 || s.NextRetryAt != r.clock.Unix() {
 		t.Errorf("状态 = %+v", s)
 	}
 }
 
-// ③ claude 未登录：不快速重试，保持 10 分钟，每轮只拉起一次 claude。
+// ③ claude 未登录：不快速重试，保持 10 分钟，每轮只拉起一次 claude；
+// 失败在 0/10/20/30 分钟，第 4 轮（距第一次失败满 25 分钟）通知一次。
 func TestE2ENotLoggedInDoesNotFastRetry(t *testing.T) {
 	var hits int32
 	srv := okServer(&hits)
 	defer srv.Close()
 
 	claude := newCountingClaude(t, totalCostStream, `{"loggedIn":false}`+"\n")
-	r := runE2E(t, claude, srv.URL, 3, nil)
+	r := runE2E(t, claude, srv.URL, 4, nil)
 
-	want := []time.Duration{usageInterval, usageInterval, usageInterval}
+	want := []time.Duration{usageInterval, usageInterval, usageInterval, usageInterval}
 	if !reflect.DeepEqual(r.sleeps, want) {
 		t.Fatalf("sleeps = %v，期望 %v", r.sleeps, want)
 	}
-	if claude.UsageCalls() != 3 || hits != 0 {
-		t.Errorf("claude %d 次、上报 %d 次，期望 3 次和 0 次", claude.UsageCalls(), hits)
+	if claude.UsageCalls() != 4 || hits != 0 {
+		t.Errorf("claude %d 次、上报 %d 次，期望 4 次和 0 次", claude.UsageCalls(), hits)
 	}
 	s := loadState()
-	if s.ClaudeAuth != stateAuthOut || s.ConsecutiveFailures != 3 {
+	if s.ClaudeAuth != stateAuthOut || s.ConsecutiveFailures != 4 {
 		t.Errorf("状态 = %+v", s)
 	}
 	if len(r.sent) != 1 || !strings.Contains(r.sent[0].body, "claude auth login") {
-		t.Errorf("第 3 轮应通知一次：%v", r.sent)
+		t.Errorf("第 4 轮应通知一次：%v", r.sent)
 	}
 }
 

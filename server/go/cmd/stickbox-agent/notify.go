@@ -12,8 +12,10 @@ import (
 )
 
 const (
-	// 连续失败多少轮才打扰用户（10 分钟一轮，约 30 分钟）。
+	// 连续失败多少轮、并且距上次成功过了多久，才打扰用户。两个条件都要满足：
+	// 快速重试会让轮数很快到 3，所以必须再按时间判定，一次几分钟的网络抖动不弹通知。
 	notifyAfterFailures = 3
+	notifyAfterSilence  = 25 * time.Minute
 	// 同一原因两次通知的最短间隔。
 	notifyCooldown = time.Hour
 	notifyTimeout  = 5 * time.Second
@@ -26,6 +28,7 @@ type notifier func(title, body string) error
 type failureTracker struct {
 	mu       sync.Mutex
 	fails    int
+	lastOK   time.Time            // 上次成功的时间；没见过成功时是第一次失败的时间
 	notified map[string]time.Time // 原因 → 上次通知时间
 	notify   notifier
 	logf     func(string, ...any)
@@ -49,16 +52,20 @@ func (t *failureTracker) record(err error) {
 
 	if err == nil {
 		t.fails = 0
+		t.lastOK = t.now()
 		return
 	}
 	if errors.Is(err, errNotPaired) {
 		return
 	}
+	now := t.now()
+	if t.lastOK.IsZero() {
+		t.lastOK = now // 进程里还没见过成功：窗口从第一次失败算起
+	}
 	t.fails++
-	if t.fails < notifyAfterFailures {
+	if t.fails < notifyAfterFailures || now.Sub(t.lastOK) < notifyAfterSilence {
 		return
 	}
-	now := t.now()
 	reason := err.Error()
 	// 清掉过期条目：错误文本里可能带变化的 stderr，别让 map 无限长。
 	for k, at := range t.notified {
