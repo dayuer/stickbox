@@ -46,8 +46,10 @@ const (
 	usageInterval     = 10 * time.Minute
 	authRetryInterval = time.Hour
 	claudeTimeout     = 5 * time.Minute
-	httpTimeout       = 20 * time.Second
 )
+
+// httpTimeout 是单次上报请求的超时；用 var 只为单测里能缩短，运行时不改。
+var httpTimeout = 20 * time.Second
 
 // agentConfig 是用户配置目录里保存的全部状态。
 type agentConfig struct {
