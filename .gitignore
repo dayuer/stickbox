@@ -22,3 +22,6 @@ rom/build-rel/
 rom/build-v095/
 "rom/ build-m0a/"
 "rom/ build-m0b/"
+
+# go build 在包目录里产出的 agent 二进制不入库（构建请输出到 /tmp）
+/server/go/cmd/stickbox-agent/stickbox-agent

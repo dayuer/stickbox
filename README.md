@@ -98,6 +98,7 @@ page, check it against `SHA256SUMS`, then:
 
 ```bash
 stickbox-agent pair 123456   # the 6-digit code shown on the TV
+stickbox-agent pair          # ...or no code: opens a local web page to enter it (or auto-find the screen)
 stickbox-agent run --once    # send one report to verify everything works
 stickbox-agent install       # run in the background at login (no sudo)
 stickbox-agent status        # server, pairing, last success, claude login state
