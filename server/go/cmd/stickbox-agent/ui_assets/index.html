@@ -1,3 +1,62 @@
 <!doctype html>
+<html lang="zh-CN">
+<head>
 <meta charset="utf-8">
-<title>StickBox</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>StickBox 配对</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main>
+  <h1>StickBox 配对</h1>
+  <p class="sub">这个页面只在你这台电脑上运行（127.0.0.1），关掉终端或闲置一段时间后会自动退出。</p>
+
+  <section id="sec-discover" aria-labelledby="h-discover">
+    <div class="row">
+      <h2 id="h-discover">发现的待配对设备</h2>
+      <button id="btn-discover" type="button" class="ghost">重新搜索</button>
+    </div>
+    <p id="discover-hint" class="hint">正在局域网里搜索……</p>
+    <ul id="found-list" class="list"></ul>
+  </section>
+
+  <section id="sec-pair" aria-labelledby="h-pair">
+    <h2 id="h-pair">手动输入配对码</h2>
+    <p class="hint">输入电视上显示的 6 位数字。电视上的码每 10 分钟换新，请输入最新的码。</p>
+    <form id="pair-form" autocomplete="off">
+      <div id="code-boxes" class="boxes" role="group" aria-label="6 位配对码">
+        <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="第 1 位" autocomplete="off">
+        <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="第 2 位" autocomplete="off">
+        <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="第 3 位" autocomplete="off">
+        <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="第 4 位" autocomplete="off">
+        <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="第 5 位" autocomplete="off">
+        <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="第 6 位" autocomplete="off">
+      </div>
+      <button id="btn-pair" type="submit" disabled>配对</button>
+    </form>
+    <p id="pair-msg" class="msg" role="status" aria-live="polite"></p>
+  </section>
+
+  <section id="sec-devices" aria-labelledby="h-devices">
+    <div class="row">
+      <h2 id="h-devices">我的设备</h2>
+      <button id="btn-devices" type="button" class="ghost">刷新</button>
+    </div>
+    <p id="devices-hint" class="hint"></p>
+    <ul id="device-list" class="list"></ul>
+    <p id="devices-msg" class="msg" role="status" aria-live="polite"></p>
+  </section>
+
+  <section id="sec-status" aria-labelledby="h-status">
+    <div class="row">
+      <h2 id="h-status">状态</h2>
+      <button id="btn-run" type="button" class="ghost">立即上报一轮</button>
+    </div>
+    <dl id="status-list"></dl>
+    <p id="status-msg" class="msg" role="status" aria-live="polite"></p>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>
