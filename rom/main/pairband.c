@@ -12,8 +12,9 @@
 
 static const char *TAG = "pairband";
 
-/* 56px 高、36px 宽：1080p 上够看清，且最坏码 888888 编码约 10.3KB，
- * 在 12KB 缓冲内。80px 的旧版面 888888 会超 12KB，随机码里迟早会撞上。 */
+/* 56px 高、36px 宽：1080p 上够看清，且最坏码 888888 连同提示文字编码约 11.7KB
+ * （pairbox_test 实测 11692 B），在 BAND_CAP(13KB) 内。
+ * 80px 的旧版面 888888 会超 12KB，随机码里迟早会撞上。 */
 #define X0   822
 /* 6 位数字放在条带下半部，上方留一行 32px 提示文字。 */
 #define Y0   774
@@ -34,9 +35,17 @@ static const char *TAG = "pairband";
 #define HINT_W 185
 #define HINT_X0 ((1920 - HINT_W) / 2)
 
+/* 数字区横向范围：NDIG 位、位宽 W、间隔 GAP。 */
+#define DIG_X1 (X0 + NDIG * W + (NDIG - 1) * GAP)
+#define MIN2(a, b) ((a) < (b) ? (a) : (b))
+#define MAX2(a, b) ((a) > (b) ? (a) : (b))
+
+/* 横向必须覆盖「提示文字」与「6 位数字」的并集：只按提示文字算会得到
+ * x∈[867,1052)，而数字占 [822,1098)，两端各一位被裁掉（#19）。
+ * jb_encode_rows 按 MCU 与 box 求交，不要求 box 本身 16px 对齐。 */
 const jb_box_t PAIRBAND_BOX = {
-    HINT_X0, HINT_Y0,
-    HINT_X0 + HINT_W, Y0 + H
+    MIN2(HINT_X0, X0), HINT_Y0,
+    MAX2(HINT_X0 + HINT_W, DIG_X1), Y0 + H
 };
 
 /*  段位：A 上 B 右上 C 右下 D 下 E 左下 F 左上 G 中 */
