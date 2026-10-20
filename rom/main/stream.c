@@ -57,6 +57,9 @@ static int s_n, s_fps, s_row0, s_rows;
 static SemaphoreHandle_t s_mx;
 static uint8_t *s_band[2];
 static size_t s_band_len[2];
+/* 每块缓冲各自替换的行区间（预置页模式）。普通发布用 stream_start 的默认区间，
+ * 配对页发布更高的一条（#31）。 */
+static int s_band_r0[2], s_band_n[2];
 static int s_band_page[2] = { -1, -1 };
 
 /* 帧包模式（T13b）。底帧来自 framepack 的 flash 映射地址，推流时直接从
@@ -185,13 +188,14 @@ bool stream_band_publish_rows(uint8_t *buf, size_t len,
     memcpy(s_row_off[i], row_off, sizeof s_row_off[i]);
     memcpy(s_row_len[i], row_len, sizeof s_row_len[i]);
     s_band_len[i] = len;
+    s_band_r0[i] = s_row0; s_band_n[i] = s_rows;
     s_band_page[i] = 0;       /* 帧包模式只有一页 */
     s_front = i;
     xSemaphoreGive(s_mx);
     return true;
 }
 
-bool stream_band_publish(uint8_t *buf, size_t len, int page)
+static bool publish_at(uint8_t *buf, size_t len, int page, int row0, int rows)
 {
     /* 越界在写入的时候就已经发生了，这里拦不住它。但发布一个超长的 len
      * 会让推流循环每帧都读到缓冲区外的垃圾、并推给电视——那是第二个 bug，
@@ -204,10 +208,28 @@ bool stream_band_publish(uint8_t *buf, size_t len, int page)
     int i = buf == s_band[0] ? 0 : 1;
     xSemaphoreTake(s_mx, portMAX_DELAY);
     s_band_len[i] = len;
+    s_band_r0[i] = row0;
+    s_band_n[i] = rows;
     s_band_page[i] = page;
     s_front = i;
     xSemaphoreGive(s_mx);
     return true;
+}
+
+bool stream_band_publish_span(uint8_t *buf, size_t len, int page, int row0, int rows)
+{
+    /* 行区间越界会让拼接读到页面外的字节，电视上就是花屏。 */
+    if (page < 0 || page >= s_n || row0 < 0 || rows <= 0 ||
+        row0 + rows > s_pages[page].mcu_rows) {
+        ESP_LOGE(TAG, "带的行区间 %d+%d 超出页面，拒绝发布", row0, rows);
+        return false;
+    }
+    return publish_at(buf, len, page, row0, rows);
+}
+
+bool stream_band_publish(uint8_t *buf, size_t len, int page)
+{
+    return publish_at(buf, len, page, s_row0, s_rows);
 }
 void stream_quiet(bool on) { s_quiet = on; }
 
@@ -460,7 +482,11 @@ static void client_task(void *arg)
             }
             if (!nseg) {
                 pg = &s_pages[cur];
-                size_t a = pg->row_off[s_row0], b = pg->row_off[s_row0 + s_rows];
+                /* 行区间跟着这块带走：配对页的带比默认区间高。bi 已被本帧占住
+                 * （s_busy），发布只会写另一块，这里读它不用再加锁。 */
+                int r0 = bi >= 0 ? s_band_r0[bi] : s_row0;
+                int rn = bi >= 0 ? s_band_n[bi] : s_rows;
+                size_t a = pg->row_off[r0], b = pg->row_off[r0 + rn];
                 if (bi >= 0) {
                     segs[0].p = pg->jpg;                segs[0].n = a;
                     segs[1].p = s_band[bi];             segs[1].n = s_band_len[bi];

@@ -29,10 +29,11 @@ struct fp_index;
  *
  * 光靠这个常量也不够：段长会随渲染器的字体和 q 值变化。帧包自带
  * max_band_bytes，设备加载时先拿 stream_band_cap() 比对，超了拒绝整包。 */
-/* 13KB：服务端实测最坏带长 13,089（08:28，max_band_bytes），再留 223 字节。
- * 两块缓冲各 16KB 是这个版本稳态比 v0.9.3 少 45KB 的大头；压到 13KB
- * 省下 6KB，且仍然覆盖最坏帧。 */
-#define BAND_CAP (13 * 1024)
+/* 17KB（#31）：配对页贴二维码之后，最坏配对条带（888888 + 任意设备 ID 的 v3 二维码）
+ * 实测 16,355..16,560 字节（3000 个随机设备 ID），再留约 850 字节。
+ * 原来 13KB：服务端实测最坏时钟带 13,089（08:28，max_band_bytes），时钟带照旧
+ * 装得下。两块缓冲各涨 4KB，常驻堆多占 8KB——代价和数据见 #31 的 PR。 */
+#define BAND_CAP (17 * 1024)
 
 /* 预置页面：1080p baseline JPEG，DRI = 每行 MCU 数（tools/render_pages.py 生成） */
 typedef struct {
@@ -55,6 +56,10 @@ void stream_set(int idx);
  * 写的时候就已经发生了，这里只是最后一道能被看见的关卡。 */
 uint8_t *stream_band_begin(void);
 bool stream_band_publish(uint8_t *buf, size_t len, int page);
+/* 同上，但这条带替换的是 [row0, row0+rows) 行，而不是 stream_start 给的默认区间。
+ * 配对页要把二维码画在默认区间上方，用它发布更高的一条带；状态页仍用默认区间。
+ * 行区间超出页面返回 false。 */
+bool stream_band_publish_span(uint8_t *buf, size_t len, int page, int row0, int rows);
 
 /* 单块带缓冲的容量。加载帧包时拿它和 meta 里的 max_band_bytes 比对。 */
 size_t stream_band_cap(void);
