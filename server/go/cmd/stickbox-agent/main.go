@@ -9,7 +9,7 @@
 //   - 用户 settings.json 也可能改写 CLI 的接口地址，所以固定带
 //     --setting-sources project；
 //   - 用量接口 429 后客户端本地冷却约 1 小时，期间 rate_limits 为 null，
-//     这一轮跳过即可，不是错误；
+//     这一轮跳过，不是错误，但要按 cooldown 逐步退避（10→60 分钟），别快速重试；
 //   - launchd / systemd 的 PATH 很短，install 时把 claude 的绝对路径写进配置；
 //   - resets_at 是 ISO 8601，可能带小数秒和 +00:00。
 package main
@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -869,16 +870,17 @@ func cmdRun(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("stickbox-agent %s 启动，每 %s 上报一次（瞬时失败 %v 快速重试；未配对或令牌失效时 %s 后重试）",
-		version, usageInterval, fastRetryDelays, authRetryInterval)
+	log.Printf("stickbox-agent %s 启动，每 %s 上报一次（网络/5xx 失败 %v 快速重试；限额为空/429 冷却 %s 起逐步退避到 %s；未配对或令牌失效时 %s 后重试）",
+		version, usageInterval, fastRetryDelays, cooldownBase, cooldownMax, authRetryInterval)
 	tracker := newFailureTracker(systemNotify, logf)
 	return runDaemonWith(ctx, daemonConfig{
 		logf:  logf,
 		round: withFailureNotify(daemonRound(logf), tracker),
 		sleep: sleepCtx,
 		now:   time.Now,
-		onSchedule: func(fails int, next time.Time) {
-			recordSchedule(logf, fails, next)
+		rand:  rand.Float64,
+		onSchedule: func(fails int, next time.Time, cooldown bool) {
+			recordSchedule(logf, fails, next, cooldown)
 		},
 	})
 }

@@ -108,7 +108,7 @@ func runE2E(t *testing.T, claude *countingClaude, server string, rounds int, aft
 			}
 			return true
 		},
-		onSchedule: func(fails int, next time.Time) { recordSchedule(logf, fails, next) },
+		onSchedule: func(fails int, next time.Time, cd bool) { recordSchedule(logf, fails, next, cd) },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -221,7 +221,7 @@ func TestE2ENotLoggedInDoesNotFastRetry(t *testing.T) {
 	}
 }
 
-// ④ limits 为 null 被跳过：算瞬时，60s 后重试；claude 恢复后成功。
+// ④ limits 为 null 被跳过：算冷却，不快速重试；claude 恢复后成功。
 func TestE2ELimitsNullRetriesThenRecovers(t *testing.T) {
 	var hits int32
 	srv := okServer(&hits)
@@ -234,7 +234,7 @@ func TestE2ELimitsNullRetriesThenRecovers(t *testing.T) {
 		claude.SetUsage(readFixture(t, "usage-stream.jsonl"))
 	})
 
-	want := []time.Duration{time.Minute, usageInterval}
+	want := []time.Duration{usageInterval, usageInterval}
 	if !reflect.DeepEqual(r.sleeps, want) {
 		t.Fatalf("sleeps = %v，期望 %v", r.sleeps, want)
 	}
@@ -265,5 +265,88 @@ func TestE2ETokenRejectedWaitsAnHour(t *testing.T) {
 		if claude.UsageCalls() != 2 {
 			t.Errorf("HTTP %d: claude %d 次，期望 2 次", code, claude.UsageCalls())
 		}
+	}
+}
+
+// ⑥ 假 claude 始终 rate_limits=null：间隔 10/20/40/60 分钟封顶，每轮只拉起一次 claude，
+// 不上报；status 状态显示冷却中和下次尝试时间。
+func TestE2ELimitsNullBacksOffToSixtyMinutes(t *testing.T) {
+	var hits int32
+	srv := okServer(&hits)
+	defer srv.Close()
+
+	claude := newCountingClaude(t, readFixture(t, "usage-no-limits.jsonl"), `{"loggedIn":true}`+"\n")
+	r := runE2E(t, claude, srv.URL, 7, nil)
+
+	m := time.Minute
+	want := []time.Duration{10 * m, 20 * m, 40 * m, 60 * m, 60 * m, 60 * m, 60 * m}
+	if !reflect.DeepEqual(r.sleeps, want) {
+		t.Fatalf("sleeps = %v，期望 %v", r.sleeps, want)
+	}
+	if claude.UsageCalls() != 7 || hits != 0 {
+		t.Errorf("claude %d 次、上报 %d 次，期望 7 次和 0 次（每轮一次，串行）", claude.UsageCalls(), hits)
+	}
+	s := loadState()
+	if !s.Cooldown || s.ConsecutiveFailures != 7 || s.NextRetryAt != r.clock.Unix() {
+		t.Errorf("状态 = %+v", s)
+	}
+	if lines := s.statusLines(); !strings.Contains(lines[len(lines)-1], "冷却中") {
+		t.Errorf("status 没有冷却行：%v", lines)
+	}
+}
+
+// 通知阈值不变：失败发生在 0/10/30 分钟，第 3 轮（连续 3 轮且距上次成功/首次失败 ≥25 分钟）
+// 才通知；之后一小时内同一原因不重复。
+func TestE2ECooldownNotifiesAfterThresholdOnce(t *testing.T) {
+	var hits int32
+	srv := okServer(&hits)
+	defer srv.Close()
+
+	claude := newCountingClaude(t, readFixture(t, "usage-no-limits.jsonl"), `{"loggedIn":true}`+"\n")
+	r := runE2E(t, claude, srv.URL, 4, nil) // 失败于 0/10/30/70 分钟；70-30 < 1 小时
+	if len(r.sent) != 1 {
+		t.Fatalf("应通知一次：%v", r.sent)
+	}
+}
+
+// 冷却中恢复：回 10 分钟、状态清零；再次冷却从 10 分钟重新起算。
+func TestE2ECooldownRecoversAndResets(t *testing.T) {
+	var hits int32
+	srv := okServer(&hits)
+	defer srv.Close()
+
+	claude := newCountingClaude(t, readFixture(t, "usage-no-limits.jsonl"), `{"loggedIn":true}`+"\n")
+	r := runE2E(t, claude, srv.URL, 5, func(round int) {
+		switch round {
+		case 2: // 第 3 轮成功
+			claude.SetUsage(readFixture(t, "usage-stream.jsonl"))
+		case 3: // 第 4 轮又变回 null
+			claude.SetUsage(readFixture(t, "usage-no-limits.jsonl"))
+		}
+	})
+	m := time.Minute
+	want := []time.Duration{10 * m, 20 * m, usageInterval, 10 * m, 20 * m}
+	if !reflect.DeepEqual(r.sleeps, want) {
+		t.Fatalf("sleeps = %v，期望 %v", r.sleeps, want)
+	}
+	if hits != 1 {
+		t.Errorf("只有恢复那一轮上报，实际 %d 次", hits)
+	}
+}
+
+// 服务端回 429：同样归 cooldown，10 分钟起逐步退避，不走 60s 快速重试。
+func TestE2EServer429BacksOff(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"e":"rate_limited"}`, http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+	claude := newCountingClaude(t, readFixture(t, "usage-stream.jsonl"), `{"loggedIn":true}`+"\n")
+	r := runE2E(t, claude, srv.URL, 3, nil)
+	m := time.Minute
+	if want := []time.Duration{10 * m, 20 * m, 40 * m}; !reflect.DeepEqual(r.sleeps, want) {
+		t.Fatalf("sleeps = %v，期望 %v", r.sleeps, want)
+	}
+	if !loadState().Cooldown {
+		t.Errorf("状态应为冷却中：%+v", loadState())
 	}
 }

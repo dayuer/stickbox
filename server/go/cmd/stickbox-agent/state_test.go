@@ -34,14 +34,14 @@ func TestRecordScheduleWritesAndClears(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := time.Date(2026, 10, 20, 9, 1, 0, 0, time.UTC)
-	recordSchedule(logf, 3, next)
+	recordSchedule(logf, 3, next, true)
 	s := loadState()
-	if s.ConsecutiveFailures != 3 || s.NextRetryAt != next.Unix() || s.LastSuccessAt != 7 || s.LastError != "x" {
+	if s.ConsecutiveFailures != 3 || s.NextRetryAt != next.Unix() || !s.Cooldown || s.LastSuccessAt != 7 || s.LastError != "x" {
 		t.Fatalf("写入后 = %+v", s)
 	}
-	recordSchedule(logf, 0, next)
+	recordSchedule(logf, 0, next, false)
 	s = loadState()
-	if s.ConsecutiveFailures != 0 || s.NextRetryAt != 0 || s.LastSuccessAt != 7 {
+	if s.ConsecutiveFailures != 0 || s.NextRetryAt != 0 || s.Cooldown || s.LastSuccessAt != 7 {
 		t.Fatalf("成功后应清零且保留其它字段：%+v", s)
 	}
 }
@@ -175,5 +175,18 @@ func TestRunRoundNormalReportsAndRecordsSuccess(t *testing.T) {
 	s := loadState()
 	if s.LastSuccessAt == 0 || s.ClaudeAuth != stateAuthIn {
 		t.Fatalf("成功状态未记录：%+v", s)
+	}
+}
+
+func TestStatusLinesShowCooldown(t *testing.T) {
+	next := time.Date(2026, 10, 20, 9, 20, 0, 0, time.Local)
+	s := agentState{ConsecutiveFailures: 2, NextRetryAt: next.Unix(), Cooldown: true}
+	lines := s.statusLines()
+	if len(lines) != 5 || !strings.Contains(lines[3], "09:20:00") || !strings.Contains(lines[4], "冷却中") {
+		t.Fatalf("冷却中应多一行并带下次尝试时间：%v", lines)
+	}
+	s.Cooldown = false
+	if got := s.statusLines(); len(got) != 4 {
+		t.Errorf("非冷却不应有冷却行：%v", got)
 	}
 }
