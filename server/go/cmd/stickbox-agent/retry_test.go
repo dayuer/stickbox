@@ -221,3 +221,98 @@ func TestDaemonPersistentResetsFastRetryBudget(t *testing.T) {
 		t.Fatalf("sleeps = %v，期望 %v", sleeps, want)
 	}
 }
+
+// ① 连续 null：10、20、40、60 分钟，之后封顶 60。
+func TestDaemonCooldownBacksOffTenTwentyFortySixty(t *testing.T) {
+	sleeps, scheds := driveDaemon(t, []error{errSkipped, errSkipped, errSkipped, errSkipped, errSkipped, errSkipped})
+	m := time.Minute
+	want := []time.Duration{10 * m, 20 * m, 40 * m, 60 * m, 60 * m, 60 * m}
+	if !reflect.DeepEqual(sleeps, want) {
+		t.Fatalf("sleeps = %v，期望 %v", sleeps, want)
+	}
+	for i := range scheds {
+		if scheds[i].fails != i+1 {
+			t.Errorf("第 %d 轮后连续失败 = %d", i+1, scheds[i].fails)
+		}
+	}
+}
+
+// 429 与 null 同属 cooldown，共用一串退避。
+func TestDaemonCooldown429SharesBackoff(t *testing.T) {
+	e429 := fmt.Errorf("上报失败：%w", &apiError{Status: 429})
+	sleeps, _ := driveDaemon(t, []error{errSkipped, e429, errSkipped})
+	m := time.Minute
+	if want := []time.Duration{10 * m, 20 * m, 40 * m}; !reflect.DeepEqual(sleeps, want) {
+		t.Fatalf("sleeps = %v，期望 %v", sleeps, want)
+	}
+}
+
+// ② 成功后复位：回 10 分钟，下一次冷却又从 10 分钟起。
+func TestDaemonCooldownResetsAfterSuccess(t *testing.T) {
+	sleeps, _ := driveDaemon(t, []error{errSkipped, errSkipped, nil, errSkipped})
+	m := time.Minute
+	if want := []time.Duration{10 * m, 20 * m, usageInterval, 10 * m}; !reflect.DeepEqual(sleeps, want) {
+		t.Fatalf("sleeps = %v，期望 %v", sleeps, want)
+	}
+}
+
+// 冷却串里夹一次网络错误：该次走 60s 快速重试，不打断冷却的退避级别。
+func TestDaemonTransientInsideCooldownKeepsLevel(t *testing.T) {
+	sleeps, _ := driveDaemon(t, []error{errSkipped, errTransient, errSkipped})
+	m := time.Minute
+	if want := []time.Duration{10 * m, m, 20 * m}; !reflect.DeepEqual(sleeps, want) {
+		t.Fatalf("sleeps = %v，期望 %v", sleeps, want)
+	}
+}
+
+// 冷却期内未登录（persistent）清掉冷却串。
+func TestDaemonPersistentClearsCooldown(t *testing.T) {
+	sleeps, _ := driveDaemon(t, []error{errSkipped, errSkipped, errPersistent, errSkipped})
+	m := time.Minute
+	if want := []time.Duration{10 * m, 20 * m, usageInterval, 10 * m}; !reflect.DeepEqual(sleeps, want) {
+		t.Fatalf("sleeps = %v，期望 %v", sleeps, want)
+	}
+}
+
+// 抖动：±20%，随机源可注入；边界值精确。
+func TestCooldownDelayJitter(t *testing.T) {
+	m := time.Minute
+	cases := []struct {
+		n    int
+		r    float64
+		want time.Duration
+	}{
+		{1, 0, 8 * m}, {1, 0.5, 10 * m}, {1, 1, 12 * m},
+		{2, 0, 16 * m}, {3, 0.5, 40 * m}, {4, 0, 48 * m}, {4, 1, 72 * m},
+		{9, 0.5, 60 * m}, {9, 0, 48 * m},
+	}
+	for _, c := range cases {
+		r := c.r
+		got := cooldownDelay(c.n, func() float64 { return r })
+		if got != c.want {
+			t.Errorf("n=%d r=%v: %s，期望 %s", c.n, c.r, got, c.want)
+		}
+	}
+	if got := cooldownDelay(2, nil); got != 20*m {
+		t.Errorf("nil 随机源应不抖动：%s", got)
+	}
+}
+
+// runDaemon 把 rand 传给 planner。
+func TestDaemonUsesInjectedJitter(t *testing.T) {
+	clock := daemonT0
+	var sleeps []time.Duration
+	err := runDaemonWith(context.Background(), daemonConfig{
+		logf:  func(string, ...any) {},
+		round: func() error { return errSkipped },
+		now:   func() time.Time { return clock },
+		rand:  func() float64 { return 0 },
+		sleep: func(_ context.Context, d time.Duration) bool { sleeps = append(sleeps, d); return len(sleeps) < 2 },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []time.Duration{8 * time.Minute, 16 * time.Minute}; !reflect.DeepEqual(sleeps, want) {
+		t.Fatalf("sleeps = %v，期望 %v", sleeps, want)
+	}
+}
