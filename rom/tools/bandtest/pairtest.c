@@ -19,14 +19,16 @@
 static jb_page_t s_page;
 static uint8_t s_band[BAND_CAP];
 static size_t s_len;
+static int s_row0, s_rows;
 
 /* pairband.c 需要的最小 stream 桩。 */
 uint8_t *stream_band_begin(void) { return s_band; }
 size_t stream_band_cap(void) { return sizeof s_band; }
-bool stream_band_publish(uint8_t *buf, size_t len, int page)
+bool stream_band_publish_span(uint8_t *buf, size_t len, int page, int row0, int rows)
 {
     (void)buf;
     (void)page;
+    s_row0 = row0; s_rows = rows;
     s_len = len;
     return true;
 }
@@ -62,7 +64,7 @@ int main(int argc, char **argv)
     }
 
     /* 最坏码：六个 8 的段最多。 */
-    pairband_show("888888");
+    pairband_show("888888", "https://mqtt.stickbox.ai/p?d=a1b2c3d4e5f6");
     printf("配对页最坏带长 %zu 字节（BAND_CAP %d）\n", s_len, BAND_CAP);
     if (!s_len || s_len > BAND_CAP) {
         fprintf(stderr, "✗ 配对页超出带缓冲\n");
