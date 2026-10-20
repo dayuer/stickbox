@@ -13,7 +13,8 @@ type outcome int
 
 const (
 	outcomeOK         outcome = iota // 成功：正常间隔
-	outcomeTransient                 // 瞬时：网络抖动、5xx、限额暂不可用，快速重试
+	outcomeTransient                 // 瞬时：网络超时、连接失败、5xx，快速重试
+	outcomeCooldown                  // 冷却：用量接口限流（rate_limits 为 null / 429），重试只会延长冷却
 	outcomePersistent                // 持续：要人处理，别反复拉起 claude
 )
 
@@ -23,6 +24,8 @@ func (o outcome) String() string {
 		return "ok"
 	case outcomeTransient:
 		return "transient"
+	case outcomeCooldown:
+		return "cooldown"
 	}
 	return "persistent"
 }
@@ -32,8 +35,9 @@ func (o outcome) String() string {
 // 不会重叠；claude 单次峰值 350–400MB，所以不能更密也不能并发。
 var fastRetryDelays = []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute}
 
-// skipError：本轮没有可报的数据（rate_limits 为 null，多半是 429 冷却或
-// claude 刚启动还没取到），不是配置问题，归为瞬时。
+// skipError：本轮没有可报的数据（rate_limits 为 null）。2026-10-20 的实测
+// 推翻了 #20 里「这是瞬时失败」的假设：null 是用量接口被 429 限流后客户端本地
+// 冷却的表现，冷却期里再快速重试只会继续敲接口，所以归 cooldown（见 #24）。
 type skipError struct{ reason string }
 
 func (e *skipError) Error() string { return e.reason }
@@ -56,11 +60,15 @@ func classify(err error) outcome {
 	}
 	var se *skipError
 	if errors.As(err, &se) {
-		return outcomeTransient
+		return outcomeCooldown
 	}
 	var ae *apiError
 	if errors.As(err, &ae) {
-		// 401/403 令牌失效、4xx 请求有问题：重试没用。只有 5xx 是服务端的瞬时故障。
+		// 429 是限流，要冷却而不是快速重试；401/403 令牌失效、其它 4xx 请求有问题：
+		// 重试没用。只有 5xx 是服务端的瞬时故障。
+		if ae.Status == http.StatusTooManyRequests {
+			return outcomeCooldown
+		}
 		if ae.Status >= http.StatusInternalServerError {
 			return outcomeTransient
 		}
@@ -89,6 +97,7 @@ func isForbidden(err error) bool {
 // retryPlanner 决定一轮结束后睡多久。只在 runDaemon 的单个循环里使用，
 // 不需要加锁。
 type retryPlanner struct {
+	cool int // 当前这串 cooldown 已经连续的轮数（成功或 persistent 清零）
 	fast int // 当前这串 transient 已经用掉的快速重试次数
 	fail int // 连续失败轮数（未配对不算故障，既不累计也不清零，与 failureTracker 一致）
 }
@@ -98,12 +107,18 @@ type retryPlanner struct {
 //   - transient：前 3 次依次 60s/120s/240s；用完之后回 usageInterval，
 //     且不再开新一串快速重试，直到出现一次成功或 persistent，避免长时间故障期间
 //     每 10 分钟都夹带一串重试。
+//   - cooldown：不快速重试，等 cooldownDelay。
 //   - persistent：保持原有间隔（未配对/令牌失效 1 小时，其余 usageInterval），
 //     不快速重试，也就不会反复拉起 claude。
 func (p *retryPlanner) next(err error) (wait time.Duration, fastRetry bool) {
 	switch classify(err) {
 	case outcomeOK:
-		p.fast, p.fail = 0, 0
+		p.fast, p.fail, p.cool = 0, 0, 0
+		return usageInterval, false
+	case outcomeCooldown:
+		p.fail++
+		p.fast = 0
+		p.cool++
 		return usageInterval, false
 	case outcomeTransient:
 		p.fail++
@@ -117,7 +132,7 @@ func (p *retryPlanner) next(err error) (wait time.Duration, fastRetry bool) {
 	if !errors.Is(err, errNotPaired) {
 		p.fail++
 	}
-	p.fast = 0
+	p.fast, p.cool = 0, 0
 	return retryDelay(err), false
 }
 

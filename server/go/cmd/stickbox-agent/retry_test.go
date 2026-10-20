@@ -20,13 +20,13 @@ func TestClassify(t *testing.T) {
 		want outcome
 	}{
 		{"ok", nil, outcomeOK},
-		{"skip limits null", &skipError{reason: "rate_limits.limits 为 null"}, outcomeTransient},
+		{"skip limits null", &skipError{reason: "rate_limits.limits 为 null"}, outcomeCooldown},
 		{"5xx", fmt.Errorf("上报失败：%w", &apiError{Status: 502}), outcomeTransient},
 		{"500", fmt.Errorf("上报失败：%w", &apiError{Status: 500}), outcomeTransient},
 		{"401", fmt.Errorf("上报失败：%w", &apiError{Status: 401, Code: "unauthorized"}), outcomePersistent},
 		{"403", fmt.Errorf("上报失败：%w", &apiError{Status: 403}), outcomePersistent},
 		{"400", fmt.Errorf("上报失败：%w", &apiError{Status: 400}), outcomePersistent},
-		{"429", fmt.Errorf("上报失败：%w", &apiError{Status: 429}), outcomePersistent},
+		{"429", fmt.Errorf("上报失败：%w", &apiError{Status: 429}), outcomeCooldown},
 		{"transport", fmt.Errorf("上报失败：%w", &transportError{msg: "连接失败", err: errors.New("i/o timeout")}), outcomeTransient},
 		{"not paired", errNotPaired, outcomePersistent},
 		{"not logged in", errClaudeNotLoggedIn, outcomePersistent},
@@ -142,9 +142,10 @@ func driveDaemon(t *testing.T, script []error) (sleeps []time.Duration, scheds [
 }
 
 var (
-	errTransient  = &transportError{msg: "连接失败：i/o timeout", err: errors.New("timeout")}
-	errSkipped    = &skipError{reason: "rate_limits.limits 为 null"}
-	errPersistent = errClaudeNotLoggedIn
+	errTransient    = &transportError{msg: "连接失败：i/o timeout", err: errors.New("timeout")}
+	errTransient5xx = fmt.Errorf("上报失败：%w", &apiError{Status: 503})
+	errSkipped      = &skipError{reason: "rate_limits.limits 为 null"}
+	errPersistent   = errClaudeNotLoggedIn
 )
 
 // 一次超时后 60s 重试，成功后回 10 分钟。
@@ -164,7 +165,7 @@ func TestDaemonRetriesSixtySecondsAfterTimeoutThenRecovers(t *testing.T) {
 
 // 连续 3 次 transient：60s、120s、240s，之后回到 10 分钟，并且不再开新一串快速重试。
 func TestDaemonThreeTransientsThenBackToNormalInterval(t *testing.T) {
-	script := []error{errTransient, errSkipped, errTransient, errTransient, errSkipped, nil}
+	script := []error{errTransient, errTransient5xx, errTransient, errTransient, errTransient5xx, nil}
 	sleeps, scheds := driveDaemon(t, script)
 	want := []time.Duration{
 		time.Minute, 2 * time.Minute, 4 * time.Minute, // 3 次快速重试

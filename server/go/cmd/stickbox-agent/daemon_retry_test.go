@@ -221,7 +221,7 @@ func TestE2ENotLoggedInDoesNotFastRetry(t *testing.T) {
 	}
 }
 
-// ④ limits 为 null 被跳过：算瞬时，60s 后重试；claude 恢复后成功。
+// ④ limits 为 null 被跳过：算冷却，不快速重试；claude 恢复后成功。
 func TestE2ELimitsNullRetriesThenRecovers(t *testing.T) {
 	var hits int32
 	srv := okServer(&hits)
@@ -234,7 +234,7 @@ func TestE2ELimitsNullRetriesThenRecovers(t *testing.T) {
 		claude.SetUsage(readFixture(t, "usage-stream.jsonl"))
 	})
 
-	want := []time.Duration{time.Minute, usageInterval}
+	want := []time.Duration{usageInterval, usageInterval}
 	if !reflect.DeepEqual(r.sleeps, want) {
 		t.Fatalf("sleeps = %v，期望 %v", r.sleeps, want)
 	}
