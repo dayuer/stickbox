@@ -195,7 +195,7 @@ static void set_pair(const char *code, int64_t expires, int64_t now)
     s_paired = false;
     lcd_ui_pair(code, false);
     pairband_show(code);
-    ESP_LOGI(TAG, "配对码 %s，%lld 秒后过期", code, (long long)ttl);
+    ESP_LOGI(TAG, "配对码已生成，%lld 秒后过期", (long long)ttl);
 }
 
 static bool device_register(void)
