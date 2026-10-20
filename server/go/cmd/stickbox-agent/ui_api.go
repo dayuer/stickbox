@@ -48,6 +48,8 @@ func (s *uiServer) api(method string, h http.HandlerFunc) http.HandlerFunc {
 func (s *uiServer) apiRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/status", s.api(http.MethodGet, s.handleStatus))
 	mux.HandleFunc("/api/devices", s.api(http.MethodGet, s.handleDevices))
+	mux.HandleFunc("/api/discover", s.api(http.MethodGet, s.handleDiscover))
+	mux.HandleFunc("/api/pair-device", s.api(http.MethodPost, s.handlePairDevice))
 	mux.HandleFunc("/api/pair", s.api(http.MethodPost, s.handlePair))
 	mux.HandleFunc("/api/unpair", s.api(http.MethodPost, s.handleUnpair))
 	mux.HandleFunc("/api/run-once", s.api(http.MethodPost, s.handleRunOnce))
@@ -207,20 +209,10 @@ func (s *uiServer) handlePair(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	c, err := loadConfig()
+	c, err := loadPairConfig(s.opts.server, s.opts.insecure)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, "config", err.Error())
-		return
-	}
-	if s.opts.server != "" {
-		c.Server = s.opts.server
-	}
-	if c.Server, err = normalizeServer(c.Server); err != nil {
 		s.fail(w, http.StatusBadRequest, "config", err.Error())
 		return
-	}
-	if s.opts.insecure {
-		c.Insecure = true
 	}
 	name := req.Name
 	if strings.TrimSpace(name) == "" {
@@ -240,6 +232,105 @@ func (s *uiServer) handlePair(w http.ResponseWriter, r *http.Request) {
 	s.addSecret(c.Token)
 	s.markPaired()
 	s.logf("网页配对成功：%s", dev)
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "dev": dev, "new_user": newUser,
+		"msg": "已配对，电视会在几秒内切到看板",
+	})
+}
+
+// ---- 局域网发现 ----
+
+type foundView struct {
+	Dev   string `json:"dev"`
+	Short string `json:"short"`
+	IP    string `json:"ip"`
+	FW    string `json:"fw"`
+}
+
+func (s *uiServer) handleDiscover(w http.ResponseWriter, r *http.Request) {
+	if !s.discMu.TryLock() {
+		s.fail(w, http.StatusConflict, "busy", "正在搜索，请稍候")
+		return
+	}
+	defer s.discMu.Unlock()
+	defer s.touch()
+	devs, err := s.disc.Discover(r.Context())
+	if err != nil {
+		s.logf("局域网发现失败：%v", err)
+		s.fail(w, http.StatusBadGateway, "discover", "搜索失败："+truncateRunes(err.Error(), 200))
+		return
+	}
+	s.foundMu.Lock()
+	s.found = map[string]foundDevice{}
+	view := make([]foundView, 0, len(devs))
+	for _, d := range devs {
+		s.found[d.Dev] = d
+		view = append(view, foundView{Dev: d.Dev, Short: d.Short(), IP: d.IP, FW: d.FW})
+	}
+	s.foundMu.Unlock()
+	s.writeJSON(w, http.StatusOK, map[string]any{"devices": view})
+}
+
+// handlePairDevice：对一块已发现的设备读码并配对。设备地址只取服务端记下的发现结果；
+// 码只在本进程内存里经过，不写日志、不回传页面。
+func (s *uiServer) handlePairDevice(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Dev  string `json:"dev"`
+		Name string `json:"name"`
+	}
+	if err := decodeBody(r, &req); err != nil {
+		s.fail(w, http.StatusBadRequest, "bad_request", "请求格式不对")
+		return
+	}
+	s.foundMu.Lock()
+	d, ok := s.found[strings.ToLower(strings.TrimSpace(req.Dev))]
+	s.foundMu.Unlock()
+	if !ok {
+		s.fail(w, http.StatusNotFound, "not_found", "这块屏不在最近的搜索结果里，请重新搜索")
+		return
+	}
+	if blocked, wait := s.pairBlocked(); blocked {
+		s.writeJSON(w, http.StatusTooManyRequests, uiError{Kind: "rate_limited", Retry: wait, Msg: "尝试次数过多，请稍等片刻再试"})
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, err := loadPairConfig(s.opts.server, s.opts.insecure)
+	if err != nil {
+		s.fail(w, http.StatusBadRequest, "config", err.Error())
+		return
+	}
+	name := req.Name
+	if strings.TrimSpace(name) == "" {
+		name = s.opts.name
+	}
+	dev, newUser, err := pairFound(r.Context(), c, s.codes, d, resolveAgentName(name))
+	if err != nil {
+		switch {
+		case errors.Is(err, errNotPending):
+			s.fail(w, http.StatusConflict, "not_pending", errNotPending.Error())
+		case errors.Is(err, errCodeExpired):
+			s.fail(w, http.StatusConflict, "code_expired", errCodeExpired.Error())
+		default:
+			var ae *apiError
+			var te *transportError
+			if errors.As(err, &ae) {
+				s.recordPairFail()
+			}
+			if errors.As(err, &ae) || errors.As(err, &te) || errors.Is(err, errNotPaired) {
+				st, kind, msg := classifyErr(err)
+				s.fail(w, st, kind, msg)
+			} else {
+				s.fail(w, http.StatusBadGateway, "device", truncateRunes(err.Error(), 200))
+			}
+		}
+		s.logf("发现配对失败：%s", d.Short())
+		return
+	}
+	s.addSecret(c.Token)
+	s.markPaired()
+	s.logf("发现配对成功：%s", dev)
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "dev": dev, "new_user": newUser,
 		"msg": "已配对，电视会在几秒内切到看板",

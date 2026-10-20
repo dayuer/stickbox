@@ -747,12 +747,21 @@ func cmdPair(args []string) error {
 	server := fs.String("server", "", "服务端地址（默认 "+defaultServer+"）")
 	name := fs.String("name", "", "这台电脑的名称（默认主机名）")
 	insecure := fs.Bool("insecure", false, "跳过 TLS 证书校验（仅自签名证书时使用）")
+	auto := fs.Bool("auto", false, "在局域网里自动发现待配对的屏幕并配对（不用手输码）")
+	yes := fs.Bool("yes", false, "配合 --auto：只有 1 块屏时不再询问确认")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	opts := uiOptions{server: *server, name: *name, insecure: *insecure}
+	if *auto {
+		if fs.NArg() != 0 {
+			return errors.New("--auto 不需要再给配对码")
+		}
+		return pairAuto(context.Background(), opts, *yes, newUDPDiscoverer(), newHTTPCodeReader(), os.Stdin, os.Stdout)
+	}
 	if fs.NArg() == 0 {
 		// 不带配对码：打开本机网页输入（stickbox-agent ui）。
-		return runUICommand(uiOptions{server: *server, name: *name, insecure: *insecure}, false, 0)
+		return runUICommand(opts, true, 0)
 	}
 	if fs.NArg() != 1 {
 		return errors.New("用法：stickbox-agent pair [--server URL] [--name 名称] [--insecure] <6 位配对码>")
@@ -762,18 +771,9 @@ func cmdPair(args []string) error {
 		return errors.New("配对码应为 6 位数字")
 	}
 
-	c, err := loadConfig()
+	c, err := loadPairConfig(*server, *insecure)
 	if err != nil {
 		return err
-	}
-	if *server != "" {
-		c.Server = *server
-	}
-	if c.Server, err = normalizeServer(c.Server); err != nil {
-		return err
-	}
-	if *insecure {
-		c.Insecure = true
 	}
 
 	agentName := resolveAgentName(*name)
@@ -1475,6 +1475,8 @@ func usage() {
 
 用法：
   stickbox-agent pair [--server URL] [--name 名称] [--insecure] <配对码>
+  stickbox-agent pair --auto [--yes]   局域网里自动发现待配对的屏幕并配对（不用手输码）
+  stickbox-agent discover              只列出局域网里待配对的屏幕
   stickbox-agent pair                  不带配对码：打开本机网页输入（同 ui）
   stickbox-agent ui [--port N] [--no-open]
                                        本机网页：输入配对码、管理设备（只监听 127.0.0.1）
@@ -1527,6 +1529,8 @@ func main() {
 		err = cmdDevices(args)
 	case "ui":
 		err = cmdUI(args)
+	case "discover":
+		err = cmdDiscover(args)
 	case "run":
 		err = cmdRun(args)
 	case "install":

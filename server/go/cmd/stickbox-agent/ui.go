@@ -62,6 +62,14 @@ type uiServer struct {
 	// runRound 默认是 runRound；单测里换成假的，避免真的拉起 claude。
 	runRound func(*agentConfig, func(string, ...any)) error
 
+	// 局域网发现与读码，可注入（单测用假板子）。
+	disc  discoverer
+	codes codeReader
+
+	discMu  sync.Mutex // 发现不重叠
+	foundMu sync.Mutex
+	found   map[string]foundDevice // 最近一次发现的设备，配对只认这里的 IP，不信页面传来的地址
+
 	mu    sync.Mutex // 串行化会改配置/服务端状态的操作（pair / unpair）
 	runMu sync.Mutex // run-once 不重叠
 
@@ -89,6 +97,9 @@ func newUIServer(opts uiOptions) (*uiServer, error) {
 		now:       time.Now,
 		logf:      func(f string, a ...any) { log.Printf(f, a...) },
 		runRound:  runRound,
+		disc:      newUDPDiscoverer(),
+		codes:     newHTTPCodeReader(),
+		found:     map[string]foundDevice{},
 		activity:  make(chan struct{}, 1),
 		paired:    make(chan struct{}),
 	}, nil
