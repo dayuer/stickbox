@@ -16,6 +16,7 @@ cc $CC_ARGS -o packtest packtest.c ../../main/framepack_band.c ../../main/framep
 # 同一个着色器。esp_log.h 用 hoststub 里的桩顶掉。
 cc -I../../main -Ihoststub -O1 -Wall -o pagetest pagetest.c ../../main/jband.c ../../main/statusmask.c
 cc -I../../main -Ihoststub -O1 -Wall -o pairtest pairtest.c ../../main/pairband.c ../../main/jband.c ../../main/statusmask.c
+cc -I../../main -Ihoststub -O1 -Wall -o pairbox_test pairbox_test.c ../../main/jband.c ../../main/statusmask.c
 cc $CC_ARGS -o vertest vertest.c ../../main/framepack_ver.c
 # 照片裸扇区存储：板上跑的是同一份 photostore_core.c，掉电/CRC/分配在主机钉死
 cc $CC_ARGS -o photostore_test photostore_test.c ../../main/photostore_core.c ../../main/photosha.c
@@ -56,6 +57,9 @@ echo "   六张都通过 djpeg 解码"
 
 echo "== 5. 配对页最坏码 + 提示文字 =="
 ./pairtest ../../main/assets/blank.jpg
+
+echo "== 5b. 配对码包围盒：所有亮点在 PAIRBAND_BOX 内（#19）=="
+./pairbox_test ../../main/assets/blank.jpg | tail -4
 
 echo "== 6. 槽头版本字段解码 =="
 ./vertest
