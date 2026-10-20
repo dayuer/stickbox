@@ -19,6 +19,9 @@ type Config struct {
 	CertDir  string `json:"cert_dir"`
 	HTTPAddr string `json:"http_addr"`
 	MQTTAddr string `json:"mqtt_addr"`
+	// PublicURL 是对外站点根（https://mqtt.stickbox.ai），网页配对生成兑换链接用；
+	// 留空则按请求头推断。
+	PublicURL string `json:"public_url"`
 	// DefaultTZ 是 agent 没上报时区时的兜底（IANA 名，如 Asia/Bangkok）。
 	DefaultTZ   string `json:"default_tz"`
 	MetricsAddr string `json:"metrics_addr"`

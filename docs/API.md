@@ -76,6 +76,11 @@ agent / user 令牌不能连 MQTT；设备不能调 agent/user 的 HTTP 端点�
 | GET | `/fw/{name}` | 无 | 下载固件 bin；开源硬件，防篡改靠签名 |
 | GET | `/api/device/frame` | device | 取当前帧包（ETag/304） |
 | POST | `/api/agent/pair` | 可选 agent | 输码配对；新用户或并入已有用户 |
+| POST | `/api/agent/redeem` | 无（凭一次性链接） | 兑换网页配对生成的一次性链接，领 agent 令牌 |
+| GET | `/p` | 无 | 网页配对落地页（二维码指向）；另有同源静态资源 `/p/app.js`、`/p/app.css` |
+| GET | `/p/app.js` | 无 | 配对页脚本（同源，CSP 不放行内联） |
+| GET | `/p/app.css` | 无 | 配对页样式 |
+| POST | `/api/web/pair` | 无 | 手机网页提交配对码，换一次性兑换链接 |
 | POST | `/api/agent/unpair` | agent | 解绑自己名下的屏 |
 | GET | `/api/agent/devices` | agent | 列出名下设备与在线状态 |
 | GET | `/api/agent/usage` | agent | 读取本用户最新用量 |
@@ -454,6 +459,47 @@ agent 应把非空 token 存到用户配置目录（0600）。
   | 500 | `server error` | 服务端内部错误 |
 
 限流：每来源 IP 10 分钟 10 次**失败**；全局每分钟 100 次失败。
+
+### 3.1.1 网页配对：`GET /p`、`POST /api/web/pair`、`POST /api/agent/redeem`
+
+电视配对屏上的二维码指向 `https://<站点>/p?d=<devid>`（`devid` 为 12 位小写 hex，
+**二维码里只有设备 ID，不含配对码**）。流程：手机扫码 → 在页面填电视上的 6 位码 →
+页面给出一条命令 `stickbox-agent pair --link '<url>'` → 在电脑上执行。手机永远拿不到
+agent 令牌。
+
+**`GET /p`**（以及同源资源 `/p/app.js`、`/p/app.css`）：不鉴权，中文单页，零外部资源。
+响应头：`Cache-Control: no-store`、`Referrer-Policy: no-referrer`、
+`Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`。
+`d` 参数预填设备（页面只显示后 4 位）；`d` 不是 12 位小写 hex 时页面禁用输入。
+
+**`POST /api/web/pair`** `{"dev":"f412fa87c9e0","code":"123456"}`，不鉴权。校验与消费配对码
+的规则同 3.1（码一次性、原子消费、并发只有一个成功），另外：
+
+- 码只对它所属的设备有效：`dev` 与码不匹配按 `404 bad code` 处理，**不会烧掉别人的码**；
+- 设备已绑定到某用户时返回 `409 device bound`，并把码放回去；
+- 成功 `200`：`{"link":"https://<站点>/r/<43 字符>","expires_in":900}`。链接含 256 bit
+  随机数，库里只存其 SHA-256；15 分钟有效、只能用一次；
+- 此阶段不建用户、不签令牌、不绑定设备；这些都发生在兑换时；
+- 站点根取配置 `public_url`，留空则按请求头推断。
+
+**`POST /api/agent/redeem`** `{"link":"https://<站点>/r/<...>","name":"my-mac"}`，不带令牌；
+`name` 可选（≤64 字节）。兑换时才新建用户、签发 agent 令牌、转正设备（后续动作同 3.1）。
+链接在读取的同一瞬间原子作废，并发兑换只有一个成功。成功 `200` 与 3.1 相同：
+`{"dev","user_id","token"}`。
+
+| 端点 | 状态 | `e` | 原因 |
+|---|---|---|---|
+| web/pair | 400 | `bad code` | `dev` 不是 12 位小写 hex，或码不是 6 位 |
+| web/pair | 404 | `bad code` | 码不存在、已过期、已用掉，或不属于该 `dev` |
+| web/pair | 409 | `device bound` / `bad code` | 设备已绑定 / 待配对密钥已失效 |
+| web/pair | 429 | `rate limited` | 限流 |
+| redeem | 404 | `bad link` | 链接格式不对、不存在、过期、已用掉（不区分原因） |
+| redeem | 409 | `device bound` / `bad code` | 设备在此期间被绑定 / 待配对密钥已失效 |
+| redeem | 429 | `rate limited` | 限流 |
+
+限流（均只统计失败）：web/pair 每来源 IP 10 分钟 10 次、每设备 10 分钟 30 次、全局每分钟 100 次
+（与 3.1 共用全局桶）；redeem 每来源 IP 10 分钟 10 次、全局每分钟 100 次。
+令牌、链接、配对码不会写进日志，也不会出现在错误文本里。
 
 ### 3.2 `POST /api/agent/unpair`
 
