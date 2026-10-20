@@ -15,6 +15,7 @@
 #include "photo_play.h"
 #include "photo_sd.h"
 #include "photostore.h"
+#include "lanpair.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -294,6 +295,13 @@ static void client_task(void *arg)
     bool head = strncmp(req, "HEAD ", 5) == 0;
     bool get = strncmp(req, "GET ", 4) == 0;
     const char *path = strchr(req, ' ');
+    /* 局域网配对（#28）：只答 GET /pair，复用本临时任务，不新增任务。
+     * HEAD 不应答，免得不带正文也泄露「正在待配对」。 */
+    if (get && path && strncmp(path + 1, "/pair", 5) == 0 &&
+        (path[6] == ' ' || path[6] == '?')) {
+        lanpair_http(fd);
+        goto out;
+    }
     if ((!head && !get) || !path || strncmp(path + 1, "/live.avi", 9) != 0) {
         static const char nf[] = "HTTP/1.0 404 Not Found\r\nConnection: close\r\n\r\n";
         send_all(fd, nf, sizeof nf - 1);

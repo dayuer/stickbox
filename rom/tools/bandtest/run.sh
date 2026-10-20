@@ -26,6 +26,8 @@ cc $CC_ARGS -o photo_core_test photo_core_test.c ../../main/photo_json.c ../../m
 cc $CC_ARGS -o photo_seq_test photo_seq_test.c ../../main/photo_play_seq.c
 # 崩溃镜像上传退避：413 每次开机重试是 v1.1.0 开机堆低点的根因，在主机钉死
 cc $CC_ARGS -o coredump_policy_test coredump_policy_test.c ../../main/coredump_policy.c
+# 局域网配对（#28）：来源地址判断 / 待配对与已配对响应 / 限速 / UDP 发现应答
+cc $CC_ARGS -o lanpair_test lanpair_test.c ../../main/lanpair_core.c
 
 # 帧包和黄金帧都由 server/go/cmd/packgen 现生成，不依赖任何别人的 worktree
 # ——那些目录会被收敛掉，测试不该因此失效。
@@ -75,3 +77,6 @@ echo "== 9. 照片播放序列 / 无照片时恒为 board =="
 
 echo "== 10. 崩溃镜像上传退避（413 不再每次开机重试）=="
 ./coredump_policy_test | tail -3
+
+echo "== 11. 局域网配对：来源/响应/限速/发现 =="
+./lanpair_test

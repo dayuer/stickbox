@@ -29,6 +29,7 @@
 #include "coredump.h"
 #include "dlna.h"
 #include "framefetch.h"
+#include "lanpair.h"
 #include "lcd_ui.h"
 #include "memdiag.h"
 #include "ota.h"
@@ -92,6 +93,7 @@ static void services_task(void *arg)
     esp_wifi_get_mac(WIFI_IF_STA, mac);
     memdiag_heap("cloud_client_start 之前");
     cloud_client_start(mac);
+    lanpair_udp_start();   /* #28：待配对期间应答局域网发现；无任务 */
     ESP_LOGI(TAG, "云端服务已启动，堆=%u", (unsigned)esp_get_free_heap_size());
     memdiag_heap("cloud_client_start 之后（含 MQTT TLS 长连接）");
 

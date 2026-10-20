@@ -195,7 +195,7 @@ static void set_pair(const char *code, int64_t expires, int64_t now)
     s_paired = false;
     lcd_ui_pair(code, false);
     pairband_show(code);
-    ESP_LOGI(TAG, "配对码 %s，%lld 秒后过期", code, (long long)ttl);
+    ESP_LOGI(TAG, "配对码已生成，%lld 秒后过期", (long long)ttl);
 }
 
 static bool device_register(void)
@@ -969,4 +969,24 @@ void cloud_client_start(const uint8_t mac[6])
     s_mqtt = esp_mqtt_client_init(&cfg);
     esp_mqtt_client_register_event(s_mqtt, ESP_EVENT_ANY_ID, on_mqtt, NULL);
     esp_mqtt_client_start(s_mqtt);
+}
+
+const char *cloud_devid(void) { return s_devid; }
+
+/* 局域网配对（#28）用的只读快照。只有「待配对且码未过期」才返回 true。
+ * set_pair() 在别的任务里写 s_pair_code，这里拷两遍比对，避免读到新旧码各一半。 */
+bool cloud_pair_peek(char code[8], int *expires_in)
+{
+    char a[8], b[8];
+    int64_t exp;
+    memcpy(a, s_pair_code, sizeof a);
+    exp = s_pair_expire_us;
+    memcpy(b, s_pair_code, sizeof b);
+    if (s_paired || memcmp(a, b, sizeof a) != 0 || a[0] == 0) return false;
+    int64_t left = (exp - esp_timer_get_time()) / 1000000LL;
+    if (left <= 0) return false;
+    a[7] = 0;
+    memcpy(code, a, 8);
+    *expires_in = left > 100000 ? 100000 : (int)left;
+    return true;
 }

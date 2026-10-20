@@ -110,7 +110,7 @@ void pairband_show(const char *code)
 {
     if (!code || strlen(code) != NDIG) return;
     size_t n = encode(code);
-    if (n) ESP_LOGI(TAG, "配对码 %s 已上电视，条带 %u B", code, (unsigned)n);
+    if (n) ESP_LOGI(TAG, "配对码已上电视，条带 %u B", (unsigned)n);
 }
 
 void pairband_clear(void)
