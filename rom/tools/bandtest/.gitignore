@@ -7,3 +7,7 @@
 /photostore_test
 /photo_core_test
 /photo_seq_test
+/pairbox_test
+/qrdump
+/coredump_policy_test
+/lanpair_test

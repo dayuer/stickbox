@@ -194,7 +194,9 @@ static void set_pair(const char *code, int64_t expires, int64_t now)
     s_pair_expire_us = esp_timer_get_time() + ttl * 1000000LL;
     s_paired = false;
     lcd_ui_pair(code, false);
-    pairband_show(code);
+    char qr_url[96];
+    pairband_url(qr_url, sizeof qr_url, s_api_base, s_devid);
+    pairband_show(code, qr_url);
     ESP_LOGI(TAG, "配对码已生成，%lld 秒后过期", (long long)ttl);
 }
 

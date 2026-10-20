@@ -15,8 +15,9 @@ cc $CC_ARGS -o packtest packtest.c ../../main/framepack_band.c ../../main/framep
 # 状态页走设备上真正跑的那条路：同一份掩码、同一个 jb_encode_rows、
 # 同一个着色器。esp_log.h 用 hoststub 里的桩顶掉。
 cc -I../../main -Ihoststub -O1 -Wall -o pagetest pagetest.c ../../main/jband.c ../../main/statusmask.c
-cc -I../../main -Ihoststub -O1 -Wall -o pairtest pairtest.c ../../main/pairband.c ../../main/jband.c ../../main/statusmask.c
-cc -I../../main -Ihoststub -O1 -Wall -o pairbox_test pairbox_test.c ../../main/jband.c ../../main/statusmask.c
+cc -I../../main -Ihoststub -O1 -Wall -o pairtest -Ihoststub pairtest.c ../../main/pairband.c ../../main/qrcodegen.c ../../main/jband.c ../../main/statusmask.c
+cc -I../../main -Ihoststub -O1 -Wall -o pairbox_test pairbox_test.c ../../main/qrcodegen.c ../../main/jband.c ../../main/statusmask.c
+cc -I../../main -Ihoststub -O1 -Wall -Werror -o qrdump qrdump.c ../../main/pairband.c ../../main/qrcodegen.c ../../main/jband.c ../../main/statusmask.c
 cc $CC_ARGS -o vertest vertest.c ../../main/framepack_ver.c
 # 照片裸扇区存储：板上跑的是同一份 photostore_core.c，掉电/CRC/分配在主机钉死
 cc $CC_ARGS -o photostore_test photostore_test.c ../../main/photostore_core.c ../../main/photosha.c
@@ -61,7 +62,15 @@ echo "== 5. 配对页最坏码 + 提示文字 =="
 ./pairtest ../../main/assets/blank.jpg
 
 echo "== 5b. 配对码包围盒：所有亮点在 PAIRBAND_BOX 内（#19）=="
-./pairbox_test ../../main/assets/blank.jpg | tail -4
+# 管道会吞掉退出码，所以先落文件；日志（stderr）只在失败时给人看。
+./pairbox_test ../../main/assets/blank.jpg >/tmp/pairbox.out 2>/tmp/pairbox.err ||
+    { cat /tmp/pairbox.err; tail -5 /tmp/pairbox.out; exit 1; }
+tail -4 /tmp/pairbox.out
+
+echo "== 5c. 配对页二维码：独立解码器（zxing-cpp）从整页 JPEG 里解出完整 URL（#31）=="
+# 依赖 zxing-cpp/pillow/numpy；系统没装可以临时装到别处（见 qrdecode.py 头部），
+# 然后 PYTHONPATH=/tmp/qrdec sh run.sh。设 REQUIRE_QR_DECODE=1 则缺依赖算失败。
+python3 qrdecode.py ./qrdump ../../main/assets/blank.jpg
 
 echo "== 6. 槽头版本字段解码 =="
 ./vertest
