@@ -169,9 +169,9 @@ type daemonConfig struct {
 	round func() error
 	sleep func(context.Context, time.Duration) bool
 	now   func() time.Time
-	// onSchedule 在每轮结束、睡眠之前调用：连续失败轮数（成功为 0）和下次尝试时间。
-	// 可为 nil。
-	onSchedule func(fails int, next time.Time)
+	// onSchedule 在每轮结束、睡眠之前调用：连续失败轮数（成功为 0）、下次尝试时间，
+	// 以及本轮是否落在 cooldown（用量接口限流冷却中）。可为 nil。
+	onSchedule func(fails int, next time.Time, cooldown bool)
 	// rand 是冷却退避抖动的随机源，[0,1)；nil 不抖动。
 	rand func() float64
 }
@@ -204,7 +204,7 @@ func runDaemonWith(ctx context.Context, c daemonConfig) error {
 			}
 		}
 		if c.onSchedule != nil {
-			c.onSchedule(plan.fail, c.now().Add(wait))
+			c.onSchedule(plan.fail, c.now().Add(wait), classify(err) == outcomeCooldown)
 		}
 		if !c.sleep(ctx, wait) {
 			c.logf("收到退出信号，停止")

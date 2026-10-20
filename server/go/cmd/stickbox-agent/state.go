@@ -23,6 +23,9 @@ type agentState struct {
 	// NextRetryAt 是 agent 计划的下一次尝试时间（Unix 秒），仅在连续失败时有值。
 	ConsecutiveFailures int   `json:"consecutive_failures,omitempty"`
 	NextRetryAt         int64 `json:"next_retry_at,omitempty"`
+	// Cooldown 为 true 表示最近一轮是 cooldown（rate_limits 为 null / 429，用量接口
+	// 限流冷却中），agent 正在逐步退避；下次尝试时间见 NextRetryAt。
+	Cooldown bool `json:"cooldown,omitempty"`
 }
 
 const (
@@ -112,13 +115,13 @@ func recordRoundState(logf func(string, ...any), err error, now time.Time) {
 }
 
 // recordSchedule 在每轮结束后记下连续失败轮数和下次尝试时间。
-// fails==0（成功）时两项都清掉。写失败只记日志。
-func recordSchedule(logf func(string, ...any), fails int, next time.Time) {
+// fails==0（成功）时全部清掉。cooldown 表示本轮落在限流冷却。写失败只记日志。
+func recordSchedule(logf func(string, ...any), fails int, next time.Time, cooldown bool) {
 	s := loadState()
 	if fails <= 0 {
-		s.ConsecutiveFailures, s.NextRetryAt = 0, 0
+		s.ConsecutiveFailures, s.NextRetryAt, s.Cooldown = 0, 0, false
 	} else {
-		s.ConsecutiveFailures, s.NextRetryAt = fails, next.Unix()
+		s.ConsecutiveFailures, s.NextRetryAt, s.Cooldown = fails, next.Unix(), cooldown
 	}
 	if werr := saveState(s); werr != nil {
 		logf("写状态文件失败（不影响上报）：%v", werr)
@@ -129,7 +132,7 @@ func fmtStateTime(ts int64) string {
 	return time.Unix(ts, 0).Local().Format("2006-01-02 15:04")
 }
 
-// statusLines 生成 status 命令的三行；连续失败时多一行。
+// statusLines 生成 status 命令的三行；连续失败时多一行，冷却中再多一行。
 func (s agentState) statusLines() []string {
 	last := "上次成功：无记录"
 	if s.LastSuccessAt > 0 {
@@ -157,6 +160,9 @@ func (s agentState) statusLines() []string {
 			retry += "，下次尝试：" + time.Unix(s.NextRetryAt, 0).Local().Format("2006-01-02 15:04:05")
 		}
 		lines = append(lines, retry)
+		if s.Cooldown {
+			lines = append(lines, "冷却中：用量接口限流（rate_limits 为空/429），agent 在逐步拉长重试间隔（10→60 分钟），无需处理")
+		}
 	}
 	return lines
 }

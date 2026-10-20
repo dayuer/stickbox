@@ -108,7 +108,7 @@ func runE2E(t *testing.T, claude *countingClaude, server string, rounds int, aft
 			}
 			return true
 		},
-		onSchedule: func(fails int, next time.Time) { recordSchedule(logf, fails, next) },
+		onSchedule: func(fails int, next time.Time, cd bool) { recordSchedule(logf, fails, next, cd) },
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -879,8 +879,8 @@ func cmdRun(args []string) error {
 		sleep: sleepCtx,
 		now:   time.Now,
 		rand:  rand.Float64,
-		onSchedule: func(fails int, next time.Time) {
-			recordSchedule(logf, fails, next)
+		onSchedule: func(fails int, next time.Time, cooldown bool) {
+			recordSchedule(logf, fails, next, cooldown)
 		},
 	})
 }

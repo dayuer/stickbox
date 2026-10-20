@@ -97,8 +97,9 @@ func TestFastRetryScheduleIsSixtyOneTwentyTwoForty(t *testing.T) {
 }
 
 type sched struct {
-	fails int
-	next  time.Time
+	fails    int
+	next     time.Time
+	cooldown bool
 }
 
 var daemonT0 = time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
@@ -131,8 +132,8 @@ func driveDaemon(t *testing.T, script []error) (sleeps []time.Duration, scheds [
 		logf:  func(string, ...any) {},
 		round: round, sleep: sleep,
 		now: func() time.Time { return clock },
-		onSchedule: func(fails int, next time.Time) {
-			scheds = append(scheds, sched{fails, next})
+		onSchedule: func(fails int, next time.Time, cd bool) {
+			scheds = append(scheds, sched{fails, next, cd})
 		},
 	})
 	if err != nil {
@@ -314,5 +315,16 @@ func TestDaemonUsesInjectedJitter(t *testing.T) {
 	}
 	if want := []time.Duration{8 * time.Minute, 16 * time.Minute}; !reflect.DeepEqual(sleeps, want) {
 		t.Fatalf("sleeps = %v，期望 %v", sleeps, want)
+	}
+}
+
+// 调度回调带出 cooldown 标记与下次尝试时间：冷却 -> 瞬时 -> 成功。
+func TestDaemonScheduleReportsCooldown(t *testing.T) {
+	_, scheds := driveDaemon(t, []error{errSkipped, errTransient, nil})
+	if !scheds[0].cooldown || scheds[1].cooldown || scheds[2].cooldown {
+		t.Fatalf("cooldown 标记 = %+v", scheds)
+	}
+	if got := scheds[0].next.Sub(daemonT0); got != usageInterval {
+		t.Errorf("首次冷却 next = +%s，期望 +%s", got, usageInterval)
 	}
 }
