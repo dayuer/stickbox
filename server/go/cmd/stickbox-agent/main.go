@@ -697,6 +697,51 @@ func newFlagSet(name string) *flag.FlagSet {
 	return fs
 }
 
+// postPairError 标记「服务端已经配对成功之后」的本机失败（没拿到令牌、写配置失败），
+// cmdPair 不再给它加「配对失败：」前缀。
+type postPairError struct{ error }
+
+func (e postPairError) Unwrap() error { return e.error }
+
+// validPairCode：配对码是 6 位数字。CLI 与网页共用。
+func validPairCode(code string) bool {
+	return len(code) == 6 && strings.Trim(code, "0123456789") == ""
+}
+
+// resolveAgentName 给这台电脑取名：优先用户给的，其次主机名。
+func resolveAgentName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name, _ = os.Hostname()
+	}
+	if name == "" {
+		name = "unknown"
+	}
+	return truncateRunes(name, 64)
+}
+
+// pairAndSave 是 CLI `pair` 与网页配对共用的核心：调服务端配对、必要时写入新令牌。
+// c.Server 需要已规范化。pairDevice 的错误原样返回（网页要按类型分类提示）；
+// 配对之后的本机失败包成 postPairError。
+func pairAndSave(c *agentConfig, code, agentName string) (dev string, newUser bool, err error) {
+	dev, token, err := pairDevice(c, code, agentName)
+	if err != nil {
+		return "", false, err
+	}
+	if token != "" {
+		c.Token = token
+		c.Name = agentName
+		c.PairedAt = time.Now().Unix()
+	}
+	if c.Token == "" {
+		return "", false, postPairError{errors.New("服务端没有返回 agent 令牌")}
+	}
+	if err := saveConfig(c); err != nil {
+		return "", false, postPairError{err}
+	}
+	return dev, token != "", nil
+}
+
 func cmdPair(args []string) error {
 	fs := newFlagSet("pair")
 	server := fs.String("server", "", "服务端地址（默认 "+defaultServer+"）")
@@ -705,11 +750,15 @@ func cmdPair(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if fs.NArg() == 0 {
+		// 不带配对码：打开本机网页输入（stickbox-agent ui）。
+		return runUICommand(uiOptions{server: *server, name: *name, insecure: *insecure}, false, 0)
+	}
 	if fs.NArg() != 1 {
 		return errors.New("用法：stickbox-agent pair [--server URL] [--name 名称] [--insecure] <6 位配对码>")
 	}
 	code := strings.TrimSpace(fs.Arg(0))
-	if len(code) != 6 || strings.Trim(code, "0123456789") != "" {
+	if !validPairCode(code) {
 		return errors.New("配对码应为 6 位数字")
 	}
 
@@ -727,40 +776,37 @@ func cmdPair(args []string) error {
 		c.Insecure = true
 	}
 
-	agentName := strings.TrimSpace(*name)
-	if agentName == "" {
-		agentName, _ = os.Hostname()
-	}
-	if agentName == "" {
-		agentName = "unknown"
-	}
-	agentName = truncateRunes(agentName, 64)
-
-	dev, token, err := pairDevice(c, code, agentName)
+	agentName := resolveAgentName(*name)
+	dev, newUser, err := pairAndSave(c, code, agentName)
 	if err != nil {
+		var pp postPairError
+		if errors.As(err, &pp) {
+			return err
+		}
 		if isUnauthorized(err) {
 			return fmt.Errorf("本机保存的令牌已失效，先运行 stickbox-agent logout 再配对：%w", err)
 		}
 		return fmt.Errorf("配对失败：%w", err)
 	}
-	if token != "" {
-		c.Token = token
-		c.Name = agentName
-		c.PairedAt = time.Now().Unix()
-	}
-	if c.Token == "" {
-		return errors.New("服务端没有返回 agent 令牌")
-	}
-	if err := saveConfig(c); err != nil {
-		return err
-	}
-	if token != "" {
+	if newUser {
 		fmt.Printf("配对成功：%s（新用户）\n", dev)
 	} else {
 		fmt.Printf("配对成功：%s（已并入现有账号）\n", dev)
 	}
 	fmt.Println("接下来：stickbox-agent run --once 试跑一轮，或 stickbox-agent install 开机常驻")
 	return nil
+}
+
+// unpairDevice：解绑一块屏（CLI 与网页共用）。
+func unpairDevice(c *agentConfig, dev string) error {
+	if err := requireToken(c); err != nil {
+		return err
+	}
+	cl, err := newAPIClient(c)
+	if err != nil {
+		return err
+	}
+	return cl.call("POST", "/api/agent/unpair", true, map[string]string{"dev": dev}, nil)
 }
 
 func cmdUnpair(args []string) error {
@@ -777,14 +823,10 @@ func cmdUnpair(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := requireToken(c); err != nil {
-		return err
-	}
-	cl, err := newAPIClient(c)
-	if err != nil {
-		return err
-	}
-	if err := cl.call("POST", "/api/agent/unpair", true, map[string]string{"dev": dev}, nil); err != nil {
+	if err := unpairDevice(c, dev); err != nil {
+		if errors.Is(err, errNotPaired) {
+			return err
+		}
 		return fmt.Errorf("解绑失败：%w", err)
 	}
 	fmt.Printf("已解绑 %s；屏幕会重新显示配对码\n", dev)
@@ -799,6 +841,24 @@ type deviceRow struct {
 	Photo  *devicePhotoState `json:"photo,omitempty"`
 }
 
+// listDevices：查询名下设备（CLI 与网页共用）。
+func listDevices(c *agentConfig) ([]deviceRow, error) {
+	if err := requireToken(c); err != nil {
+		return nil, err
+	}
+	cl, err := newAPIClient(c)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Devices []deviceRow `json:"devices"`
+	}
+	if err := cl.call("GET", "/api/agent/devices", true, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Devices, nil
+}
+
 func cmdDevices(args []string) error {
 	fs := newFlagSet("devices")
 	if err := fs.Parse(args); err != nil {
@@ -808,24 +868,18 @@ func cmdDevices(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := requireToken(c); err != nil {
-		return err
-	}
-	cl, err := newAPIClient(c)
+	devices, err := listDevices(c)
 	if err != nil {
-		return err
-	}
-	var out struct {
-		Devices []deviceRow `json:"devices"`
-	}
-	if err := cl.call("GET", "/api/agent/devices", true, nil, &out); err != nil {
+		if errors.Is(err, errNotPaired) {
+			return err
+		}
 		return fmt.Errorf("查询设备失败：%w", err)
 	}
-	if len(out.Devices) == 0 {
+	if len(devices) == 0 {
 		fmt.Println("名下还没有屏幕。")
 		return nil
 	}
-	for _, d := range out.Devices {
+	for _, d := range devices {
 		name := d.Name
 		if name == "" {
 			name = "（未命名）"
@@ -1421,6 +1475,9 @@ func usage() {
 
 用法：
   stickbox-agent pair [--server URL] [--name 名称] [--insecure] <配对码>
+  stickbox-agent pair                  不带配对码：打开本机网页输入（同 ui）
+  stickbox-agent ui [--port N] [--no-open]
+                                       本机网页：输入配对码、管理设备（只监听 127.0.0.1）
   stickbox-agent unpair <dev>
   stickbox-agent devices
   stickbox-agent run [--once]
@@ -1468,6 +1525,8 @@ func main() {
 		err = cmdUnpair(args)
 	case "devices":
 		err = cmdDevices(args)
+	case "ui":
+		err = cmdUI(args)
 	case "run":
 		err = cmdRun(args)
 	case "install":
