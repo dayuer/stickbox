@@ -323,6 +323,7 @@ type apiError struct {
 var errText = map[string]string{
 	"unauthorized":           "令牌无效",
 	"bad code":               "配对码无效或已过期",
+	"bad link":               "配对链接无效、已过期或已被使用（请回到手机网页重新提交配对码）",
 	"rate limited":           "尝试次数过多，请稍后再试",
 	"device bound":           "该屏已绑定到其他用户",
 	"not found":              "服务端没有这条数据",
@@ -747,12 +748,19 @@ func cmdPair(args []string) error {
 	server := fs.String("server", "", "服务端地址（默认 "+defaultServer+"）")
 	name := fs.String("name", "", "这台电脑的名称（默认主机名）")
 	insecure := fs.Bool("insecure", false, "跳过 TLS 证书校验（仅自签名证书时使用）")
+	link := fs.String("link", "", "手机网页给出的一次性配对链接（https://…/r/…）")
 	auto := fs.Bool("auto", false, "在局域网里自动发现待配对的屏幕并配对（不用手输码）")
 	yes := fs.Bool("yes", false, "配合 --auto：只有 1 块屏时不再询问确认")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	opts := uiOptions{server: *server, name: *name, insecure: *insecure}
+	if *link != "" {
+		if *auto || fs.NArg() != 0 {
+			return errors.New("--link 不能和 --auto 或配对码一起用")
+		}
+		return pairWithLink(*link, *server, *name, *insecure, os.Stdout)
+	}
 	if *auto {
 		if fs.NArg() != 0 {
 			return errors.New("--auto 不需要再给配对码")
@@ -1475,7 +1483,8 @@ func usage() {
 
 用法：
   stickbox-agent pair [--server URL] [--name 名称] [--insecure] <配对码>
-  stickbox-agent pair --auto [--yes]   局域网里自动发现待配对的屏幕并配对（不用手输码）
+  stickbox-agent pair --link <一次性链接>   手机扫码网页给出的链接，兑换后配对
+  stickbox-agent pair --auto [--yes] 局域网里自动发现待配对的屏幕并配对（不用手输码）
   stickbox-agent discover              只列出局域网里待配对的屏幕
   stickbox-agent pair                  不带配对码：打开本机网页输入（同 ui）
   stickbox-agent ui [--port N] [--no-open]

@@ -15,11 +15,13 @@
 #include "photo_play.h"
 #include "photo_sd.h"
 #include "photostore.h"
+#include "lanpair.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <sys/param.h>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -55,12 +57,15 @@ static int s_n, s_fps, s_row0, s_rows;
 /* 带的双缓冲。s_front 是已发布的那块；s_busy[i] = 正在发送它的连接数，
  * 写端只会去写 busy 为 0 的那块（stream_band_begin 会等）。 */
 static SemaphoreHandle_t s_mx;
-static uint8_t *s_band[2];
-static size_t s_band_len[2];
+/* 下标 2 是「配对页大缓冲」：只在待配对期间 malloc，配对成功/解绑后立即 free，
+ * 已配对的稳态路径不为它付堆（#31）。下标 0/1 仍是两块常驻 BAND_CAP。 */
+static uint8_t *s_band[3];
+static size_t s_band_len[3];
+static SemaphoreHandle_t s_xmx;   /* 串行化 acquire..publish/abort 与 release */
 /* 每块缓冲各自替换的行区间（预置页模式）。普通发布用 stream_start 的默认区间，
  * 配对页发布更高的一条（#31）。 */
-static int s_band_r0[2], s_band_n[2];
-static int s_band_page[2] = { -1, -1 };
+static int s_band_r0[3], s_band_n[3];
+static int s_band_page[3] = { -1, -1, -1 };
 
 /* 帧包模式（T13b）。底帧来自 framepack 的 flash 映射地址，推流时直接从
  * 那里发，整帧从不在 RAM 里拼起来。 */
@@ -79,7 +84,7 @@ static size_t            s_fp_base_len;
 static uint32_t s_row_off[2][FP_BAND_ROWS];
 static uint32_t s_row_len[2][FP_BAND_ROWS];
 static int s_front = -1;
-static int s_busy[2];
+static int s_busy[3];
 /* 正在发送某一帧、且手里的段指针指向 s_fp_base 的连接数。
  * 换帧包时要等它归零再换，否则会把旧的 flash 映射从正在发送的段底下
  * 抽走。详见 fp_wait_idle 的注释。 */
@@ -200,12 +205,11 @@ static bool publish_at(uint8_t *buf, size_t len, int page, int row0, int rows)
     /* 越界在写入的时候就已经发生了，这里拦不住它。但发布一个超长的 len
      * 会让推流循环每帧都读到缓冲区外的垃圾、并推给电视——那是第二个 bug，
      * 而且比第一个更难查。宁可画面停在上一版。 */
-    if (len > BAND_CAP) {
-        ESP_LOGE(TAG, "带长度 %u 超过 BAND_CAP %u，拒绝发布（画面保持上一版）",
-                 (unsigned)len, (unsigned)BAND_CAP);
+    if (len > (buf == s_band[2] ? PAIR_BAND_CAP : BAND_CAP)) {
+        ESP_LOGE(TAG, "带长度 %u 超过缓冲容量，拒绝发布（画面保持上一版）", (unsigned)len);
         return false;
     }
-    int i = buf == s_band[0] ? 0 : 1;
+    int i = buf == s_band[0] ? 0 : buf == s_band[1] ? 1 : 2;
     xSemaphoreTake(s_mx, portMAX_DELAY);
     s_band_len[i] = len;
     s_band_r0[i] = row0;
@@ -231,6 +235,75 @@ bool stream_band_publish(uint8_t *buf, size_t len, int page)
 {
     return publish_at(buf, len, page, s_row0, s_rows);
 }
+/* ---- 配对页大缓冲（下标 2）---- */
+
+uint8_t *stream_extra_acquire(void)
+{
+    xSemaphoreTake(s_xmx, portMAX_DELAY);
+    if (!s_band[2]) {
+        uint8_t *p = malloc(PAIR_BAND_CAP);
+        if (!p) {
+            ESP_LOGW(TAG, "配对页大缓冲 %d B 申请失败（空闲堆 %u，最大块 %u），降级为不画二维码",
+                     PAIR_BAND_CAP, (unsigned)esp_get_free_heap_size(),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+            xSemaphoreGive(s_xmx);
+            return NULL;
+        }
+        xSemaphoreTake(s_mx, portMAX_DELAY);
+        s_band[2] = p;
+        xSemaphoreGive(s_mx);
+        ESP_LOGI(TAG, "配对页大缓冲 %d B 已申请，空闲堆 %u", PAIR_BAND_CAP,
+                 (unsigned)esp_get_free_heap_size());
+        return p;
+    }
+    /* 复用（换码）：它可能正是被发送的那块，先让画面退回纯底图，等发送完再写。 */
+    xSemaphoreTake(s_mx, portMAX_DELAY);
+    if (s_front == 2) s_front = -1;
+    xSemaphoreGive(s_mx);
+    for (int i = 0; i < 250; i++) {   /* 最多 5 秒 */
+        xSemaphoreTake(s_mx, portMAX_DELAY);
+        bool idle = s_busy[2] == 0;
+        xSemaphoreGive(s_mx);
+        if (idle) return s_band[2];
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    ESP_LOGW(TAG, "配对页大缓冲一直被占用，放弃本次");
+    xSemaphoreGive(s_xmx);
+    return NULL;
+}
+
+bool stream_extra_publish(uint8_t *buf, size_t len, int page, int row0, int rows)
+{
+    bool ok = buf && buf == s_band[2] &&
+              stream_band_publish_span(buf, len, page, row0, rows);
+    xSemaphoreGive(s_xmx);
+    return ok;
+}
+
+void stream_extra_abort(void) { xSemaphoreGive(s_xmx); }
+
+void stream_extra_release(void)
+{
+    xSemaphoreTake(s_xmx, portMAX_DELAY);
+    if (s_band[2]) {
+        xSemaphoreTake(s_mx, portMAX_DELAY);
+        if (s_front == 2) s_front = -1;
+        s_band_page[2] = -1;
+        xSemaphoreGive(s_mx);
+        bool idle = false;
+        for (int i = 0; i < 250 && !idle; i++) {   /* 最多 5 秒 */
+            xSemaphoreTake(s_mx, portMAX_DELAY);
+            idle = s_busy[2] == 0;
+            if (idle) { free(s_band[2]); s_band[2] = NULL; }
+            xSemaphoreGive(s_mx);
+            if (!idle) vTaskDelay(pdMS_TO_TICKS(20));
+        }
+        if (idle) ESP_LOGI(TAG, "配对页大缓冲已释放，空闲堆 %u", (unsigned)esp_get_free_heap_size());
+        else ESP_LOGW(TAG, "配对页大缓冲仍被发送占用，保留到下次释放");
+    }
+    xSemaphoreGive(s_xmx);
+}
+
 void stream_quiet(bool on) { s_quiet = on; }
 
 int stream_current(void) { return s_cur; }
@@ -316,6 +389,13 @@ static void client_task(void *arg)
     bool head = strncmp(req, "HEAD ", 5) == 0;
     bool get = strncmp(req, "GET ", 4) == 0;
     const char *path = strchr(req, ' ');
+    /* 局域网配对（#28）：只答 GET /pair，复用本临时任务，不新增任务。
+     * HEAD 不应答，免得不带正文也泄露「正在待配对」。 */
+    if (get && path && strncmp(path + 1, "/pair", 5) == 0 &&
+        (path[6] == ' ' || path[6] == '?')) {
+        lanpair_http(fd);
+        goto out;
+    }
     if ((!head && !get) || !path || strncmp(path + 1, "/live.avi", 9) != 0) {
         static const char nf[] = "HTTP/1.0 404 Not Found\r\nConnection: close\r\n\r\n";
         send_all(fd, nf, sizeof nf - 1);
@@ -461,7 +541,7 @@ static void client_task(void *arg)
         int nseg = 0;
         const jb_page_t *pg = NULL;
 
-        if (fp && ix && fpbase && bi >= 0) {
+        if (fp && ix && fpbase && bi >= 0 && bi < 2) {
             /* 帧包模式：底帧那些段直接指向 flash 映射地址，整帧从不在 RAM
              * 里拼起来。这个编排和主机侧 bandtest 验的是同一个函数。 */
             nseg = fp_frame_segments(ix, fpbase, fpbase_len, s_band[bi],
@@ -591,6 +671,7 @@ void stream_start(const frame_t *frames, int n, int fps, int band_row0, int band
     s_frames = frames; s_n = n < 4 ? n : 4; s_fps = fps;
     s_row0 = band_row0; s_rows = band_rows;
     s_mx = xSemaphoreCreateMutex();
+    s_xmx = xSemaphoreCreateMutex();
     /* T3 只发预置页，不发布动态条带：band_rows=0 时省掉两块 24KB 缓冲，
      * 把堆留给 MQTT 的 TLS 长连接。T4 接看板渲染时再传非 0 值。 */
     if (band_rows > 0) {

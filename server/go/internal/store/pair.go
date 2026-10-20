@@ -95,3 +95,41 @@ func (s *Store) DeleteExpiredPairCodes(at int64) error {
 	_, err := s.db.Exec(`DELETE FROM pair_codes WHERE expires < ?`, at)
 	return err
 }
+
+// PairRedeem 是网页配对生成的一次性兑换凭据（只存链接哈希）。
+type PairRedeem struct {
+	LinkHash string
+	Dev      string
+	KeyID    string
+	Expires  int64
+	Created  int64
+}
+
+func (s *Store) PutPairRedeem(r PairRedeem) error {
+	if r.Created == 0 {
+		r.Created = now()
+	}
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	// 顺手清过期行，表不会堆积。
+	if _, err := s.db.Exec(`DELETE FROM pair_redeems WHERE expires < ?`, r.Created); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO pair_redeems(link_hash,dev,key_id,expires,created) VALUES(?,?,?,?,?)`,
+		r.LinkHash, r.Dev, r.KeyID, r.Expires, r.Created)
+	return err
+}
+
+// ConsumePairRedeem 原子地取出并删除一条未过期的兑换凭据：同一链接并发兑换只有一个拿到行。
+func (s *Store) ConsumePairRedeem(hash string, at int64) (PairRedeem, bool, error) {
+	var r PairRedeem
+	err := s.db.QueryRow(
+		`DELETE FROM pair_redeems WHERE link_hash=? AND expires>=?
+		 RETURNING link_hash,dev,key_id,expires,created`, hash, at).
+		Scan(&r.LinkHash, &r.Dev, &r.KeyID, &r.Expires, &r.Created)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PairRedeem{}, false, nil
+	}
+	return r, err == nil, err
+}

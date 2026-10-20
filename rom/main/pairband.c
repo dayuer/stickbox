@@ -150,19 +150,48 @@ static bool qr_build(pair_ctx_t *c, const char *url)
     return true;
 }
 
+/* 没有二维码时只编文字（提示 + 数字），走默认条带 46..51，装进常驻的 BAND_CAP。 */
+static const jb_box_t PAIRTEXT_BOX = {
+    MIN2(HINT_X0, X0), HINT_Y0,
+    MAX2(HINT_X0 + HINT_W, DIG_X1), Y0 + H
+};
+
+static size_t encode_text(const char *code)
+{
+    pair_ctx_t c = { .code = code };
+    uint8_t *buf = stream_band_begin();
+    size_t n = jb_encode_rows(stream_page(0), PAIR_ROW0, PAIR_ROW0 + PAIR_ROWS,
+                              BG, FG, pair_shade, &c, &PAIRTEXT_BOX, buf, stream_band_cap());
+    if (!n) {
+        ESP_LOGE(TAG, "配对码条带超出缓冲 %u B", (unsigned)stream_band_cap());
+        return 0;
+    }
+    stream_band_publish(buf, n, 0);
+    return n;
+}
+
+/* 带二维码的整条（27..50 行）编进临时大缓冲。大缓冲申请失败或二维码生成不了，
+ * 都降级为 encode_text：码照常显示，只是没有二维码。 */
 static size_t encode(const char *code, const char *url)
 {
     pair_ctx_t c = { .code = code };
-    if (!qr_build(&c, url)) ESP_LOGW(TAG, "二维码未生成（URL 缺失或超出 v%d 容量），只显示配对码", QR_VER);
-    uint8_t *buf = stream_band_begin();
+    if (!qr_build(&c, url)) {
+        ESP_LOGW(TAG, "二维码未生成（URL 缺失或超出 v%d 容量），只显示配对码", QR_VER);
+        size_t n = encode_text(code);
+        stream_extra_release();   /* 不画二维码就不占大缓冲 */
+        return n;
+    }
+    uint8_t *buf = stream_extra_acquire();
+    if (!buf) return encode_text(code);
     size_t n = jb_encode_rows(stream_page(0), PAIRQR_ROW0, PAIRQR_ROW0 + PAIRQR_ROWS,
                               BG, FG, pair_shade, &c,
-                              &PAIRBAND_BOX, buf, stream_band_cap());
+                              &PAIRBAND_BOX, buf, PAIR_BAND_CAP);
     if (!n) {
-        ESP_LOGE(TAG, "配对码条带超出缓冲 %d B", BAND_CAP);
-        return 0;
+        ESP_LOGE(TAG, "配对码条带超出缓冲 %d B", PAIR_BAND_CAP);
+        stream_extra_abort();
+        return encode_text(code);
     }
-    stream_band_publish_span(buf, n, 0, PAIRQR_ROW0, PAIRQR_ROWS);
+    if (!stream_extra_publish(buf, n, 0, PAIRQR_ROW0, PAIRQR_ROWS)) return encode_text(code);
     return n;
 }
 
@@ -184,20 +213,21 @@ void pairband_show(const char *code, const char *url)
 {
     if (!code || strlen(code) != NDIG) return;
     size_t n = encode(code, url);
-    /* 不打印配对码本身；URL 只含设备 ID，也不必打。 */
     if (n) ESP_LOGI(TAG, "配对码已上电视，条带 %u B", (unsigned)n);
 }
 
 void pairband_clear(void)
 {
-    /* box 为空，shade 永远不会被调用；整条带编码成背景色。 */
+    /* 先还大缓冲（画面退回纯底图），再把默认条带编成背景色：二维码没画成时
+     * 文字走的是默认条带，也要盖掉。 */
+    stream_extra_release();
     static const jb_box_t empty = { 0, 0, 0, 0 };
     uint8_t *buf = stream_band_begin();
-    size_t n = jb_encode_rows(stream_page(0), PAIRQR_ROW0, PAIRQR_ROW0 + PAIRQR_ROWS,
+    size_t n = jb_encode_rows(stream_page(0), PAIR_ROW0, PAIR_ROW0 + PAIR_ROWS,
                               BG, BG, NULL, NULL, &empty, buf, stream_band_cap());
     if (!n) {
         ESP_LOGE(TAG, "清配对码条带失败（缓冲不够）");
         return;
     }
-    stream_band_publish_span(buf, n, 0, PAIRQR_ROW0, PAIRQR_ROWS);
+    stream_band_publish(buf, n, 0);
 }

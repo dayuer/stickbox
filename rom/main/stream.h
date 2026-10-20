@@ -29,11 +29,14 @@ struct fp_index;
  *
  * 光靠这个常量也不够：段长会随渲染器的字体和 q 值变化。帧包自带
  * max_band_bytes，设备加载时先拿 stream_band_cap() 比对，超了拒绝整包。 */
-/* 17KB（#31）：配对页贴二维码之后，最坏配对条带（888888 + 任意设备 ID 的 v3 二维码）
- * 实测 16,355..16,560 字节（3000 个随机设备 ID），再留约 850 字节。
- * 原来 13KB：服务端实测最坏时钟带 13,089（08:28，max_band_bytes），时钟带照旧
- * 装得下。两块缓冲各涨 4KB，常驻堆多占 8KB——代价和数据见 #31 的 PR。 */
-#define BAND_CAP (17 * 1024)
+/* 13KB：服务端实测最坏带长 13,089（08:28，max_band_bytes），再留 223 字节。
+ * 两块缓冲各 16KB 是这个版本稳态比 v0.9.3 少 45KB 的大头；压到 13KB
+ * 省下 6KB，且仍然覆盖最坏帧。已配对的稳态路径不得再涨。 */
+#define BAND_CAP (13 * 1024)
+/* 配对页（带二维码）的带比 BAND_CAP 大：最坏 16,560 B（见 PR #33）。它只在
+ * 待配对期间用一块临时 malloc 的缓冲（stream_extra_*），配对成功即释放，
+ * 稳态堆不变。 */
+#define PAIR_BAND_CAP (17 * 1024)
 
 /* 预置页面：1080p baseline JPEG，DRI = 每行 MCU 数（tools/render_pages.py 生成） */
 typedef struct {
@@ -91,3 +94,13 @@ int64_t stream_last_active_us(void);
  * 只由持有 photo_io net 锁的一方调用（同一时刻只有一个 owner）；
  * 期间保持 stream_last_active_us 前进，supervisor 不会误判断流重推。 */
 void stream_quiet(bool on);
+
+/* 配对页大缓冲（PAIR_BAND_CAP，临时 malloc）。
+ *   acquire：取（必要时申请）缓冲并持锁；失败返回 NULL（不持锁）。成功后必须以
+ *            publish 或 abort 结束。已有缓冲被复用时画面会先退回纯底图。
+ *   publish：发布 [row0,row0+rows) 行的带并解锁。
+ *   release：画面退回纯底图，等发送方放手后 free；幂等。 */
+uint8_t *stream_extra_acquire(void);
+bool stream_extra_publish(uint8_t *buf, size_t len, int page, int row0, int rows);
+void stream_extra_abort(void);
+void stream_extra_release(void);

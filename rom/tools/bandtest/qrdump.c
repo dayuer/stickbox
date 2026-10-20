@@ -4,8 +4,7 @@
  * 之后由 qrdecode.py 用独立解码器（zxing-cpp）从这张 JPEG 里解出 URL，
  * 验证的是 JPEG 量化之后的二维码，不是理想位图。
  *
- * BAND_CAP 装不下也要能量出真实字节数（可行性测量），所以这里的缓冲
- * 比设备的大，带长超 BAND_CAP 只打印警告，不当失败。
+ * 带二维码的带走临时大缓冲（PAIR_BAND_CAP），与设备一致。
  *
  * 用法：qrdump <blank.jpg> <码> <url> <out.jpg>
  */
@@ -18,23 +17,7 @@
 #include "statusmask.h"
 #include "stream.h"
 
-#define BIG_CAP (64 * 1024)
-
-static jb_page_t s_page;
-static uint8_t s_band[BIG_CAP];
-static size_t s_len;
-static int s_row0, s_rows;
-
-uint8_t *stream_band_begin(void) { return s_band; }
-size_t stream_band_cap(void) { return sizeof s_band; }
-bool stream_band_publish_span(uint8_t *buf, size_t len, int page, int row0, int rows)
-{
-    (void)buf; (void)page;
-    s_row0 = row0; s_rows = rows;
-    s_len = len;
-    return true;
-}
-const jb_page_t *stream_page(int idx) { (void)idx; return &s_page; }
+#include "streamstub.h"
 
 int main(int argc, char **argv)
 {
@@ -54,7 +37,7 @@ int main(int argc, char **argv)
     FILE *o = fopen(argv[4], "wb");
     if (!o) return 2;
     fwrite(blank, 1, a, o);
-    fwrite(s_band, 1, s_len, o);
+    fwrite(s_pub_extra ? s_extra_mem : s_band, 1, s_len, o);
     fwrite(blank + b, 1, (size_t)l - b, o);
     fclose(o);
     printf("%s %zu\n", argv[2], s_len);

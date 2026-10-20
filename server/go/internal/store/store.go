@@ -58,6 +58,17 @@ CREATE TABLE IF NOT EXISTS pair_codes(
 );
 CREATE INDEX IF NOT EXISTS pair_codes_expires ON pair_codes(expires);
 
+-- 网页配对（W7）的一次性兑换链接：只存链接密钥的 SHA-256，不存令牌。
+-- 手机端填码只是「预约」配对；兑换时才真正建用户、签令牌、转正设备。
+CREATE TABLE IF NOT EXISTS pair_redeems(
+  link_hash TEXT PRIMARY KEY,
+  dev       TEXT NOT NULL,
+  key_id    TEXT NOT NULL,
+  expires   INTEGER NOT NULL DEFAULT 0,
+  created   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS pair_redeems_expires ON pair_redeems(expires);
+
 -- Claude 订阅用量，每个用户只留最新一份。body 是 usage.Report 的 JSON。
 CREATE TABLE IF NOT EXISTS usage(
   user_id  TEXT PRIMARY KEY,

@@ -22,3 +22,10 @@ const char *cloud_devkey(void);
 /* 电视上是不是正挂着配对码。挂着的时候屏幕归配对码，
  * 「连接中…」/「离线」状态页不要去覆盖它。 */
 bool cloud_pair_pending(void);
+
+/* 设备 ID（12 位小写 hex，来自 MAC）。cloud_client_start() 之后才有效。 */
+const char *cloud_devid(void);
+
+/* 局域网配对（#28）：待配对且码未过期时拷出当前码与剩余秒数，否则返回 false。
+ * 调用方不得把 code 写进日志。 */
+bool cloud_pair_peek(char code[8], int *expires_in);

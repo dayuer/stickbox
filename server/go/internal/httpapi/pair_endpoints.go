@@ -11,6 +11,7 @@ import (
 
 	"github.com/dayuer/stickbox/server/go/internal/auth"
 	"github.com/dayuer/stickbox/server/go/internal/metrics"
+	"github.com/dayuer/stickbox/server/go/internal/store"
 )
 
 // handleAgentPair：POST /api/agent/pair {code, name}
@@ -70,6 +71,15 @@ func (a *API) handleAgentPair(w http.ResponseWriter, r *http.Request) {
 		badCode(404)
 		return
 	}
+	a.completePair(w, pc, agent, in.Name, true, failPair, badCode)
+}
+
+// completePair 是 agent/pair 与 agent/redeem 共用的后半段：码已经被原子消费，
+// 这里校验密钥与归属，建用户/签令牌（无 agent 时），转正设备并通知。
+// restore=true 时归属冲突要把码放回去（输码路径）；兑换路径码早已消费，不放回。
+func (a *API) completePair(w http.ResponseWriter, pc store.PairCode,
+	agent *auth.Identity, inName string, restore bool,
+	failPair func(), badCode func(int)) {
 	k, ok, err := a.store.KeyByID(pc.KeyID)
 	if err != nil {
 		fail(w, 500, "server error", "")
@@ -90,7 +100,9 @@ func (a *API) handleAgentPair(w http.ResponseWriter, r *http.Request) {
 	var userID, newToken string
 	if agent != nil {
 		if bound && owner != agent.UserID {
-			a.store.RestorePairCode(pc) // 别人输错码不该把原主人的码烧掉
+			if restore {
+				a.store.RestorePairCode(pc) // 别人输错码不该把原主人的码烧掉
+			}
 			failPair()
 			fail(w, 409, "device bound", "该屏已绑定到其他用户")
 			return
@@ -98,7 +110,9 @@ func (a *API) handleAgentPair(w http.ResponseWriter, r *http.Request) {
 		userID = agent.UserID
 	} else {
 		if bound {
-			a.store.RestorePairCode(pc)
+			if restore {
+				a.store.RestorePairCode(pc)
+			}
 			failPair()
 			fail(w, 409, "device bound",
 				"该屏已绑定；请用原主人的 agent 配对")
@@ -110,7 +124,7 @@ func (a *API) handleAgentPair(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		userID = u.ID
-		name := in.Name
+		name := inName
 		if name == "" {
 			name = "unknown"
 		}

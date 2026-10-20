@@ -62,6 +62,11 @@ type API struct {
 	pairCodeDev   *rateLimiter
 	pairFailIP    *rateLimiter
 	pairFailWorld *rateLimiter
+	// 网页配对 / 兑换各自的失败限流。
+	webPairFailIP   *rateLimiter
+	webPairFailDev  *rateLimiter
+	redeemFailIP    *rateLimiter
+	redeemFailWorld *rateLimiter
 	// 崩溃包：每台设备每小时一次。正常设备开机传一次就擦了。
 	coredumpDev *rateLimiter
 }
@@ -79,6 +84,11 @@ func New(cfg *config.Config, st *store.Store, v *auth.Verifier,
 		pairFailIP:    newRateLimiter("pair_fail_ip", 10, 10*time.Minute),
 		pairFailWorld: newRateLimiter("pair_fail_world", 100, time.Minute),
 		coredumpDev:   newRateLimiter("coredump_dev", 1, time.Hour),
+
+		webPairFailIP:   newRateLimiter("web_pair_fail_ip", 10, 10*time.Minute),
+		webPairFailDev:  newRateLimiter("web_pair_fail_dev", 30, 10*time.Minute),
+		redeemFailIP:    newRateLimiter("redeem_fail_ip", 10, 10*time.Minute),
+		redeemFailWorld: newRateLimiter("redeem_fail_world", 100, time.Minute),
 	}
 }
 
@@ -122,6 +132,12 @@ func (a *API) Handler() http.Handler {
 
 	// agent：pair 可选令牌（新用户不带，已有用户带着把新屏并入）。
 	mux.HandleFunc("POST /api/agent/pair", a.handleAgentPair)
+	mux.HandleFunc("POST /api/agent/redeem", a.handleAgentRedeem)
+	// 网页配对：二维码落地页（零外部资源）与提交接口。
+	mux.HandleFunc("GET /p", a.handleWebPairPage)
+	mux.HandleFunc("GET /p/app.js", a.handleWebPairJS)
+	mux.HandleFunc("GET /p/app.css", a.handleWebPairCSS)
+	mux.HandleFunc("POST /api/web/pair", a.handleWebPair)
 	mux.Handle("POST /api/agent/unpair", a.requireAgent(a.handleAgentUnpair))
 	mux.Handle("GET /api/agent/devices", a.requireAgent(a.handleAgentDevices))
 	mux.Handle("GET /api/agent/usage", a.requireAgent(a.handleUsageGet))
